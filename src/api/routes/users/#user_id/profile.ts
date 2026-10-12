@@ -9,6 +9,7 @@ import { PartialConnectedAccountResponse, PrivateUserProjection, PublicUserProje
 import { prideBadges } from "@spacebar/api/util/utility/prideBadges";
 
 import { isSubscriptionBadge } from "@spacebar/api/util/utility/profile";
+import { nitroBadge } from "@spacebar/api/util/utility/nitroBadges";
 
 import { profileApplication } from "@spacebar/api/util/handlers/Application";
 
@@ -100,6 +101,7 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
     if (user.badge_ids?.length) badges.push(...(await Badge.find({ where: { id: In(user.badge_ids) } })));
 
     badges.push(...prideBadges(user.pride_badges));
+    const nitro = nitroBadge(user, Config.get().client.instanceName);
 
     const connected_accounts: PartialConnectedAccountResponse[] = user.connected_accounts
         .filter((x) => x.visibility != 0)
@@ -114,12 +116,12 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
     res.json({
         user: { ...user.toPartialUser(), bio: user.bio ?? "" },
         connected_accounts,
-        premium_since: null,
+        premium_since: nitro?.since ?? null,
         premium_type: user.premium_type,
         premium_guild_since: null,
         profile_themes_experiment_bucket: 4,
         user_profile: profileMetadata(user),
-        badges: badges.filter((badge) => !isSubscriptionBadge(badge)),
+        badges: [...badges.filter((badge) => !isSubscriptionBadge(badge)), ...(nitro ? [nitro.badge] : [])],
         guild_badges: [],
         widgets: user.profile_widgets ?? [],
         legacy_username: null,

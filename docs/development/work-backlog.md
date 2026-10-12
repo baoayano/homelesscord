@@ -21,7 +21,7 @@ Start with `client/plugins; assets/public/admin`.
 
 ## Pride flags and profile badges (P1)
 
-Homelesscord's planned free evolving Nitro badges have the original default and eight milestone images bundled locally, described in [nitro-badge-assets.md](../features/nitro-badge-assets.md). Profile eligibility, tenure calculation and rendering verification remain to be implemented. Required Pride behavior stays unchanged.
+Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. All nine profile levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering are verified. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Required Pride behavior stays unchanged.
 
 Start with `src/api/util/utility/prideBadges.ts; client/plugins/fosscordPride`.
 

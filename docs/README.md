@@ -11,7 +11,7 @@
 
 ## Features
 
-- [nitro-badge-assets.md](features/nitro-badge-assets.md): pinned Nitro badge images, their sources and offline verification.
+- [nitro-badge-assets.md](features/nitro-badge-assets.md): free Nitro badges that evolve with account age, pinned images and verification.
 - [admin.md](features/admin.md): the admin dashboard at `/admin`.
 - [activities.md](features/activities.md): embedded activities, their hosting and API.
 - [announcements.md](features/announcements.md): encrypted announcements from the official account.

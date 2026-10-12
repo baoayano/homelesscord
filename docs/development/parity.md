@@ -47,7 +47,7 @@ The injected client is Equicord at the commit pinned in `client/vencord.json`, w
 | Per-server profile (nickname, avatar, banner, bio)          | working  |                                                                                                                                                                                                                                                       |
 | Avatar decorations, profile effects, nameplates             | working  | All free from the Shop. Deletion clears global and server profile selections atomically, and stale writes cannot restore deleted custom SKUs.                                      |
 | Server tag on the profile (`primary_guild`)                 | working  |                                                                                                                                                                                                                                                       |
-| Subscription profile badges                                 | excluded | Removed from profile responses; staff and custom badges remain visible.                                                                                                                 |
+| Profile badges: free evolving Nitro                         | working  | Every ordinary account starts with the default badge. Account age unlocks eight milestones through 72 months. Local artwork, free tenure tooltips, DM and expanded profiles verified. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). |
 | Profile badges: custom badges from the admin dashboard      | working  | Created and assigned through `/admin/badges` and `/admin/users/:id`, shown on the profile.                                                                                                                                                            |
 | Profile badges: selectable pride flags                      | working  | 85 local icons: 39 upstream Twemoji flags plus 46 flags drawn on the upstream template. Existing selections preserved. See [pride-badges.md](../features/pride-badges.md).                |
 | Profile badges: server booster tiers                        | excluded | Nobody boosts, every server is level 3 already.                                                                                                                                                                                                       |
@@ -221,7 +221,7 @@ The injected client is Equicord at the commit pinned in `client/vencord.json`, w
 
 | Feature                                          | Status   | Notes                                      |
 | ------------------------------------------------ | -------- | ------------------------------------------ |
-| Nitro purchase, trials, gifting, referral offers | excluded | Features are free; no subscription badges. |
+| Nitro purchase, trials, gifting, referral offers | excluded | Features and evolving account age badges are free. |
 | Server boost purchase                            | excluded | Every server is level 3.                   |
 | Quests and Orbs                                  | excluded |                                            |
 | Ads, sponsored content, ads personalization      | excluded |                                            |

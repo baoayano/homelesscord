@@ -29,6 +29,7 @@ const utilities = () =>
         "@spacebar/util": {},
         "@spacebar/schemas": {},
     });
+const nitroUtilities = () => load("src/api/util/utility/nitroBadges.ts", { "@spacebar/schemas": { UserFlags: { FLAGS: { SYSTEM: 4096n } } } });
 
 test("subscription badges are removed without hiding ordinary admin or pride badges", () => {
     const { isSubscriptionBadge } = utilities();
@@ -38,7 +39,7 @@ test("subscription badges are removed without hiding ordinary admin or pride bad
     for (const id of ["operator", "8000000000000000001", "premium-art-contest"]) assert.equal(isSubscriptionBadge({ id, icon: "pride_rainbow" }), false);
 });
 
-test("profile response keeps free feature entitlements and custom badges without subscription tenure", async () => {
+test("profile response keeps free features and custom badges alongside one evolving Nitro badge", async () => {
     const handlers = {};
     const user = {
         id: "self",
@@ -74,23 +75,24 @@ test("profile response keeps free feature entitlements and custom badges without
             },
             Relationship: {},
         },
-        "@spacebar/util": {},
+        "@spacebar/util": { Config: { get: () => ({ client: { instanceName: "Test Instance" } }) } },
         "@spacebar/schemas": {},
         "@spacebar/api/util/utility/prideBadges": {
             prideBadges: () => [{ id: "8000000000000000001", icon: "pride_rainbow" }],
         },
         "@spacebar/api/util/utility/profile": utilities(),
+        "@spacebar/api/util/utility/nitroBadges": nitroUtilities(),
         "@spacebar/api/util/handlers/Application": {},
     });
     let result;
     await handlers.get({ user_id: "self", params: { user_id: "@me" }, query: {} }, { json: (x) => (result = x) });
     assert.equal(result.premium_type, 2);
     assert.equal(result.user.premium_type, 2);
-    assert.equal(result.premium_since, null);
+    assert.equal(result.premium_since.toISOString(), user.created_at.toISOString());
     assert.equal(result.premium_guild_since, null);
     assert.deepEqual(
         Array.from(result.badges, (x) => x.id),
-        ["operator", "8000000000000000001"],
+        ["operator", "8000000000000000001", "nitro_account_tenure_72_month"],
     );
     assert.deepEqual(Array.from(result.user_profile.theme_colors), [123, 456]);
 });

@@ -30,6 +30,21 @@ vm.runInNewContext(
     },
 );
 
+const nitroModule = { exports: {} };
+vm.runInNewContext(
+    ts.transpileModule(fs.readFileSync("src/api/util/utility/nitroBadges.ts", "utf8"), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    {
+        exports: nitroModule.exports,
+        module: nitroModule,
+        require(name) {
+            if (name === "@spacebar/schemas") return { UserFlags: { FLAGS: { SYSTEM: 4096n } } };
+            throw Error(name);
+        },
+    },
+);
+
 const harness = () => {
     let handler;
     let getHandler;
@@ -48,6 +63,7 @@ const harness = () => {
             { id: "hidden", visibility: 0 },
         ],
         bot: false,
+        created_at: new Date("2020-01-01T00:00:00.000Z"),
         premium_type: 0,
         badge_ids: [],
         email: "private@example.invalid",
@@ -191,7 +207,7 @@ const harness = () => {
                 };
             if (name === "@spacebar/util")
                 return {
-                    Config: { get: () => ({ limits: { user: { maxBio: 100, maxPronouns: 20 } } }) },
+                    Config: { get: () => ({ client: { instanceName: "Test Instance" }, limits: { user: { maxBio: 100, maxPronouns: 20 } } }) },
                     DiscordApiErrors: { MISSING_ACCESS: new Error("missing access") },
                     FieldErrors: (fields) => new Error(Object.keys(fields).join(",")),
                     handleFile: async () => "updated-banner",
@@ -200,6 +216,7 @@ const harness = () => {
                 };
             if (name === "@spacebar/api/util/utility/prideBadges") return badgeModule.exports;
             if (name === "@spacebar/api/util/utility/profile") return profileModule.exports;
+            if (name === "@spacebar/api/util/utility/nitroBadges") return nitroModule.exports;
             if (name === "@spacebar/api/util/handlers/Application") return {};
             throw Error(name);
         },
@@ -388,14 +405,15 @@ test("ordinary profile appends selected pride flags without replacing assigned b
     h.user.badge_ids = ["assigned"];
     const response = await h.get({}, "123");
     assert.deepEqual(
-        Array.from(response.badges, (badge) => badge.description),
+        Array.from(response.badges.slice(0, -1), (badge) => badge.description),
         ["Admin-assigned", "Transgender", "Rainbow"],
     );
+    assert.equal(response.badges.at(-1).id, "nitro_account_tenure_72_month");
     assert.equal(response.user.pride_badges, undefined);
     assert.deepEqual(h.user.badge_ids, ["assigned"]);
 });
 
-test("ordinary profile removes subscription badges while preserving assigned and pride badges", async () => {
+test("ordinary profile replaces assigned subscription badges with one earned Nitro badge and preserves pride", async () => {
     const h = harness();
     h.user.pride_badges = ["transgender"];
     h.user.badge_ids = ["assigned", "premium_badge", "subscriber_badge", "nitro_badge"];
@@ -412,9 +430,11 @@ test("ordinary profile removes subscription badges while preserving assigned and
     ];
     const response = await h.get();
     assert.deepEqual(
-        Array.from(response.badges, (badge) => badge.description),
+        Array.from(response.badges.slice(0, -1), (badge) => badge.description),
         ["Admin-assigned", "Transgender"],
     );
+    assert.equal(response.badges.filter((badge) => badge.id.startsWith("nitro_account_tenure_")).length, 1);
+    assert.equal(response.badges.at(-1).id, "nitro_account_tenure_72_month");
     assert.deepEqual(h.user.badge_ids, ["assigned", "premium_badge", "subscriber_badge", "nitro_badge"]);
 });
 

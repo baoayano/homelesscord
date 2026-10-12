@@ -18,6 +18,8 @@ Please do NOT add SMS support, quests, orbs, mentions to Nitro and boosting, ups
 
 From the backend, every account has Premium (Nitro) and every server is boost level 3 with 33 boosts. Nothing can be bought, and every Shop item is free.
 
+This downstream fork includes free evolving Nitro profile badges for every ordinary account. They reflect account age and use local artwork. Keep subscription purchasing, trials, gifting, boosting and upsells excluded. See [nitro-badge-assets.md](docs/features/nitro-badge-assets.md).
+
 After changing signup verification, run `cap-signup-smoke.mjs` against your isolated core-mode instance in Chromium and with `BROWSER=webkit`. The native smoke submits twice before the first request settles and checks one HTTP request, correctable field errors, successful signup and proof replay rejection. Run `cap-disabled-smoke.mjs` in both browsers against an isolated instance with `register.disabled: true`, then with `register.allowNewRegistration: false` and `REGISTRATION_DISABLED_CODE=REGISTRATION_DISABLED`. It verifies visible policy errors, retained proof and fields, and no captcha modal. Focused request tests also hold a promise pending and verify release on responses and errors. Run `cap-accessibility-smoke.mjs` in both browsers for invalid-submit focus, keyboard solving, error descriptions and keyboard retry. Run `cap-disconnect-smoke.mjs` in both browsers to check real HTTP disconnects before registration and after account creation, fresh-proof retry and native sign-in recovery with the original password.
 
 DMs and group DMs can be end-to-end encrypted. The design is in [docs/features/e2ee.md](docs/features/e2ee.md).
