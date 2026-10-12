@@ -17,6 +17,7 @@ export const ADMIN_USER_COLUMNS = [
     "avatar",
     "email",
     "created_at",
+    "registration_date",
     "disabled",
     "deleted",
     "verified",

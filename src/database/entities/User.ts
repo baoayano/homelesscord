@@ -1,6 +1,6 @@
 import { assertIdentityNameAllowed } from "@spacebar/util/util/IdentityModeration";
 import { Request } from "express";
-import { AfterLoad, Column, Entity, FindOptionsWhere, ILike, Index, JoinColumn, ManyToOne, OneToMany, OneToOne } from "typeorm";
+import { AfterLoad, BeforeInsert, Column, Entity, FindOptionsWhere, ILike, Index, JoinColumn, ManyToOne, OneToMany, OneToOne } from "typeorm";
 import { Config, Email, FieldErrors, Snowflake } from "@spacebar/util";
 import { Stopwatch, trimSpecial, Random } from "@spacebar/extensions";
 import { BaseClass } from "./BaseClass";
@@ -133,6 +133,9 @@ export class User extends BaseClass {
 
     @Column()
     created_at: Date; // registration date
+
+    @Column({ type: Date, nullable: true })
+    registration_date?: Date | null;
 
     @Column({ nullable: true })
     premium_since: Date; // premium date
@@ -271,6 +274,11 @@ export class User extends BaseClass {
 
     @Column({ type: "int8", nullable: true })
     avatar_decoration_id?: string;
+
+    @BeforeInsert()
+    initializeRegistrationDate() {
+        this.registration_date ??= this.created_at;
+    }
 
     @AfterLoad()
     applyPremiumDefaults() {

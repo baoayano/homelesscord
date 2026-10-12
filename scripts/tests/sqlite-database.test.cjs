@@ -94,6 +94,13 @@ test("SQLite migrates, preserves exact IDs, serializes writes, rolls back and su
         await Config.init();
         const user = await User.register({ username: "sqlite_tester", password: "sqlite-test-only" });
         assert.equal((await User.findOneByOrFail({ id: user.id })).id, user.id);
+        const registered = await User.findOneByOrFail({ id: user.id });
+        assert.equal(registered.registration_date.getTime(), registered.created_at.getTime());
+        const nitroRegistrationDate = new Date("2020-01-31T10:23:45.678Z");
+        await User.update({ id: user.id }, { registration_date: nitroRegistrationDate });
+        const overridden = await User.findOneByOrFail({ id: user.id });
+        assert.equal(overridden.registration_date.getTime(), nitroRegistrationDate.getTime());
+        assert.equal(overridden.created_at.getTime(), registered.created_at.getTime());
         await assert.rejects(User.createQueryBuilder("user").setLock("pessimistic_write").getOne(), /transaction.*required|required.*transaction/);
         const friend = await User.register({ username: "sqlite%_friend", password: "sqlite-test-only" });
         await Relationship.create({ from_id: user.id, to_id: friend.id, type: 3 }).save();

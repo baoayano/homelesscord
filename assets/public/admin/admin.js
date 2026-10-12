@@ -66,10 +66,10 @@ const fmtDuration = (seconds) => {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
 };
 // datetime-local inputs work in local time without a zone
-const toLocalInput = (value) => {
+const toLocalInput = (value, precision = 16) => {
   if (!value) return "";
   const d = new Date(value);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, precision);
 };
 const fromLocalInput = (value) => (value ? new Date(value).toISOString() : null);
 
@@ -1638,13 +1638,15 @@ async function openUser(id, reload) {
             <div class="card">
                 <div class="list">
                     <div class="list-item"><span class="grow muted">Email</span><span>${u.email || "—"}</span></div>
-                    <div class="list-item"><span class="grow muted">Registered</span><span>${fmtDate(u.created_at)}</span></div>
+                    <div class="list-item"><span class="grow muted">Account created</span><span>${fmtDate(u.created_at)}</span></div>
                     <div class="list-item"><span class="grow muted">Active sessions</span><span>${fmtNumber(u.session_count)}</span></div>
                 </div>
             </div>
 
             <form id="user-form" class="card stack">
                 <h3>Profile & account</h3>
+                <label>Nitro registration date<input name="registration_date" type="datetime-local" step="0.001" value="${toLocalInput(u.registration_date ?? u.created_at, 23)}" /></label>
+                <span class="hint">Controls Nitro badge progression. Times use your local timezone. Clear to use the account creation date.</span>
                 <label>Username<input name="username" value="${u.username}" minlength="2" maxlength="32" required /></label>
                 <label>Pronouns<input name="pronouns" value="${u.pronouns ?? ""}" maxlength="40" /></label>
                 <div class="form-grid">
@@ -1824,6 +1826,9 @@ async function openUser(id, reload) {
       verified: form.verified.checked,
       tag: form.tag.value,
     };
+    const registrationDate = fromLocalInput(form.registration_date.value);
+    if (!registrationDate || new Date(registrationDate).getTime() !== new Date(u.registration_date ?? u.created_at).getTime())
+      patch.registration_date = registrationDate;
     // keep the order badges were originally given in, appending new ones
     for (const field of ["avatar_decoration_sku_id", "nameplate_sku_id"]) {
       if (form.elements[field].value !== (u[field] ?? ""))

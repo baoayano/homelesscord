@@ -149,6 +149,7 @@ export interface AdminRateLimitSchema {
 }
 
 export interface AdminUserUpdateSchema {
+    registration_date?: Date | null;
     avatar_decoration_sku_id?: string | null;
     nameplate_sku_id?: string | null;
     collectibles_sku_ids?: string[] | null;

@@ -10704,6 +10704,17 @@
     "AdminUserUpdateSchema": {
         "type": "object",
         "properties": {
+            "registration_date": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    {
+                        "type": "null"
+                    }
+                ]
+            },
             "avatar_decoration_sku_id": {
                 "type": [
                     "null",
@@ -15207,6 +15218,17 @@
             "created_at": {
                 "type": "string",
                 "format": "date-time"
+            },
+            "registration_date": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    {
+                        "type": "null"
+                    }
+                ]
             },
             "premium_since": {
                 "type": "string",

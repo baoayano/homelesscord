@@ -116,6 +116,23 @@ router.patch(
             changed.add(key);
         };
 
+        if (body.registration_date !== undefined) {
+            const date = body.registration_date === null ? new Date(user.created_at) : new Date(body.registration_date);
+            const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(String(body.registration_date));
+            if (body.registration_date !== null) {
+                const year = Number(parts?.[1]);
+                const month = Number(parts?.[2]);
+                const day = Number(parts?.[3]);
+                const endOfMonth = new Date(0);
+                endOfMonth.setUTCFullYear(year, month, 0);
+                if (!parts || year < 1 || month < 1 || month > 12 || day < 1 || day > endOfMonth.getUTCDate() || Number(parts[4]) > 23)
+                    throw new HTTPError("Registration date must be a valid ISO date and time with a timezone", 400);
+            }
+            if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() < 1 || date.getUTCFullYear() > 9999)
+                throw new HTTPError("Registration date must be a valid ISO date and time with a timezone", 400);
+            set("registration_date", date);
+        }
+
         if (body.hide_premium_badge !== undefined) set("hide_premium_badge", body.hide_premium_badge);
         const standingBefore = body.account_standing !== undefined ? await currentStanding(user.id) : null;
         if (body.account_standing !== undefined) set("account_standing", body.account_standing);

@@ -21,7 +21,7 @@ Start with `client/plugins; assets/public/admin`.
 
 ## Pride flags and profile badges (P1)
 
-Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. All nine profile levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering are verified. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Required Pride behavior stays unchanged.
+Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. Nitro registration date defaults to account creation and is editable through the admin panel's Nitro registration date field. All nine levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering, date editing and reset are verified. PostgreSQL and SQLite migrations preserve custom dates. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Required Pride behavior stays unchanged.
 
 Start with `src/api/util/utility/prideBadges.ts; client/plugins/fosscordPride`.
 

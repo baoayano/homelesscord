@@ -29,14 +29,15 @@ test("every new ordinary account immediately receives the free default badge", (
     assert.equal(result.badge.link, undefined);
 });
 
-test("each milestone switches exactly at its UTC calendar anniversary and uses a bundled PNG", () => {
+test("each registration milestone switches exactly at its UTC anniversary and uses a bundled PNG", () => {
     const created = "2020-01-15T12:34:56.789Z";
     for (let i = 1; i < manifest.badges.length; i++) {
         const milestone = manifest.badges[i];
         const at = new Date(created);
         at.setUTCMonth(at.getUTCMonth() + milestone.months);
-        const before = badgeAt(created, new Date(at.getTime() - 1));
-        const after = badgeAt(created, at);
+        const overrides = { registration_date: new Date(created), created_at: new Date("2026-10-12") };
+        const before = badgeAt(created, new Date(at.getTime() - 1), overrides);
+        const after = badgeAt(created, at, overrides);
         assert.equal(before.badge.id, `nitro_account_tenure_${manifest.badges[i - 1].months}_month`);
         assert.equal(after.badge.id, `nitro_account_tenure_${milestone.months}_month`);
         assert.equal(`${after.badge.icon}.png`, milestone.filename);
@@ -60,13 +61,29 @@ test("short months clamp the anniversary to the last day without losing UTC time
     }
 });
 
-test("progression depends on account creation and caps at 72 months", () => {
+test("progression defaults to account creation and caps at 72 months", () => {
     const created = "2000-01-01T00:00:00Z";
     for (const premium_type of [0, 1, 2]) {
         const result = badgeAt(created, "2026-10-12", { premium_type, premium_since: new Date("2026-10-11") });
         assert.equal(result.badge.id, "nitro_account_tenure_72_month");
         assert.equal(result.since.toISOString(), new Date(created).toISOString());
     }
+});
+
+test("an explicit registration date overrides account creation and premium dates", () => {
+    const registration_date = new Date("2020-01-31T10:23:45.678Z");
+    const result = badgeAt("2026-10-12", "2026-10-12", { registration_date, premium_since: new Date("2026-10-12") });
+    assert.equal(result.badge.id, "nitro_account_tenure_72_month");
+    assert.equal(result.since.toISOString(), registration_date.toISOString());
+    assert.match(result.badge.description, /Nitro since 2020-01-31/);
+    const reset = badgeAt("2026-10-12", "2026-10-12", { registration_date: null });
+    assert.equal(reset.badge.id, "nitro_account_tenure_0_month");
+});
+
+test("a future registration override retains the default badge on an old account", () => {
+    const result = badgeAt("2000-01-01", "2026-10-12", { registration_date: new Date("2027-01-01") });
+    assert.equal(result.badge.id, "nitro_account_tenure_0_month");
+    assert.equal(result.since, null);
 });
 
 test("bots and system accounts do not acquire human tenure badges", () => {
@@ -79,6 +96,6 @@ test("future and invalid creation dates retain the default badge without inventi
         const result = badgeAt(created, "2026-10-12");
         assert.equal(result.badge.id, "nitro_account_tenure_0_month");
         assert.equal(result.since, null);
-        assert.doesNotMatch(result.badge.description, /Member since/);
+        assert.doesNotMatch(result.badge.description, /Nitro since/);
     }
 });

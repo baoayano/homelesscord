@@ -1,10 +1,14 @@
 # Free evolving Nitro badges
 
-Every ordinary account receives the default Nitro badge immediately. Its level follows the account's `created_at`, with milestones at 1, 3, 6, 12, 24, 36, 60 and 72 completed calendar months. The highest badge replaces the previous one. Existing accounts receive the level their age has earned on the next profile request.
+Every ordinary account receives the default Nitro badge immediately. Its level follows the account's `registration_date`, with milestones at 1, 3, 6, 12, 24, 36, 60 and 72 completed calendar months. This date defaults to the account's `created_at`. The highest badge replaces the previous one. A changed start date takes effect on the next profile request.
 
-Anniversaries use UTC and preserve the creation time down to milliseconds. When the original day does not exist in the anniversary month, the anniversary falls on its last day. January 31 advances on February 28, or February 29 in a leap year. Progress stops at 72 months. Invalid or future creation dates receive the default badge with no invented tenure date.
+Open Users in the admin panel, select the account and edit **Nitro registration date** under Profile & account. The input uses the browser's local timezone and preserves seconds and milliseconds. Clear it to reset the field to the exact account creation time, then save. The admin API accepts `registration_date` as an ISO date and time with a timezone, or `null` to reset it, under `MANAGE_USERS` and the existing operator-target protection. Invalid calendar dates return 400. Ordinary users cannot edit this field through their own profile endpoint. Account creation and the native account age display stay unchanged.
 
-Bots and system accounts do not receive human membership badges. Premium type, payment status and the legacy `hide_premium_badge` field do not gate these free badges. The profile endpoint returns `premium_since` as the account creation date and one generated badge. Old assigned subscription badges and booster badges stay filtered, while admin and Pride badges remain visible. Badge descriptions use `client.instanceName` and have no purchase link. IDs use `nitro_account_tenure_<months>_month` so the native client displays the supplied description through its custom badge renderer. Discord's reserved `premium` IDs replace descriptions with subscriber tooltips and subscription interactions. No database migration, scheduled job or client modification is required.
+Anniversaries use UTC and preserve the start time down to milliseconds. When the original day does not exist in the anniversary month, the anniversary falls on its last day. January 31 advances on February 28, or February 29 in a leap year. Progress stops at 72 months. A future Nitro registration date keeps the default badge until its date arrives. Invalid start dates receive the default badge with no invented tenure date.
+
+Bots and system accounts do not receive human membership badges. Premium type, payment status and the legacy `hide_premium_badge` field do not gate these free badges. The profile endpoint returns `premium_since` as the valid Nitro registration date and one generated badge. Old assigned subscription badges and booster badges stay filtered, while admin and Pride badges remain visible. Badge descriptions use `client.instanceName`, say Nitro since and have no purchase link. IDs use `nitro_account_tenure_<months>_month` so the native client displays the supplied description through its custom badge renderer. Discord's reserved `premium` IDs replace descriptions with subscriber tooltips and subscription interactions. No scheduled job or cached client modification is required.
+
+PostgreSQL and SQLite migration `1792051846731` adds `registration_date` and fills missing values from `created_at`. Repeating it preserves dates already set by an admin. New accounts copy creation time before insertion. A null legacy value falls back to `created_at` when calculating the badge.
 
 The bundled Nitro badge artwork comes from Discord's badge CDN, retrieved on October 12, 2026. [Evolving Nitro Badges](https://support.discord.com/hc/en-us/articles/29136565881623-Evolving-Nitro-Badges) describes the progression. The local collection contains the default badge and milestones at 1, 3, 6, 12, 24, 36, 60 and 72 months.
 
@@ -18,7 +22,7 @@ Check the pinned files offline:
 
 ```sh
 bun scripts/tenure-badges.js --check
-bun test scripts/tests/nitro-badges.test.cjs scripts/tests/free-features.test.cjs scripts/tests/profile-sync.test.cjs scripts/tests/pride-permanent.test.cjs
+bun test scripts/tests/nitro-badges.test.cjs scripts/tests/registration-date.test.cjs scripts/tests/sqlite-database.test.cjs scripts/tests/free-features.test.cjs scripts/tests/profile-sync.test.cjs scripts/tests/pride-permanent.test.cjs
 ```
 
 Run `bun scripts/tenure-badges.js` to regenerate SVG companions from the bundled PNGs without network access. Run `bun scripts/tenure-badges.js --download` to download the pinned PNGs again and regenerate companions. All PNGs must pass signature, dimensions and SHA-256 checks before the download command replaces any files. The old procedural gemstone renderer is no longer used.

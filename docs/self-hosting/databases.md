@@ -12,6 +12,8 @@ SQLite uses Bun's built-in driver. It needs no PostgreSQL service or additional 
 
 Both backends apply their own versioned migrations automatically. SQLite creates its schema on first start without `DB_SYNC`. Do not enable `DB_SYNC` for routine operation. SQLite stores arrays and JSON as JSON text and preserves 64-bit account, server, channel and message IDs. Transactions serialize SQLite mutations, including encryption and slowmode checks. PostgreSQL keeps its row locks and advisory locks.
 
+Migration `1792051846731` adds the Nitro badge start field `users.registration_date` on both backends and copies existing account creation dates into missing values. Repeating the migration preserves custom dates. New accounts copy their creation time on insert; the admin panel can change the Nitro start date separately.
+
 For a local SQLite instance, install dependencies and build as described in [setup.md](setup.md). Set these values in `.env`:
 
 ```dotenv
