@@ -111,6 +111,37 @@ test("pointer and keyboard reorder targets work across rows, edges and reversed 
     assert.equal(drag.sameDragOrder(rects, ["a", "c", "b", "d"]), false);
 });
 
+test("badge details wait for the viewer badge before reading its fields", () => {
+    const plugin = load("client/plugins/fosscordBadgeManagement/index.ts", {
+        "@utils/types": { default: (value) => value, __esModule: true },
+        "../fosscordCore/shared": { FosscordAuthor: {} },
+        "./bridge": {},
+        "./style.css?managed": { default: "", __esModule: true },
+    }).default;
+    const details = plugin.patches.find((patch) => patch.find === '"badge-details"');
+    const apply = (source, replacement) => {
+        const pattern = replacement.match.source.replaceAll("\\i", "[A-Za-z_$][\\w$]*");
+        return source.replace(new RegExp(pattern, replacement.match.flags), replacement.replace.replaceAll("$self", "helpers"));
+    };
+    const maxed = details.replacement.find((replacement) => replacement.replace.includes("useMaxedDescription"));
+    const legacy = details.replacement.find((replacement) => replacement.replace.includes("!$self.isLegacy"));
+    const helpers = {
+        useMaxedDescription: (badge) => badge.badge_id !== 1,
+        isLegacy: (badge) => badge.is_legacy === true,
+    };
+    const maxedExpression = apply("!viewer&&badge?.owned===!0&&(badge.tiers?.length??0)>0&&null==badge.next_tier", maxed);
+    const legacyExpression = apply('!badge||badge.is_earnable||flag||badge.badge_id===U.$.STAFF?null:"offer"', legacy);
+    assert.notEqual(maxedExpression, "!viewer&&badge?.owned===!0&&(badge.tiers?.length??0)>0&&null==badge.next_tier");
+    assert.notEqual(legacyExpression, '!badge||badge.is_earnable||flag||badge.badge_id===U.$.STAFF?null:"offer"');
+    const showMaxed = new Function("badge", "helpers", "viewer", `return ${maxedExpression}`);
+    const showLegacyAction = new Function("badge", "helpers", "flag", "U", `return ${legacyExpression}`);
+    assert.equal(showMaxed(undefined, helpers, false), false);
+    assert.equal(showMaxed({ badge_id: 1, owned: true, tiers: [{}], next_tier: null }, helpers, false), false);
+    assert.equal(showMaxed({ badge_id: 22, owned: true, tiers: [{}], next_tier: null }, helpers, false), true);
+    assert.equal(showLegacyAction(undefined, helpers, false, { $: { STAFF: 22 } }), null);
+    assert.equal(showLegacyAction({ badge_id: 99, is_legacy: false }, helpers, false, { $: { STAFF: 22 } }), null);
+});
+
 test("every management patch matches the reviewed native module and preserves its syntax", () => {
     const plugin = load("client/plugins/fosscordBadgeManagement/index.ts", {
         "@utils/types": { default: (v) => v, __esModule: true },
