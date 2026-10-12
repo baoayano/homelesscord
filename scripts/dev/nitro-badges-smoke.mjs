@@ -27,6 +27,17 @@ const response = await fetch(`${origin}/api/v9/users/@me/profile`, { headers: { 
 assert.equal(response.status, 200);
 const profile = await response.json();
 const nitro = profile.badges.filter((badge) => badge.id.startsWith("nitro_account_tenure_"));
+const titles = {
+    0: "NITRO",
+    1: "NITRO BRONZE",
+    3: "NITRO SILVER",
+    6: "NITRO GOLD",
+    12: "NITRO PLATINUM",
+    24: "NITRO DIAMOND",
+    36: "NITRO EMERALD",
+    60: "NITRO RUBY",
+    72: "NITRO OPAL",
+};
 assert.equal(nitro.length, 1, "exactly one free Nitro badge");
 assert.equal(nitro[0].link, undefined, "no subscription destination");
 assert.ok(profile.premium_since, "stable tenure date");
@@ -63,13 +74,24 @@ try {
     assert.ok(await image.isVisible(), "DM side profile badge is visible");
     const source = await image.getAttribute("src");
     assert.equal(new URL(source, origin).origin, origin, "badge uses this instance's CDN");
-    await image.hover();
-    await page.getByRole("tooltip").waitFor();
-    const tooltip = await page.getByRole("tooltip").innerText();
-    assert.ok(tooltip.includes(nitro[0].description), `free tenure description: ${tooltip}`);
+    const trigger = image.locator("..");
+    await trigger.hover();
+    const card = page.locator('[data-mana-component="mini-premium-tooltip"]');
+    await card.waitFor();
+    const tooltip = await card.innerText();
+    const months = /^nitro_account_tenure_(\d+)_month$/.exec(nitro[0].id)[1];
+    const body = await page.evaluate(
+        (date) => `Nitro since ${new Intl.DateTimeFormat(navigator.language, { dateStyle: "short", timeZone: "UTC" }).format(new Date(date))}`,
+        profile.premium_since,
+    );
+    assert.ok(tooltip.includes(titles[months]), `native Nitro tier title: ${tooltip}`);
+    assert.ok(tooltip.includes(body), `registration date caption: ${tooltip}`);
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-mana-component="mini-premium-tooltip"] img')].every((image) => image.complete && image.naturalWidth > 0));
+    assert.ok((await card.locator("img").count()) > 0, "large badge artwork is present");
+    for (const image of await card.locator("img").all()) assert.equal(new URL(await image.getAttribute("src"), origin).origin, origin, "tooltip artwork is local");
     const link = await image.evaluate((element) => element.closest("a")?.getAttribute("href") ?? null);
     assert.equal(link, null, "badge does not link to a subscription page");
-    await image.click();
+    await trigger.click();
     assert.equal(await page.getByRole("dialog").count(), 0, "badge click does not open a subscription modal");
     await page.mouse.move(0, 0);
     await page.getByText("View Full Profile", { exact: true }).click();
@@ -77,9 +99,17 @@ try {
     await expanded.waitFor();
     const expandedImage = expanded.locator(selector).first();
     assert.ok(await expandedImage.isVisible(), "expanded profile badge is visible");
-    await expandedImage.hover();
-    await page.getByRole("tooltip").waitFor();
-    assert.ok((await page.getByRole("tooltip").innerText()).includes(nitro[0].description), "expanded profile uses the earned badge description");
+    await expandedImage.locator("..").hover();
+    await card.waitFor();
+    assert.ok((await card.innerText()).includes(titles[months]), "expanded profile uses the earned tier title");
+    assert.ok((await card.innerText()).includes(body), "expanded profile uses the Nitro registration date");
+    await page.mouse.move(0, 0);
+    await card.waitFor({ state: "hidden" });
+    await page.keyboard.press("Tab");
+    await expandedImage.locator("..").focus();
+    await card.waitFor();
+    assert.ok((await card.innerText()).includes(titles[months]), "keyboard focus opens the native card");
+    if (process.env.NITRO_CARD_SCREENSHOT) await card.screenshot({ path: process.env.NITRO_CARD_SCREENSHOT, animations: "disabled" });
     if (process.env.NITRO_SMOKE_SCREENSHOT) await page.screenshot({ path: process.env.NITRO_SMOKE_SCREENSHOT });
     console.log(
         JSON.stringify({
