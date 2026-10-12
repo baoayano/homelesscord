@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { managementUtilities } = require("./helpers/badge-management.cjs");
 
 const badgeModule = { exports: {} };
 vm.runInNewContext(
@@ -45,7 +46,7 @@ vm.runInNewContext(
     },
 );
 
-const harness = () => {
+const harness = (variant = 0) => {
     let handler;
     let getHandler;
     const calls = [];
@@ -123,7 +124,7 @@ const harness = () => {
                                 },
                                 addSelect(columns) {
                                     if (typeof columns === "string") {
-                                        assert.equal(columns, "user.pride_badges");
+                                        assert.ok(["user.pride_badges", "user.badge_settings"].includes(columns));
                                         return query;
                                     }
                                     assert.deepEqual(Array.from(columns), [
@@ -217,6 +218,7 @@ const harness = () => {
             if (name === "@spacebar/api/util/utility/prideBadges") return badgeModule.exports;
             if (name === "@spacebar/api/util/utility/profile") return profileModule.exports;
             if (name === "@spacebar/api/util/utility/nitroBadges") return nitroModule.exports;
+            if (name === "@spacebar/api/util/utility/badgeManagement") return managementUtilities({ variant });
             if (name === "@spacebar/api/util/utility/staffBadge") return { STAFF_BADGE_ID: "1" };
             if (name === "@spacebar/api/util/handlers/Application") return {};
             throw Error(name);
@@ -456,6 +458,27 @@ test("Nitro follows Staff by its fixed ID even with edited artwork and an unorde
         );
     }
     assert.deepEqual(h.user.badge_ids, ["assigned", "1", "second"]);
+});
+
+test("global and guild profiles apply hidden preferences without removing ownership, Pride or free Premium dates", async () => {
+    const h = harness(1);
+    h.user.pride_badges = ["rainbow"];
+    h.user.badge_ids = ["1", "assigned"];
+    h.user.fixture_badges = [
+        { id: "1", description: "Staff", icon: "staff" },
+        { id: "assigned", description: "Custom", icon: "custom" },
+    ];
+    h.user.badge_settings = { display_order: [], hidden_badges: ["22", "1", "custom:assigned", "pride:rainbow"] };
+    for (const query of [{}, { guild_id: "123456" }]) {
+        const result = await h.get(query);
+        assert.deepEqual(
+            Array.from(result.badges, (badge) => badge.icon),
+            ["pride_rainbow"],
+        );
+        assert.equal(result.user.badge_settings, undefined);
+        assert.equal(result.premium_since.toISOString(), h.user.created_at.toISOString());
+    }
+    assert.deepEqual(h.user.badge_ids, ["1", "assigned"]);
 });
 
 test("guild profile rejects outsiders before reading the target profile or guild member", async () => {

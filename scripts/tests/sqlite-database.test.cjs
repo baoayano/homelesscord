@@ -101,6 +101,10 @@ test("SQLite migrates, preserves exact IDs, serializes writes, rolls back and su
         const overridden = await User.findOneByOrFail({ id: user.id });
         assert.equal(overridden.registration_date.getTime(), nitroRegistrationDate.getTime());
         assert.equal(overridden.created_at.getTime(), registered.created_at.getTime());
+        const badgePreferences = { display_order: ["pride:rainbow"], hidden_badges: ["22"] };
+        await User.update({ id: user.id }, { badge_settings: badgePreferences });
+        assert.equal((await User.findOneByOrFail({ id: user.id })).badge_settings, undefined);
+        assert.deepEqual((await User.findOneOrFail({ where: { id: user.id }, select: { id: true, badge_settings: true } })).badge_settings, badgePreferences);
         await assert.rejects(User.createQueryBuilder("user").setLock("pessimistic_write").getOne(), /transaction.*required|required.*transaction/);
         const friend = await User.register({ username: "sqlite%_friend", password: "sqlite-test-only" });
         await Relationship.create({ from_id: user.id, to_id: friend.id, type: 3 }).save();
@@ -181,6 +185,7 @@ test("SQLite migrates, preserves exact IDs, serializes writes, rolls back and su
         await closeDatabase();
         const reopened = await initDatabase();
         assert.equal((await StatusComponent.findOneByOrFail({ id })).id, id);
+        assert.deepEqual((await User.findOneOrFail({ where: { id: user.id }, select: { id: true, badge_settings: true } })).badge_settings, badgePreferences);
         assert.equal((await reopened.query("SELECT COUNT(*) AS count FROM migrations"))[0].count, migrations.length);
     } finally {
         await closeDatabase();

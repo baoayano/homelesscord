@@ -6,11 +6,8 @@ import { Badge, Member, Relationship, User } from "@spacebar/database";
 import { broadcastUserUpdate, Config, DiscordApiErrors, emitEvent, FieldErrors, handleFile, UserUpdateEvent } from "@spacebar/util";
 import { PartialConnectedAccountResponse, PrivateUserProjection, PublicUserProjection, RelationshipType, UserProfileModifySchema } from "@spacebar/schemas";
 
-import { prideBadges } from "@spacebar/api/util/utility/prideBadges";
-
-import { isSubscriptionBadge } from "@spacebar/api/util/utility/profile";
+import { buildBadgeCatalog, visibleProfileBadges } from "@spacebar/api/util/utility/badgeManagement";
 import { nitroBadge } from "@spacebar/api/util/utility/nitroBadges";
-import { STAFF_BADGE_ID } from "@spacebar/api/util/utility/staffBadge";
 
 import { profileApplication } from "@spacebar/api/util/handlers/Application";
 
@@ -45,6 +42,7 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
             "connected_accounts.visibility",
         ])
         .addSelect("user.pride_badges")
+        .addSelect("user.badge_settings")
         .leftJoinAndSelect("user.avatar_decoration", "avatar_decoration")
         .where("user.id = :user_id", { user_id })
         .getOneOrFail();
@@ -101,12 +99,8 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
     const badges = [];
     if (user.badge_ids?.length) badges.push(...(await Badge.find({ where: { id: In(user.badge_ids) } })));
 
-    badges.push(...prideBadges(user.pride_badges));
     const nitro = nitroBadge(user, Config.get().client.instanceName);
-    const visibleBadges = badges.filter((badge) => !isSubscriptionBadge(badge));
-    const orderedBadges = nitro
-        ? [...visibleBadges.filter((badge) => badge.id === STAFF_BADGE_ID), nitro.badge, ...visibleBadges.filter((badge) => badge.id !== STAFF_BADGE_ID)]
-        : visibleBadges;
+    const orderedBadges = visibleProfileBadges(buildBadgeCatalog(user, badges));
 
     const connected_accounts: PartialConnectedAccountResponse[] = user.connected_accounts
         .filter((x) => x.visibility != 0)

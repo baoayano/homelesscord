@@ -14,6 +14,7 @@ import { Session } from "./Session";
 import { UserSettings } from "./UserSettings";
 import {
     AvatarDecorationData,
+    BadgeSettings,
     ChannelType,
     Collectibles,
     DisplayNameStyle,
@@ -234,6 +235,9 @@ export class User extends BaseClass {
 
     @Column({ type: "int8", array: true, nullable: true })
     badge_ids?: string[];
+
+    @Column({ type: "jsonb", nullable: true, select: false })
+    badge_settings?: BadgeSettings | null;
 
     @Column({ type: "jsonb", nullable: true })
     avatar_decoration_data?: AvatarDecorationData;

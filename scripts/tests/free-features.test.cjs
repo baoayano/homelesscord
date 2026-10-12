@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { managementUtilities } = require("./helpers/badge-management.cjs");
 const load = (file, imports = {}, globals = {}) => {
     const module = { exports: {} };
     const js = ts.transpileModule(fs.readFileSync(file, "utf8"), {
@@ -82,6 +83,7 @@ test("profile response keeps free features and custom badges alongside one evolv
         },
         "@spacebar/api/util/utility/profile": utilities(),
         "@spacebar/api/util/utility/nitroBadges": nitroUtilities(),
+        "@spacebar/api/util/utility/badgeManagement": managementUtilities(),
         "@spacebar/api/util/utility/staffBadge": { STAFF_BADGE_ID: "1" },
         "@spacebar/api/util/handlers/Application": {},
     });

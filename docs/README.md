@@ -15,6 +15,7 @@
 
 ## Features
 
+- [badge-management.md](features/badge-management.md): badge catalog APIs, display preferences, Staff visibility and treatment-specific Nitro hiding.
 - [nitro-badge-assets.md](features/nitro-badge-assets.md): free evolving Nitro badges, native tooltip cards and their experiment, editable Nitro registration dates and verification.
 - [admin.md](features/admin.md): the admin dashboard at `/admin`.
 - [activities.md](features/activities.md): embedded activities, their hosting and API.

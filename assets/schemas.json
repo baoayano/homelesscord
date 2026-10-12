@@ -1148,6 +1148,31 @@
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
+    "BadgeSettingsSchema": {
+        "type": "object",
+        "properties": {
+            "display_order": {
+                "type": "array",
+                "items": {
+                    "type": [
+                        "string",
+                        "integer"
+                    ]
+                }
+            },
+            "hidden_badges": {
+                "type": "array",
+                "items": {
+                    "type": [
+                        "string",
+                        "integer"
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
     "GuildAvailableSchema": {
         "type": "object",
         "properties": {
@@ -5222,6 +5247,25 @@
         "required": [
             "id",
             "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "BadgeDirectoryResponse": {
+        "type": "object",
+        "properties": {
+            "badges": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/definitions/BadgeDirectoryEntry"
+                }
+            },
+            "settings": {
+                "$ref": "#/definitions/BadgeSettings"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "badges"
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
@@ -15333,6 +15377,16 @@
                     "type": "string"
                 }
             },
+            "badge_settings": {
+                "anyOf": [
+                    {
+                        "$ref": "#/definitions/BadgeSettings"
+                    },
+                    {
+                        "type": "null"
+                    }
+                ]
+            },
             "avatar_decoration_data": {
                 "$ref": "#/definitions/AvatarDecorationData"
             },
@@ -16030,6 +16084,29 @@
             "public_key",
             "user",
             "user_id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "BadgeSettings": {
+        "type": "object",
+        "properties": {
+            "display_order": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "hidden_badges": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "display_order",
+            "hidden_badges"
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
@@ -23730,6 +23807,160 @@
             "description",
             "icon",
             "id"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "BadgeDirectoryEntry": {
+        "type": "object",
+        "properties": {
+            "badge_id": {
+                "type": [
+                    "string",
+                    "integer"
+                ]
+            },
+            "legacy_id": {
+                "type": "string"
+            },
+            "name": {
+                "type": "string"
+            },
+            "description": {
+                "type": "string"
+            },
+            "owned": {
+                "type": "boolean"
+            },
+            "hidden": {
+                "type": "boolean"
+            },
+            "hideable": {
+                "type": "boolean"
+            },
+            "reorderable": {
+                "type": "boolean"
+            },
+            "is_earnable": {
+                "type": "boolean"
+            },
+            "simple_icon_url": {
+                "type": "string"
+            },
+            "simple_icon_raster_url": {
+                "type": "string"
+            },
+            "obtained_at": {
+                "type": [
+                    "null",
+                    "string"
+                ]
+            },
+            "current_tier": {
+                "type": "string"
+            },
+            "next_tier": {
+                "type": [
+                    "null",
+                    "string"
+                ]
+            },
+            "tiers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "milestone_text": {
+                            "type": "string"
+                        },
+                        "simple_icon_url": {
+                            "type": "string"
+                        },
+                        "requirements": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string"
+                                    },
+                                    "threshold": {
+                                        "type": "integer"
+                                    }
+                                },
+                                "additionalProperties": false,
+                                "required": [
+                                    "threshold",
+                                    "type"
+                                ]
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "key",
+                        "milestone_text",
+                        "name",
+                        "requirements",
+                        "simple_icon_url"
+                    ]
+                }
+            },
+            "tier_obtained_at": {
+                "$ref": "#/definitions/Record%3Cstring%2Cstring%3E"
+            },
+            "progress": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        },
+                        "current": {
+                            "type": "integer"
+                        },
+                        "threshold": {
+                            "type": "integer"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "current",
+                        "threshold",
+                        "type"
+                    ]
+                }
+            },
+            "profile_badge": {
+                "$ref": "#/definitions/ProfileBadge"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "badge_id",
+            "current_tier",
+            "description",
+            "hidden",
+            "hideable",
+            "is_earnable",
+            "legacy_id",
+            "name",
+            "next_tier",
+            "obtained_at",
+            "owned",
+            "profile_badge",
+            "progress",
+            "reorderable",
+            "simple_icon_raster_url",
+            "simple_icon_url",
+            "tier_obtained_at",
+            "tiers"
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },

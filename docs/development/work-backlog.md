@@ -19,6 +19,15 @@ Start with `client/plugins; assets/public/admin`.
 - [ ] **MOD-012** Remove stale backdrops after route changes or errors. Admin sign-in and portal route changes are handled; other dialog families still need lifecycle coverage.
 - [ ] **MOD-013** Use native portal layers instead of arbitrary competing z-index values.
 
+## Badge management (P1)
+
+The backend catalog and persistent settings APIs are implemented. Staff can be hidden. Nitro can be hidden under treatment 1 and stays visible under treatment 2. Visible Staff and Nitro keep their priority; Pride remains permanent. See [badge-management.md](../features/badge-management.md).
+
+- [ ] Add the Equicord adapter for legacy, custom and Pride IDs.
+- [ ] Allow native Staff visibility editing while protecting Pride and visible Staff/Nitro priority.
+- [ ] Remove purchase, Boost, Quests and Orbs actions from the native directory.
+- [ ] Verify native saving, reset, keyboard operation and overflow before enabling the experiment.
+
 ## Pride flags and profile badges (P1)
 
 Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. Nitro registration date defaults to account creation and is editable through the admin panel's Nitro registration date field. All nine levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering, date editing and reset are verified. Native Nitro tooltip cards show the tier title, local large artwork and formatted registration day; default, Silver and Opal cards, keyboard focus and subscription-free clicks are verified. PostgreSQL and SQLite migrations preserve custom dates. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Staff appears first and Nitro follows it, with remaining badges preserving their relative order. Required Pride behavior stays unchanged.
