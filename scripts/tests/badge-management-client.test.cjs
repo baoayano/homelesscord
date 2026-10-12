@@ -102,11 +102,14 @@ test("every management patch matches the reviewed native module and preserves it
         for (let i = 0; i < headers.length; i++)
             modules.push(source.slice(headers[i].index + headers[i][0].length, i + 1 < headers.length ? headers[i + 1].index - 2 : source.length).replace(/\}\}\]\);[\s\S]*$/, ""));
     }
+    const normalize = (pattern) => pattern.replaceAll("\\i", "[A-Za-z_$][\\w$]*").replaceAll("#{intl::Ipxkog::raw}", '(?:\\.Ipxkog|\\["Ipxkog"\\])');
     for (const patch of plugin.patches) {
-        let source = modules.find((source) => source.includes(patch.find));
+        const targets = modules.filter((source) => (typeof patch.find === "string" ? source.includes(patch.find) : new RegExp(normalize(patch.find.source)).test(source)));
+        assert.equal(targets.length, 1, `unique module anchor ${patch.find}`);
+        let source = targets[0];
         assert.ok(source, "module anchor " + patch.find);
         for (const replacement of Array.isArray(patch.replacement) ? patch.replacement : [patch.replacement]) {
-            const pattern = replacement.match.source.replaceAll("\\i", "[A-Za-z_$][\\w$]*").replaceAll("#{intl::Ipxkog}", '(?:\\.Ipxkog|\\["Ipxkog"\\])');
+            const pattern = normalize(replacement.match.source);
             const match = new RegExp(pattern, replacement.match.flags);
             assert.ok(match.test(source), patch.find + " " + replacement.match);
             source = source.replace(match, replacement.replace.replaceAll("$self", "BadgeManagement"));

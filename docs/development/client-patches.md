@@ -63,6 +63,8 @@ A patch has a `find`, a string or regex that picks the one module to patch, and 
 
 `bun run build:equicord` rebuilds, and with `NODE_ENV=development` the server reloads the page source on the next request. A patch whose `match` finds nothing logs `Patch by <plugin> had no effect` to the browser console.
 
+FosscordBadgeManagement maps native Staff and Nitro IDs to the server catalog and keeps custom and Pride IDs intact. It uses catalog metadata for visibility and fixed priority, previews the original profile badges, preserves selections beyond the native 6 badge cap and removes directory acquisition actions. The popover anchors to the badge row so closing the directory does not leave it attached to an unmounted element. Both the directory and the Profiles settings entry use native components. See [badge-management.md](../features/badge-management.md).
+
 ## Checking patches after a Discord update
 
 `bun run check:client` builds Equicord's reporter variant and runs `scripts/vencord-check.mjs`. It needs a running server (`ORIGIN`, default `http://localhost:$PORT`) and `playwright-core` (from the repo or `~/.cache/fosscord-tools`). The check opens `/login` in headless Chrome with the reporter build in place of the normal one. The reporter enables every Equicord plugin, loads every lazy chunk, runs every lazy webpack lookup and logs each patch that matched no module, had no effect or threw. The check script adds the one case the reporter skips, a patch marked `all` whose `find` matches no module at all.

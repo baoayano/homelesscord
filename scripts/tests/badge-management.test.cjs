@@ -27,7 +27,8 @@ test("catalog uses stable native Staff/Nitro IDs and collision-free custom and P
     assert.equal(catalog[1].hideable, false);
     assert.equal(catalog[1].legacy_id, "nitro_account_tenure_72_month");
     assert.equal(catalog[1].tiers.length, 9);
-    assert.ok(catalog.every((badge) => badge.owned && !badge.is_earnable && badge.simple_icon_url.startsWith("http://localhost:3003/badge-icons/")));
+    assert.ok(catalog.every((badge) => badge.owned && badge.simple_icon_url.startsWith("http://localhost:3003/badge-icons/")));
+    assert.ok(catalog.every((badge) => badge.is_earnable === (badge.badge_id === 1)));
     assert.deepEqual(
         assigned.map((badge) => badge.id),
         ["456", "1", "123"],
@@ -152,4 +153,25 @@ test("SQLite badge settings migration preserves accounts and customized settings
     } finally {
         db.close();
     }
+});
+
+test("Nitro directory progress and earned tiers follow the configured UTC registration anniversaries", () => {
+    const api = managementUtilities();
+    const { user, assigned } = fixture();
+    user.registration_date = new Date("2025-01-31T12:34:56Z");
+    const at = (date) => api.buildBadgeCatalog(user, assigned, new Date(date)).find((badge) => badge.badge_id === 1);
+    const bronze = at("2025-02-28T12:34:56Z");
+    assert.equal(bronze.current_tier, "1");
+    assert.equal(bronze.tier_obtained_at["1"], "2025-02-28T12:34:56.000Z");
+    assert.deepEqual(plain(bronze.progress), [{ type: "months", current: 1, floor: 1, threshold: 3, progress_helper_text: "2 months until the next level" }]);
+    assert.deepEqual(plain(bronze.tiers.filter((tier) => tier.owned).map((tier) => tier.key)), ["0", "1"]);
+    assert.equal(at("2025-03-31T12:34:55Z").progress[0].current, 1);
+    assert.equal(at("2025-03-31T12:34:56Z").progress[0].current, 2);
+    assert.equal(at("2031-01-31T12:34:56Z").progress.length, 0);
+    user.registration_date = new Date("2035-01-01T00:00:00Z");
+    const future = at("2025-02-28T12:34:56Z");
+    assert.equal(future.obtained_at, null);
+    assert.equal(future.current_tier, "0");
+    assert.deepEqual(plain(future.tier_obtained_at), {});
+    assert.deepEqual(plain(future.progress), []);
 });

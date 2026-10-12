@@ -21,12 +21,12 @@ Start with `client/plugins; assets/public/admin`.
 
 ## Badge management (P1)
 
-The backend catalog and persistent settings APIs are implemented. Staff can be hidden. Nitro can be hidden under treatment 1 and stays visible under treatment 2. Visible Staff and Nitro keep their priority; Pride remains permanent. See [badge-management.md](../features/badge-management.md).
+The native directory and customization popover use the backend catalog and persistent settings APIs. Staff can be hidden. Nitro can be hidden under treatment 1 and stays visible under treatment 2. Visible Staff and Nitro keep their priority; Pride remains permanent. See [badge-management.md](../features/badge-management.md).
 
-- [ ] Add the Equicord adapter for legacy, custom and Pride IDs.
-- [ ] Allow native Staff visibility editing while protecting Pride and visible Staff/Nitro priority.
-- [ ] Remove purchase, Boost, Quests and Orbs actions from the native directory.
-- [ ] Verify native saving, reset, keyboard operation and overflow before enabling the experiment.
+- [x] Add the Equicord adapter for legacy, custom and Pride IDs.
+- [x] Allow native Staff visibility editing while protecting Pride and visible Staff/Nitro priority.
+- [x] Remove purchase, Boost, Quests and Orbs actions from the native directory.
+- [x] Verify native saving, reset, keyboard operation and overflow before enabling the experiment.
 
 ## Pride flags and profile badges (P1)
 

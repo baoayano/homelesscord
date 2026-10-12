@@ -58,6 +58,7 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         const badge = entry(nitro.badge, 1, tenureHideable, false);
         const months = Number(/^nitro_account_tenure_(\d+)_month$/.exec(nitro.badge.id)![1]);
         badge.name = "NITRO";
+        badge.is_earnable = true;
         badge.obtained_at = nitro.since?.toISOString() ?? null;
         badge.current_tier = String(months);
         badge.next_tier = NITRO_MONTHS[NITRO_MONTHS.indexOf(months) + 1]?.toString() ?? null;

@@ -35,14 +35,14 @@ export default definePlugin({
             ],
         },
         {
-            find: "fixedBadges:",
+            find: /function \i\((\i)\)\{let \i=\[\],\i=\[\],\i=\[\];for\(let \i of \1\)/,
             replacement: {
                 match: /function \i\((\i)\)\{(?=let \i=\[\],\i=\[\],\i=\[\];for\(let \i of \1\))/,
                 replace: "$&return $self.splitBadges($1);",
             },
         },
         {
-            find: "USER_PROFILE_SETTINGS_SET_PENDING_CHANGES",
+            find: /function \i\(\i,\i\)\{let\{pendingBadgeDisplayOrder:\i,pendingBadgeHiddenBadges:\i\}=/,
             replacement: [
                 {
                     match: /function \i\(\)\{(?=let \i=\i\.default\.getCurrentUser\(\)\?\.id;if\(null==\i\|\|!\i\.\i\.hasCatalogFor\(\i\)\)return null;)/,
@@ -71,6 +71,7 @@ export default definePlugin({
                 { match: /Math\.max\(\i\.length-\i\.\i,0\)/, replace: "0" },
                 { match: /\[(\i)\.slice\(0,\i\.\i\)\]/, replace: "[$1]" },
                 { match: /(role:"dialog",tabIndex:-1,)/, replace: '$1"data-fosscord-badge-customization":"",' },
+                { match: /targetElementRef:\i&&!\i\?(\i):\i,position:"bottom",align:"left",spacing:4/, replace: 'targetElementRef:$1,position:"bottom",align:"left",spacing:4' },
                 {
                     match: /function \i\(\i\)\{(?=let\{onClose:\i\}=\i;return\(0,\i\.jsxs\)\(\i\.\i,\{color:"nitro-pink")/,
                     replace: "$&return null;",
@@ -81,7 +82,7 @@ export default definePlugin({
             find: '"badge-details"',
             replacement: [
                 { match: /(\i=)\i\[(\i)\.badge_id\]/g, replace: "$1undefined" },
-                { match: /\i\.intl\.string\(\i\.t#{intl::Ipxkog}\)/g, replace: '"NITRO"' },
+                { match: /\i\.intl\.string\(\i\.t#{intl::Ipxkog::raw}\)/g, replace: '"NITRO"' },
             ],
         },
         {
