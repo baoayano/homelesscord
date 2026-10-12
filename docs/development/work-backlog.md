@@ -21,6 +21,8 @@ Start with `client/plugins; assets/public/admin`.
 
 ## Pride flags and profile badges (P1)
 
+Homelesscord's planned free evolving Nitro badges have the original default and eight milestone images bundled locally, described in [nitro-badge-assets.md](../features/nitro-badge-assets.md). Profile eligibility, tenure calculation and rendering verification remain to be implemented. Required Pride behavior stays unchanged.
+
 Start with `src/api/util/utility/prideBadges.ts; client/plugins/fosscordPride`.
 
 - [ ] **FLAG-007** Verify badges render in compact and expanded profiles.
