@@ -18,14 +18,19 @@ export type CatalogBadge = {
 };
 export type Pending = { pendingBadgeDisplayOrder?: BadgeId[]; pendingBadgeHiddenBadges?: BadgeId[] };
 
+export function reorderHint(count: number): string {
+    if (count === 0) return "Show or select badges to arrange them on your profile.";
+    if (count === 1) return "Show or select another badge to change the order.";
+    return "Drag badges to reorder. Use More options to hide eligible badges.";
+}
+
 export function applyCatalog(catalog: CatalogBadge[], pending: Pending): CatalogBadge[] {
     const hidden = pending.pendingBadgeHiddenBadges && new Set(pending.pendingBadgeHiddenBadges.map(String));
     const order = pending.pendingBadgeDisplayOrder;
     const ranks = order && new Map(order.map((id, index) => [String(id), index]));
-    const priority = (badge: CatalogBadge) => (badge.badge_id === 22 ? -2 : badge.badge_id === 1 ? -1 : (ranks?.get(String(badge.badge_id)) ?? Infinity));
-    return catalog
-        .map((badge) => ({ ...badge, hidden: badge.hideable && (hidden ? hidden.has(String(badge.badge_id)) : badge.hidden) }))
-        .sort((left, right) => priority(left) - priority(right));
+    const priority = (badge: CatalogBadge) => ranks?.get(String(badge.badge_id)) ?? (badge.badge_id === 22 ? -2 : badge.badge_id === 1 ? -1 : Infinity);
+    const updated = catalog.map((badge) => ({ ...badge, hidden: badge.hideable && (hidden ? hidden.has(String(badge.badge_id)) : badge.hidden) }));
+    return ranks ? updated.sort((left, right) => priority(left) - priority(right)) : updated;
 }
 
 export function splitBadges(catalog: CatalogBadge[]) {

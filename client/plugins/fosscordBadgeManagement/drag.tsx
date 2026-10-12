@@ -89,7 +89,7 @@ export function DraggableBadge(props: Props) {
 
     function start(x: number, y: number, pointerId?: number) {
         const popup = root.current?.closest<HTMLElement>("[data-fosscord-badge-customization]");
-        if (!root.current || !popup || popup.dataset.fosscordDragReserved || !badge.reorderable || badge.hidden) return false;
+        if (!root.current || !popup || popup.dataset.fosscordDragReserved || items(popup).length < 2 || !badge.reorderable || badge.hidden) return false;
         const cancelOnEscape = (event: globalThis.KeyboardEvent) => {
             if (event.key !== "Escape") return;
             event.preventDefault();

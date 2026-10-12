@@ -25,6 +25,8 @@ test("catalog uses stable native Staff/Nitro IDs and collision-free custom and P
     assert.deepEqual(ids(catalog), ["22", "1", "custom:123", "custom:456", "pride:rainbow"]);
     assert.equal(catalog[0].hideable, true);
     assert.equal(catalog[1].hideable, false);
+    assert.equal(catalog[0].reorderable, true);
+    assert.equal(catalog[1].reorderable, true);
     assert.equal(catalog[1].legacy_id, "nitro_account_tenure_72_month");
     assert.equal(catalog[1].tiers.length, 9);
     assert.ok(catalog.every((badge) => badge.owned && badge.simple_icon_url.startsWith("http://localhost:3003/badge-icons/")));
@@ -79,17 +81,17 @@ test("Staff may be hidden in all treatments while Nitro may only be hidden in tr
     }
 });
 
-test("visible Staff and Nitro remain pinned while other owned badges may be reordered", () => {
+test("Staff and Nitro follow saved display order along with custom and Pride badges", () => {
     const api = managementUtilities({ variant: 1 });
     const { user, assigned } = fixture();
     const initial = api.buildBadgeCatalog(user, assigned);
-    user.badge_settings = api.updateBadgeSettings(user, initial, { display_order: ["pride:rainbow", "custom:456", 1, 22, "custom:123"], hidden_badges: ["custom:123"] });
-    assert.deepEqual(plain(user.badge_settings.display_order), ["pride:rainbow", "custom:456", "custom:123"]);
+    user.badge_settings = api.updateBadgeSettings(user, initial, { display_order: ["custom:456", 1, 22, "pride:rainbow", "custom:123"], hidden_badges: ["custom:123"] });
+    assert.deepEqual(plain(user.badge_settings.display_order), ["custom:456", "1", "22", "pride:rainbow", "custom:123"]);
     const catalog = api.buildBadgeCatalog(user, assigned);
-    assert.deepEqual(ids(catalog), ["22", "1", "pride:rainbow", "custom:456", "custom:123"]);
+    assert.deepEqual(ids(catalog), ["custom:456", "1", "22", "pride:rainbow", "custom:123"]);
     assert.deepEqual(
         Array.from(api.visibleProfileBadges(catalog), (badge) => badge.icon),
-        ["custom_staff", "premium_tenure_72_month_v2", "pride_rainbow", "custom_b"],
+        ["custom_b", "premium_tenure_72_month_v2", "custom_staff", "pride_rainbow"],
     );
 });
 

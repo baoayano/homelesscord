@@ -19,6 +19,15 @@
     cursor: grab;
 }
 
+[data-fosscord-badge-customization]:not(:has([data-fosscord-reorder-index] ~ [data-fosscord-reorder-index])) .fosscord-badge-drag-target {
+    cursor: default;
+    touch-action: auto;
+}
+
+[data-fosscord-badge-customization]:not(:has([data-fosscord-reorder-index] ~ [data-fosscord-reorder-index])) .fosscord-badge-drag-handle {
+    display: none;
+}
+
 [data-fosscord-dragging],
 [data-fosscord-dragging] .fosscord-badge-drag-target,
 [data-fosscord-dragging] .fosscord-badge-drag-handle {
@@ -74,8 +83,4 @@
     clip-path: inset(50%);
     overflow: hidden;
     white-space: nowrap;
-}
-
-[data-fosscord-badge-fixed="true"] {
-    cursor: default;
 }

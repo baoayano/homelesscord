@@ -23,14 +23,14 @@ const load = (file, imports = {}) => {
 const model = load("client/plugins/fosscordBadgeManagement/model.ts");
 const drag = load("client/plugins/fosscordBadgeManagement/dragModel.ts");
 const catalog = () => [
-    { badge_id: 22, legacy_id: "1", owned: true, hidden: false, hideable: true, reorderable: false, profile_badge: { id: "1" } },
+    { badge_id: 22, legacy_id: "1", owned: true, hidden: false, hideable: true, reorderable: true, profile_badge: { id: "1" } },
     {
         badge_id: 1,
         legacy_id: "nitro_account_tenure_3_month",
         owned: true,
         hidden: false,
         hideable: false,
-        reorderable: false,
+        reorderable: true,
         profile_badge: { id: "nitro_account_tenure_3_month" },
     },
     { badge_id: "custom:99", legacy_id: "99", owned: true, hidden: false, hideable: true, reorderable: true, profile_badge: { id: "99" } },
@@ -38,16 +38,17 @@ const catalog = () => [
 ];
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-test("native preview permits hiding Staff, protects treatment-2 Nitro and Pride, and pins visible badges", () => {
+test("native preview reorders Staff and Nitro while preserving their separate hiding rules", () => {
     const badges = catalog();
     const pending = { pendingBadgeDisplayOrder: ["pride:rainbow", "custom:99", 1, 22], pendingBadgeHiddenBadges: [22, 1, "pride:rainbow"] };
     const edited = model.applyCatalog(badges, pending);
-    assert.deepEqual(plain(edited.map((b) => b.badge_id)), [22, 1, "pride:rainbow", "custom:99"]);
-    assert.equal(edited[0].hidden, true);
-    assert.equal(edited[1].hidden, false);
+    assert.deepEqual(plain(edited.map((b) => b.badge_id)), ["pride:rainbow", "custom:99", 1, 22]);
+    assert.equal(edited[0].hidden, false);
     assert.equal(edited[2].hidden, false);
+    assert.equal(edited[3].hidden, true);
     const groups = model.splitBadges(edited);
-    assert.deepEqual(plain(groups.fixedBadges.map((b) => b.badge_id)), [1]);
+    assert.deepEqual(plain(groups.fixedBadges.map((b) => b.badge_id)), []);
+    assert.deepEqual(plain(groups.reorderableBadges.map((b) => b.badge_id)), ["pride:rainbow", "custom:99", 1]);
     assert.deepEqual(plain(groups.hiddenBadges.map((b) => b.badge_id)), [22]);
     assert.equal(badges[0].hidden, false);
     assert.deepEqual(
@@ -60,7 +61,7 @@ test("native preview permits hiding Staff, protects treatment-2 Nitro and Pride,
                 )
                 .map((b) => b.id),
         ),
-        ["nitro_account_tenure_3_month", "8000000000000000001", "99"],
+        ["8000000000000000001", "99", "nitro_account_tenure_3_month"],
     );
 });
 
@@ -71,6 +72,12 @@ test("treatment-1 hidden Nitro can be restored with its real tenure icon and ID"
     const visible = badges.filter((b) => !b.hidden).map((b) => b.profile_badge);
     const restored = model.previewBadges(visible, badges, { pendingBadgeHiddenBadges: [] });
     assert.deepEqual(plain(restored.map((b) => b.id)), ["1", "nitro_account_tenure_3_month", "99", "8000000000000000001"]);
+});
+
+test("opening the editor preserves the saved server order without pending changes", () => {
+    const saved = [catalog()[1], catalog()[2], catalog()[0], catalog()[3]];
+    assert.deepEqual(plain(model.applyCatalog(saved, {}).map((badge) => badge.badge_id)), [1, "custom:99", 22, "pride:rainbow"]);
+    assert.deepEqual(plain(model.splitBadges(model.applyCatalog(saved, {})).reorderableBadges.map((badge) => badge.badge_id)), [1, "custom:99", 22, "pride:rainbow"]);
 });
 
 test("management mappings distinguish database Staff from native Nitro and clear private session mappings", () => {

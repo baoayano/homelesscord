@@ -65,7 +65,7 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         const badge = byId.get(id);
         return badge ? [badge] : [];
     });
-    const result = ordered.map((badge) => entry(badge, badge.id === STAFF_BADGE_ID ? 22 : `custom:${badge.id}`, true, badge.id !== STAFF_BADGE_ID));
+    const result = ordered.map((badge) => entry(badge, badge.id === STAFF_BADGE_ID ? 22 : `custom:${badge.id}`, true, true));
     for (const badge of result) {
         if (badge.badge_id !== 22) continue;
         badge.info_label = "Instance staff";
@@ -82,7 +82,7 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
     );
     const nitro = nitroBadge(user, client.instanceName, now);
     if (nitro) {
-        const badge = entry(nitro.badge, 1, tenureHideable, false);
+        const badge = entry(nitro.badge, 1, tenureHideable, true);
         const months = Number(/^nitro_account_tenure_(\d+)_month$/.exec(nitro.badge.id)![1]);
         badge.name = "NITRO";
         badge.info_label = nitro.since ? `Nitro since ${nitro.since.toISOString().slice(0, 10)}` : "Nitro badge";
@@ -122,7 +122,7 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         result.push(badge);
     }
     const rank = new Map(badgeSettings(user).display_order.map((id, index) => [id, index]));
-    const priority = (badge: BadgeDirectoryEntry) => (badge.badge_id === 22 ? -2 : badge.badge_id === 1 ? -1 : (rank.get(String(badge.badge_id)) ?? Infinity));
+    const priority = (badge: BadgeDirectoryEntry) => rank.get(String(badge.badge_id)) ?? (badge.badge_id === 22 ? -2 : badge.badge_id === 1 ? -1 : Infinity);
     return result.sort((left, right) => priority(left) - priority(right));
 }
 

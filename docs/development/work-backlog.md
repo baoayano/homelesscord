@@ -21,10 +21,10 @@ Start with `client/plugins; assets/public/admin`.
 
 ## Badge management (P1)
 
-The native directory and customization popover use the backend catalog and persistent settings APIs. Staff can be hidden. Nitro can be hidden under treatment 1 and stays visible under treatment 2. Visible Staff and Nitro keep their priority; Pride remains permanent. See [badge-management.md](../features/badge-management.md).
+The native directory and customization popover use the backend catalog and persistent settings APIs. Staff can be hidden. Nitro can be hidden under treatment 1 and stays visible under treatment 2. Staff and Nitro start first but can be reordered with other badges; Pride remains permanent. See [badge-management.md](../features/badge-management.md).
 
 - [x] Add the Equicord adapter for legacy, custom and Pride IDs.
-- [x] Allow native Staff visibility editing while protecting Pride and visible Staff/Nitro priority.
+- [x] Allow native Staff visibility editing, reorder Staff and Nitro, and protect Pride visibility.
 - [x] Remove purchase, Boost, Quests and Orbs actions from the native directory.
 - [x] Verify native saving, reset, keyboard operation and overflow before enabling the experiment.
 - [x] Make mouse, touch, pen and keyboard reordering use the same pointer targets in Firefox and Chromium, with a grab cursor, drag preview and insertion line.
@@ -32,7 +32,7 @@ The native directory and customization popover use the backend catalog and persi
 
 ## Pride flags and profile badges (P1)
 
-Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. Nitro registration date defaults to account creation and is editable through the admin panel's Nitro registration date field. All nine levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering, date editing and reset are verified. Native Nitro tooltip cards show the tier title, local large artwork and formatted registration day; default, Silver and Opal cards, keyboard focus and subscription-free clicks are verified. PostgreSQL and SQLite migrations preserve custom dates. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Staff appears first and Nitro follows it, with remaining badges preserving their relative order. Required Pride behavior stays unchanged.
+Free evolving Nitro badges are implemented for ordinary accounts, with the default and eight local milestone images through 72 months. Nitro registration date defaults to account creation and is editable through the admin panel's Nitro registration date field. All nine levels, UTC month boundaries, leap years, custom and Pride badge preservation, DM and expanded profile rendering, date editing and reset are verified. Native Nitro tooltip cards show the tier title, local large artwork and formatted registration day; default, Silver and Opal cards, keyboard focus and subscription-free clicks are verified. PostgreSQL and SQLite migrations preserve custom dates. See [nitro-badge-assets.md](../features/nitro-badge-assets.md). Staff appears first and Nitro follows it by default; saved badge order can move both. Required Pride behavior stays unchanged.
 
 Start with `src/api/util/utility/prideBadges.ts; client/plugins/fosscordPride`.
 

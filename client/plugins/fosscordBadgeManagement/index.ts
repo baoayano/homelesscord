@@ -69,12 +69,8 @@ export default definePlugin({
                     replace: "$1$self.DraggableBadge",
                 },
                 {
-                    match: /(let\{badge:(\i),index:\i,onClose:\i,onAction:\i,controlRef:\i\}=\i,[\s\S]{0,1200}?return\(0,\i.jsxs\)\("div",\{)(?=className:)/,
-                    replace: '$1"data-fosscord-badge-fixed":!$2.reorderable,title:!$2.reorderable?"Fixed position. Staff appears first; Nitro follows.":undefined,',
-                },
-                {
-                    match: /(variant:"text-xs\/normal",color:"text-subtle",children:)\i\.intl\.string\(\i\)(?=\}\)\]\}\),)/,
-                    replace: '$1"Drag other badges to reorder. Staff and Nitro keep their positions."',
+                    match: /(let\{fixedBadges:\i,reorderableBadges:(\i),hiddenBadges:\i\}=\(0,\i\.\i\)\(\)[\s\S]{0,4000}?variant:"text-xs\/normal",color:"text-subtle",children:)\i\.intl\.string\(\i\)(?=\}\)\]\}\),)/,
+                    replace: "$1$self.reorderHint($2.length)",
                 },
                 {
                     match: /\(0,\i\.\i\)\((\i),(\i),\{pendingBadgeDisplayOrder:(\i),pendingBadgeHiddenBadges:(\i)\}\)/,
