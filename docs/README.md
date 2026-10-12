@@ -1,5 +1,9 @@
 # Documentation
 
+## Releases
+
+- [0.1.0-homelesscord.1](releases/0.1.0-homelesscord.1.md): first downstream alpha prerelease, free evolving Nitro badges, native tooltip cards and Staff priority.
+
 ## Self-hosting
 
 - [native.md](self-hosting/native.md): Linux hosting as a dedicated `meowcord` user, systemd restrictions, PostgreSQL, HTTPS, voice, backups and updates without Docker.
