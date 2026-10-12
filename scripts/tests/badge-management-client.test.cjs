@@ -21,6 +21,7 @@ const load = (file, imports = {}) => {
     return module.exports;
 };
 const model = load("client/plugins/fosscordBadgeManagement/model.ts");
+const drag = load("client/plugins/fosscordBadgeManagement/dragModel.ts");
 const catalog = () => [
     { badge_id: 22, legacy_id: "1", owned: true, hidden: false, hideable: true, reorderable: false, profile_badge: { id: "1" } },
     {
@@ -82,6 +83,25 @@ test("management mappings distinguish database Staff from native Nitro and clear
     assert.equal(registry.legacyId("pride:rainbow"), "8000000000000000001");
     registry.clear();
     assert.equal(registry.legacyId("pride:rainbow"), undefined);
+});
+
+test("pointer and keyboard reorder targets work across rows, edges and reversed moves", () => {
+    const rects = [
+        { id: "a", index: 0, left: 0, right: 40, top: 0, bottom: 40 },
+        { id: "b", index: 1, left: 50, right: 90, top: 0, bottom: 40 },
+        { id: "c", index: 2, left: 0, right: 40, top: 50, bottom: 90 },
+        { id: "d", index: 3, left: 50, right: 90, top: 50, bottom: 90 },
+    ];
+    assert.equal(drag.pointerTarget(rects, 0, 85, 70).index, 3);
+    assert.equal(drag.pointerTarget(rects, 3, 5, 20).index, 0);
+    assert.equal(drag.pointerTarget(rects, 1, 5, 20).index, 0);
+    assert.equal(drag.pointerTarget(rects, 1, 85, 70).index, 3);
+    assert.equal(drag.keyboardIndex(rects, 0, "ArrowDown"), 2);
+    assert.equal(drag.keyboardIndex(rects, 2, "ArrowUp"), 0);
+    assert.equal(drag.keyboardIndex(rects, 1, "End"), 3);
+    assert.equal(drag.keyboardIndex(rects, 1, "Home"), 0);
+    assert.equal(drag.sameDragOrder(rects, ["a", "b", "c", "d"]), true);
+    assert.equal(drag.sameDragOrder(rects, ["a", "c", "b", "d"]), false);
 });
 
 test("every management patch matches the reviewed native module and preserves its syntax", () => {

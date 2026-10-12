@@ -11,6 +11,18 @@ import { STAFF_BADGE_ID } from "./staffBadge";
 const MANAGEMENT_HASH = 3093904580;
 const NITRO_MONTHS = [0, 1, 3, 6, 12, 24, 36, 60, 72];
 const NITRO_TITLES = ["NITRO", "NITRO BRONZE", "NITRO SILVER", "NITRO GOLD", "NITRO PLATINUM", "NITRO DIAMOND", "NITRO EMERALD", "NITRO RUBY", "NITRO OPAL"];
+const NITRO_RARITY = [1, 1, 2, 2, 2, 3, 3, 5, 5];
+const BADGE_RARITY = new Map([
+    ["3f9748e53446a137a052f3454e2de41e", 2],
+    ["bf01d1073931f921909045f3a39fd264", 2],
+    ["8a88d63823d8a71cd5e390baa45efa02", 2],
+    ["011940fd013da3f7fb926e4a1cd2e618", 2],
+    ["3aa41de486fa12454c3761e8e223442e", 2],
+    ["2717692c7dca7289b35297368a940dd0", 2],
+    ["fee1624003e2fee35cb398e125dc479b", 5],
+    ["848f79194d4be5ff5f81505cbd0ce1e6", 5],
+    ["6df5892e0f35b051f8b61eace34f4967", 5],
+]);
 
 export const badgeManagementVariant = (userId: string) =>
     getApexExperiments(userId).assignments[1]?.[userId]?.assignments.find((assignment) => assignment[0] === MANAGEMENT_HASH)?.[1] ?? 0;
@@ -29,7 +41,9 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         badge_id: id,
         legacy_id: badge.id,
         name: badge.description,
-        description: badge.description,
+        description: "Assigned by this instance. You can choose where it appears on your profile.",
+        info_label: "Profile badge",
+        is_legacy: false,
         owned: true,
         hidden: hideable && hidden.has(String(id)),
         hideable,
@@ -38,10 +52,10 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         simple_icon_url: image(badge.icon),
         simple_icon_raster_url: image(badge.icon),
         obtained_at: null,
-        rarity: 1,
-        current_tier: "default",
+        rarity: BADGE_RARITY.get(badge.icon) ?? 1,
+        current_tier: null,
         next_tier: null,
-        tiers: [{ key: "default", name: "", owned: true, rarity: 1, milestone_text: "", simple_icon_url: image(badge.icon), requirements: [] }],
+        tiers: [],
         tier_obtained_at: {},
         progress: [],
         profile_badge: badge,
@@ -52,22 +66,38 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         return badge ? [badge] : [];
     });
     const result = ordered.map((badge) => entry(badge, badge.id === STAFF_BADGE_ID ? 22 : `custom:${badge.id}`, true, badge.id !== STAFF_BADGE_ID));
-    result.push(...prideBadges(user.pride_badges).map((badge) => entry(badge, `pride:${PRIDE_BADGES.find((flag) => flag.id === badge.id)!.slug}`, false, true)));
+    for (const badge of result) {
+        if (badge.badge_id !== 22) continue;
+        badge.info_label = "Instance staff";
+        badge.description = `Part of the ${client.instanceName} team.`;
+        badge.rarity = 5;
+    }
+    result.push(
+        ...prideBadges(user.pride_badges).map((badge) => {
+            const item = entry(badge, `pride:${PRIDE_BADGES.find((flag) => flag.id === badge.id)!.slug}`, false, true);
+            item.info_label = "Pride flag";
+            item.description = "Selected from your Pride flags. This badge remains visible on your profile.";
+            return item;
+        }),
+    );
     const nitro = nitroBadge(user, client.instanceName, now);
     if (nitro) {
         const badge = entry(nitro.badge, 1, tenureHideable, false);
         const months = Number(/^nitro_account_tenure_(\d+)_month$/.exec(nitro.badge.id)![1]);
         badge.name = "NITRO";
+        badge.info_label = nitro.since ? `Nitro since ${nitro.since.toISOString().slice(0, 10)}` : "Nitro badge";
+        badge.description = `Every account on ${client.instanceName} receives this free badge. It evolves automatically from the Nitro registration date.`;
         badge.is_earnable = true;
         badge.obtained_at = nitro.since?.toISOString() ?? null;
         badge.current_tier = String(months);
+        badge.rarity = NITRO_RARITY[NITRO_MONTHS.indexOf(months)];
         badge.next_tier = NITRO_MONTHS[NITRO_MONTHS.indexOf(months) + 1]?.toString() ?? null;
         badge.tiers = NITRO_MONTHS.map((months, index) => ({
             key: String(months),
-            name: index === 0 ? "" : NITRO_TITLES[index].slice(6),
+            name: index === 0 ? "Starter" : NITRO_TITLES[index].slice(6),
             owned: months <= Number(badge.current_tier),
-            rarity: 1,
-            milestone_text: `${months} ${months === 1 ? "month" : "months"}`,
+            rarity: NITRO_RARITY[index],
+            milestone_text: months < 12 ? `${months} ${months === 1 ? "month" : "months"}` : `${months / 12} ${months === 12 ? "year" : "years"}`,
             simple_icon_url: image(months ? `premium_tenure_${months}_month_v2` : "2ba85e8026a8614b640c2837bcdfe21b"),
             requirements: [{ type: "months", threshold: months }],
         }));

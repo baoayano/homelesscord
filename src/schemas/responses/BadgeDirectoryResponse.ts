@@ -6,6 +6,9 @@ export interface BadgeDirectoryEntry {
     legacy_id: string;
     name: string;
     description: string;
+    info_label?: string;
+    leveling_instructions?: string;
+    is_legacy: boolean;
     owned: boolean;
     hidden: boolean;
     hideable: boolean;
@@ -15,7 +18,7 @@ export interface BadgeDirectoryEntry {
     simple_icon_raster_url: string;
     obtained_at: string | null;
     rarity: number;
-    current_tier: string;
+    current_tier: string | null;
     next_tier: string | null;
     tiers: {
         key: string;

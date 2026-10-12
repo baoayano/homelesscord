@@ -36,6 +36,26 @@ test("catalog uses stable native Staff/Nitro IDs and collision-free custom and P
     assert.deepEqual(user.badge_ids, ["123", "1", "456"]);
 });
 
+test("directory metadata gives ordinary badges their real title and description without invented dates or tiers", () => {
+    const api = managementUtilities();
+    const { user, assigned } = fixture();
+    const catalog = api.buildBadgeCatalog(user, assigned);
+    const staff = catalog[0];
+    const custom = catalog[2];
+    const pride = catalog.find((badge) => badge.badge_id === "pride:rainbow");
+    assert.equal(staff.info_label, "Instance staff");
+    assert.equal(staff.rarity, 5);
+    assert.match(staff.description, /Test Instance/);
+    assert.equal(custom.name, "First custom");
+    assert.notEqual(custom.description, custom.name);
+    assert.equal(custom.current_tier, null);
+    assert.deepEqual(plain(custom.tiers), []);
+    assert.equal(custom.obtained_at, null);
+    assert.equal(custom.is_legacy, false);
+    assert.equal(pride.info_label, "Pride flag");
+    assert.equal(pride.hideable, false);
+});
+
 test("Staff may be hidden in all treatments while Nitro may only be hidden in treatment 1", () => {
     for (const variant of [0, 1, 2, 3]) {
         const api = managementUtilities({ variant });
@@ -162,6 +182,10 @@ test("Nitro directory progress and earned tiers follow the configured UTC regist
     const at = (date) => api.buildBadgeCatalog(user, assigned, new Date(date)).find((badge) => badge.badge_id === 1);
     const bronze = at("2025-02-28T12:34:56Z");
     assert.equal(bronze.current_tier, "1");
+    assert.equal(bronze.info_label, "Nitro since 2025-01-31");
+    assert.equal(bronze.tiers[0].name, "Starter");
+    assert.equal(bronze.tiers[2].rarity, 2);
+    assert.equal(bronze.tiers[4].milestone_text, "1 year");
     assert.equal(bronze.tier_obtained_at["1"], "2025-02-28T12:34:56.000Z");
     assert.deepEqual(plain(bronze.progress), [{ type: "months", current: 1, floor: 1, threshold: 3, progress_helper_text: "2 months until the next level" }]);
     assert.deepEqual(plain(bronze.tiers.filter((tier) => tier.owned).map((tier) => tier.key)), ["0", "1"]);

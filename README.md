@@ -21,7 +21,7 @@ docker compose up -d --build
 
 after registering your operator account, grant it access locally using its numeric account ID: `docker compose exec server bun scripts/ops/operator.mjs grant <account-id>`. the first signup is an ordinary account. see the alpha guide for local provisioning and revocation.
 
-profile badges can be arranged in User Settings, Profiles, Your badges. the native editor saves order and visibility, with Staff optional, Nitro hiding controlled by its treatment, and selected Pride flags always visible. see [badge management](docs/features/badge-management.md).
+profile badges can be arranged in User Settings, Profiles, Your badges. the native editor saves order and visibility, supports pointer and keyboard dragging in Firefox and Chromium, keeps Staff first and Nitro second when visible, and leaves selected Pride flags visible. Nitro hiding follows its treatment. see [badge management](docs/features/badge-management.md).
 
 ## contributing
 

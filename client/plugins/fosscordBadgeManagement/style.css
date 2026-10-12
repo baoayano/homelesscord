@@ -3,3 +3,79 @@
     max-height: min(85vh, 600px);
     overflow-y: auto;
 }
+
+.fosscord-badge-drag-target {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.fosscord-badge-drag-target img {
+    pointer-events: none;
+}
+
+.fosscord-badge-drag-handle {
+    cursor: grab;
+}
+
+[data-fosscord-dragging],
+[data-fosscord-dragging] .fosscord-badge-drag-target,
+[data-fosscord-dragging] .fosscord-badge-drag-handle {
+    cursor: grabbing;
+}
+
+[data-fosscord-drag-source] > :first-child {
+    opacity: 0.35;
+}
+
+[data-fosscord-dragging] button[aria-haspopup="menu"] {
+    visibility: hidden;
+}
+
+.fosscord-badge-drag-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.fosscord-badge-drag-preview {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: var(--background-surface-high, var(--background-secondary));
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 25%);
+    opacity: 0.9;
+}
+
+.fosscord-badge-drag-preview img {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+}
+
+.fosscord-badge-drop-indicator {
+    position: absolute;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--text-strong);
+    box-shadow: 0 0 4px var(--background-primary);
+}
+
+.fosscord-badge-drag-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+[data-fosscord-badge-fixed="true"] {
+    cursor: default;
+}

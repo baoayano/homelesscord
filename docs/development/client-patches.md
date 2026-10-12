@@ -10,6 +10,8 @@ The test client is Discord's own web client, cached in `assets/cache` by `bun ru
 
 `FosscordNitroBadges` intercepts free `nitro_account_tenure_<months>_month` badges in the native profile list and uses Discord's mini premium tooltip component. Its anchors survive the upstream BadgeAPI component wrapper. It preserves the existing small icon, uses cached standard tier artwork for the large image and displays the server's Nitro registration day in UTC. It does not modify badge discovery experiment assignments. Other badges retain their existing behavior. See [nitro-badge-assets.md](../features/nitro-badge-assets.md).
 
+`FosscordBadgeManagement` replaces the native HTML drag wrapper for reorderable badge tiles with a pointer and keyboard wrapper in the Equicord plugin. It keeps the native badge tile, menu, Save and Reset controls. The catalog supplies detail titles, rarity and Nitro progression. Its module anchors are checked against the pinned client by `scripts/tests/badge-management-client.test.cjs` and `bun run check:client`.
+
 `bun run build:equicord` runs `scripts/vencord.js`, which:
 
 - checks out `commit` from `client/vencord.json` into `.vencord/src` (override with `VENCORD_DIR`),

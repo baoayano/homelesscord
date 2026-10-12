@@ -27,6 +27,8 @@ The native directory and customization popover use the backend catalog and persi
 - [x] Allow native Staff visibility editing while protecting Pride and visible Staff/Nitro priority.
 - [x] Remove purchase, Boost, Quests and Orbs actions from the native directory.
 - [x] Verify native saving, reset, keyboard operation and overflow before enabling the experiment.
+- [x] Make mouse, touch, pen and keyboard reordering use the same pointer targets in Firefox and Chromium, with a grab cursor, drag preview and insertion line.
+- [x] Give owned badge details a title, description and known rarity without inventing acquisition dates or retired status.
 
 ## Pride flags and profile badges (P1)
 

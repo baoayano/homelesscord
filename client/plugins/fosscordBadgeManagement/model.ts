@@ -11,7 +11,8 @@ export type CatalogBadge = {
     reorderable: boolean;
     simple_icon_url: string;
     complex_icon_static_url?: string;
-    current_tier: string;
+    current_tier: string | null;
+    is_legacy: boolean;
     tiers: { key: string; name: string; simple_icon_url: string; complex_icon_static_url?: string }[];
     profile_badge: ProfileBadge;
 };

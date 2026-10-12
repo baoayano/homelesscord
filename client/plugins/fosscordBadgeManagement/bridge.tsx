@@ -13,6 +13,9 @@ const Artwork = mapMangledModuleLazy(".PREMIUM_TENURE_72_MONTH]:{standard:", {
 });
 
 export { applyCatalog, previewBadges, splitBadges };
+export { DraggableBadge } from "./drag";
+export const isLegacy = (badge: CatalogBadge) => badge.is_legacy === true;
+export const useMaxedDescription = (badge: CatalogBadge) => badge.badge_id !== 1;
 export const managementId = (id: string) => registry.managementId(id);
 export const legacyId = (id: string | number) => registry.legacyId(id);
 export const hiddenReason = (badge: CatalogBadge) => (String(badge.badge_id).startsWith("pride:") ? "Pride badges remain visible." : "This Nitro badge remains visible.");

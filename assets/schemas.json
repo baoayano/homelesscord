@@ -23828,6 +23828,15 @@
             "description": {
                 "type": "string"
             },
+            "info_label": {
+                "type": "string"
+            },
+            "leveling_instructions": {
+                "type": "string"
+            },
+            "is_legacy": {
+                "type": "boolean"
+            },
             "owned": {
                 "type": "boolean"
             },
@@ -23859,7 +23868,10 @@
                 "type": "integer"
             },
             "current_tier": {
-                "type": "string"
+                "type": [
+                    "null",
+                    "string"
+                ]
             },
             "next_tier": {
                 "type": [
@@ -23968,6 +23980,7 @@
             "hidden",
             "hideable",
             "is_earnable",
+            "is_legacy",
             "legacy_id",
             "name",
             "next_tier",

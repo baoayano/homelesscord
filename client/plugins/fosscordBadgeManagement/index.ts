@@ -65,6 +65,18 @@ export default definePlugin({
             find: "UserProfileBadgeListRows",
             replacement: [
                 {
+                    match: /(return\(0,\i.jsxs\)\()\i\.\i(?=,\{index:\i,itemId:String\(\i.badge_id\),itemPreviewProps:\{badge:\i\},listType:\i,itemType:\i,)/,
+                    replace: "$1$self.DraggableBadge",
+                },
+                {
+                    match: /(let\{badge:(\i),index:\i,onClose:\i,onAction:\i,controlRef:\i\}=\i,[\s\S]{0,1200}?return\(0,\i.jsxs\)\("div",\{)(?=className:)/,
+                    replace: '$1"data-fosscord-badge-fixed":!$2.reorderable,title:!$2.reorderable?"Fixed position. Staff appears first; Nitro follows.":undefined,',
+                },
+                {
+                    match: /(variant:"text-xs\/normal",color:"text-subtle",children:)\i\.intl\.string\(\i\)(?=\}\)\]\}\),)/,
+                    replace: '$1"Drag other badges to reorder. Staff and Nitro keep their positions."',
+                },
+                {
                     match: /\(0,\i\.\i\)\((\i),(\i),\{pendingBadgeDisplayOrder:(\i),pendingBadgeHiddenBadges:(\i)\}\)/,
                     replace: "$self.previewBadges($1,$2,{pendingBadgeDisplayOrder:$3,pendingBadgeHiddenBadges:$4})",
                 },
@@ -81,6 +93,17 @@ export default definePlugin({
         {
             find: '"badge-details"',
             replacement: [
+                {
+                    match: /\i\.intl\.string\(\i\.t\["75s2Rq"\]\):\i\.intl\.string\(\i\.t\["62xU4E"\]\)/,
+                    replace: '"Badges on this profile.":"Badges you own. Select one to view its details."',
+                },
+                {
+                    match: /(!\i&&)(\i)\?\.owned===!0&&\(\2\.tiers\?\.length\?\?0\)>0&&null==\2\.next_tier/,
+                    replace: "$1$self.useMaxedDescription($2)&&$2?.owned===!0&&($2.tiers?.length??0)>0&&null==$2.next_tier",
+                },
+                { match: /\(0,\i\.\i\)\((\i).badge_id\)&&!\1.is_earnable&&\1.badge_id!==\i\.\i.STAFF/g, replace: "$self.isLegacy($1)" },
+                { match: /(?=!\i\|\|(\i).is_earnable\|\|\i\|\|\1.badge_id===\i\.\i.STAFF\?null:)/, replace: "!$self.isLegacy($1)||" },
+                { match: /(return \i&&)!(\i).is_earnable&&/, replace: "$1$self.isLegacy($2)&&" },
                 { match: /(\i=)\i\[(\i)\.badge_id\]/g, replace: "$1undefined" },
                 { match: /\i\.intl\.string\(\i\.t#{intl::Ipxkog::raw}\)/g, replace: '"NITRO"' },
             ],
