@@ -86,6 +86,7 @@ const harness = ({ members = [], existing = null, viewable = ["200"] } = {}) => 
         "../handlers/ApplicationWidgets": { snapshotWidget: async () => null },
         "./e2ee": { verifyEd25519: () => false },
         "./reportMenus": { getReportingMenu: () => ({ nodes: {} }) },
+        "./instanceAutomod": { automodVerifiedReport: async () => undefined },
     });
     const report = (type, body, reporter = "13") => createReport(type, { name: type, breadcrumbs: [], ...body }, reporter, { root_node_id: 0, nodes: {} });
     return { report, saved };

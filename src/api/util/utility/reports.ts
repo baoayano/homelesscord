@@ -20,6 +20,7 @@ import { ChannelType, CreateReportSchema, ReportMenuType } from "@spacebar/schem
 import { DiscordApiErrors, getPermission, getUrlSignature, NewUrlSignatureData } from "@spacebar/util";
 import { snapshotWidget } from "../handlers/ApplicationWidgets";
 import { verifyEd25519 } from "./e2ee";
+import { automodVerifiedReport } from "./instanceAutomod";
 
 import { getReportingMenu } from "./reportMenus";
 
@@ -290,9 +291,23 @@ export async function createReport(type: string, body: CreateReportSchema, repor
         duplicate.elements = report.elements;
         duplicate.reason = report.reason;
         duplicate.snapshot = report.snapshot;
-        return duplicate.save();
+        return actOnVerifiedReport(await duplicate.save());
     }
-    return report.save();
+    return actOnVerifiedReport(await report.save());
+}
+
+async function actOnVerifiedReport(report: Report) {
+    const snapshot = report.snapshot;
+    if (snapshot?.encrypted?.verified && snapshot.content && report.reported_user_id && report.message_id)
+        await automodVerifiedReport({
+            report_id: report.id,
+            user_id: report.reported_user_id,
+            content: snapshot.content,
+            guild_id: report.guild_id,
+            channel_id: report.channel_id,
+            message_id: report.message_id,
+        }).catch((error) => console.error("[Automod] couldn't act on a verified report", error));
+    return report;
 }
 
 export async function describeReports(reports: Report[], viewer: { ip?: string; userAgent?: string } = {}) {

@@ -201,6 +201,7 @@ function reportUtility({ view = true, author = "target" } = {}) {
         "node:crypto": require("node:crypto"),
         "./e2ee": { verifyEd25519: () => false },
         "./reportMenus": menus,
+        "./instanceAutomod": { automodVerifiedReport: async () => undefined },
     });
     return { ...utility, saved };
 }

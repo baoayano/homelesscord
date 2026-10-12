@@ -99,6 +99,7 @@ const harness = (envelope, device = { id: deviceId, user_id: authorId, signing_k
         },
         "../handlers/ApplicationWidgets": { snapshotWidget: async () => null },
         "./reportMenus": { getReportingMenu: () => ({ nodes: {} }) },
+        "./instanceAutomod": { automodVerifiedReport: async () => undefined },
         "./e2ee": load("src/api/util/utility/e2ee.ts", {
             "@spacebar/database": {},
             "@spacebar/util": { ApiError: class {}, Config: { get: () => ({}) } },
