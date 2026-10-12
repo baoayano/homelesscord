@@ -6,6 +6,8 @@ export const SAVED_MESSAGE_LIMIT = 500;
 export const MESSAGE_REMINDER_LIMIT = 100;
 
 const defaults: Record<string, { variant: number; config?: object }> = {
+    "2026-08-badge-management": { variant: 2 },
+    "2026-05-badge-discovery-milestone-2": { variant: 1 },
     "2026-08-scheduled-messages": { variant: 1, config: { limit: SCHEDULED_MESSAGE_LIMIT } },
     "2026-03-message-bookmarks": { variant: 1 },
     "2026-07-message-bookmarks-v2": {

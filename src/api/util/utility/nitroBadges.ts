@@ -4,7 +4,7 @@ import { UserFlags } from "@spacebar/schemas";
 
 const NITRO_MILESTONES = [0, 1, 3, 6, 12, 24, 36, 60, 72] as const;
 
-const anniversary = (since: Date, months: number) => {
+export const nitroAnniversary = (since: Date, months: number) => {
     const result = new Date(since.getTime());
     result.setUTCDate(1);
     result.setUTCMonth(result.getUTCMonth() + months);
@@ -13,12 +13,17 @@ const anniversary = (since: Date, months: number) => {
     return result.getTime();
 };
 
+export const completedNitroMonths = (since: Date, now: Date) => {
+    const months = (now.getUTCFullYear() - since.getUTCFullYear()) * 12 + now.getUTCMonth() - since.getUTCMonth();
+    return Math.max(0, months - (nitroAnniversary(since, months) > now.getTime() ? 1 : 0));
+};
+
 export const nitroBadge = (user: Pick<User, "registration_date" | "created_at" | "bot" | "system" | "flags">, instanceName: string, now = new Date()) => {
     if (user.bot || user.system || (BigInt(user.flags ?? 0) & UserFlags.FLAGS.SYSTEM) !== 0n) return null;
 
     const since = new Date(user.registration_date ?? user.created_at);
     const validSince = Number.isFinite(since.getTime()) && since.getTime() <= now.getTime();
-    const months = validSince ? (NITRO_MILESTONES.findLast((milestone) => anniversary(since, milestone) <= now.getTime()) ?? 0) : 0;
+    const months = validSince ? (NITRO_MILESTONES.findLast((milestone) => nitroAnniversary(since, milestone) <= now.getTime()) ?? 0) : 0;
     const id = `nitro_account_tenure_${months}_month`;
     const tenure = months ? `${months} ${months === 1 ? "month" : "months"}` : "New member";
     return {

@@ -23855,6 +23855,9 @@
                     "string"
                 ]
             },
+            "rarity": {
+                "type": "integer"
+            },
             "current_tier": {
                 "type": "string"
             },
@@ -23874,6 +23877,12 @@
                         },
                         "name": {
                             "type": "string"
+                        },
+                        "owned": {
+                            "type": "boolean"
+                        },
+                        "rarity": {
+                            "type": "integer"
                         },
                         "milestone_text": {
                             "type": "string"
@@ -23906,6 +23915,8 @@
                         "key",
                         "milestone_text",
                         "name",
+                        "owned",
+                        "rarity",
                         "requirements",
                         "simple_icon_url"
                     ]
@@ -23925,13 +23936,21 @@
                         "current": {
                             "type": "integer"
                         },
+                        "floor": {
+                            "type": "integer"
+                        },
                         "threshold": {
                             "type": "integer"
+                        },
+                        "progress_helper_text": {
+                            "type": "string"
                         }
                     },
                     "additionalProperties": false,
                     "required": [
                         "current",
+                        "floor",
+                        "progress_helper_text",
                         "threshold",
                         "type"
                     ]
@@ -23956,6 +23975,7 @@
             "owned",
             "profile_badge",
             "progress",
+            "rarity",
             "reorderable",
             "simple_icon_raster_url",
             "simple_icon_url",

@@ -14,17 +14,20 @@ export interface BadgeDirectoryEntry {
     simple_icon_url: string;
     simple_icon_raster_url: string;
     obtained_at: string | null;
+    rarity: number;
     current_tier: string;
     next_tier: string | null;
     tiers: {
         key: string;
         name: string;
+        owned: boolean;
+        rarity: number;
         milestone_text: string;
         simple_icon_url: string;
         requirements: { type: string; threshold: number }[];
     }[];
     tier_obtained_at: Record<string, string>;
-    progress: { type: string; current: number; threshold: number }[];
+    progress: { type: string; current: number; floor: number; threshold: number; progress_helper_text: string }[];
     profile_badge: ProfileBadge;
 }
 

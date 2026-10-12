@@ -3,7 +3,7 @@ import { In, type EntityManager } from "typeorm";
 import { Badge, User } from "@spacebar/database";
 import type { BadgeDirectoryEntry, BadgeSettings, BadgeSettingsSchema, ProfileBadge } from "@spacebar/schemas";
 import { Config, FieldErrors, getApexExperiments } from "@spacebar/util";
-import { nitroBadge } from "./nitroBadges";
+import { completedNitroMonths, nitroAnniversary, nitroBadge } from "./nitroBadges";
 import { prideBadges, PRIDE_BADGES } from "./prideBadges";
 import { isSubscriptionBadge } from "./profile";
 import { STAFF_BADGE_ID } from "./staffBadge";
@@ -38,9 +38,10 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         simple_icon_url: image(badge.icon),
         simple_icon_raster_url: image(badge.icon),
         obtained_at: null,
+        rarity: 1,
         current_tier: "default",
         next_tier: null,
-        tiers: [{ key: "default", name: badge.description, milestone_text: "", simple_icon_url: image(badge.icon), requirements: [] }],
+        tiers: [{ key: "default", name: "", owned: true, rarity: 1, milestone_text: "", simple_icon_url: image(badge.icon), requirements: [] }],
         tier_obtained_at: {},
         progress: [],
         profile_badge: badge,
@@ -56,17 +57,37 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
     if (nitro) {
         const badge = entry(nitro.badge, 1, tenureHideable, false);
         const months = Number(/^nitro_account_tenure_(\d+)_month$/.exec(nitro.badge.id)![1]);
-        badge.name = NITRO_TITLES[NITRO_MONTHS.indexOf(months)];
+        badge.name = "NITRO";
         badge.obtained_at = nitro.since?.toISOString() ?? null;
         badge.current_tier = String(months);
         badge.next_tier = NITRO_MONTHS[NITRO_MONTHS.indexOf(months) + 1]?.toString() ?? null;
         badge.tiers = NITRO_MONTHS.map((months, index) => ({
             key: String(months),
-            name: NITRO_TITLES[index],
+            name: index === 0 ? "" : NITRO_TITLES[index].slice(6),
+            owned: months <= Number(badge.current_tier),
+            rarity: 1,
             milestone_text: `${months} ${months === 1 ? "month" : "months"}`,
             simple_icon_url: image(months ? `premium_tenure_${months}_month_v2` : "2ba85e8026a8614b640c2837bcdfe21b"),
             requirements: [{ type: "months", threshold: months }],
         }));
+        if (nitro.since) {
+            badge.tier_obtained_at = Object.fromEntries(
+                NITRO_MONTHS.filter((tier) => tier <= months).map((tier) => [String(tier), new Date(nitroAnniversary(nitro.since!, tier)).toISOString()]),
+            );
+            if (badge.next_tier) {
+                const current = completedNitroMonths(nitro.since, now);
+                const remaining = Number(badge.next_tier) - current;
+                badge.progress = [
+                    {
+                        type: "months",
+                        current,
+                        floor: months,
+                        threshold: Number(badge.next_tier),
+                        progress_helper_text: `${remaining} ${remaining === 1 ? "month" : "months"} until the next level`,
+                    },
+                ];
+            }
+        }
         result.push(badge);
     }
     const rank = new Map(badgeSettings(user).display_order.map((id, index) => [id, index]));

@@ -1,0 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+[data-fosscord-badge-customization] {
+    max-height: min(85vh, 600px);
+    overflow-y: auto;
+}
