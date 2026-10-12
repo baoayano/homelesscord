@@ -763,8 +763,8 @@ try {
                 })
                 .last();
             await own.locator(`img[src*="/e2ee/attachments/${dm.id}/"]`).first().hover({ force: true });
-            await own.locator('[aria-label="Remove Message Attachment"]').first().click({ force: true });
-            await a.page.getByRole("button", { name: "Remove Attachment" }).click();
+            await own.locator('[aria-label="Remove Message Attachment"]').first().click();
+            await a.page.getByRole("dialog").getByRole("button", { name: "Remove Attachment" }).click();
             await waitFor("the image to disappear for friend", async () => !(await editedMessage.locator(`img[src*="/e2ee/attachments/"]`).count()), 10000);
             await editedMessage.locator("a", { hasText: fileName }).first().waitFor({ timeout: 10000 });
             const removal = a.sent.at(-1);
