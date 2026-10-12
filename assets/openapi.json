@@ -1105,6 +1105,29 @@
                     "flags"
                 ]
             },
+            "BadgeSettingsSchema": {
+                "type": "object",
+                "properties": {
+                    "display_order": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "integer"
+                            ]
+                        }
+                    },
+                    "hidden_badges": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "integer"
+                            ]
+                        }
+                    }
+                }
+            },
             "GuildAvailableSchema": {
                 "type": "object",
                 "properties": {
@@ -2521,6 +2544,35 @@
                     },
                     "password_reset": {
                         "type": "boolean"
+                    },
+                    "endpoints": {
+                        "type": "object",
+                        "properties": {
+                            "register": {
+                                "type": [
+                                    "null",
+                                    "string"
+                                ]
+                            },
+                            "login": {
+                                "type": [
+                                    "null",
+                                    "string"
+                                ]
+                            },
+                            "password_reset": {
+                                "type": [
+                                    "null",
+                                    "string"
+                                ]
+                            }
+                        },
+                        "additionalProperties": false,
+                        "required": [
+                            "login",
+                            "password_reset",
+                            "register"
+                        ]
                     }
                 },
                 "required": [
@@ -4821,6 +4873,23 @@
                     "name"
                 ]
             },
+            "BadgeDirectoryResponse": {
+                "type": "object",
+                "properties": {
+                    "badges": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/BadgeDirectoryEntry"
+                        }
+                    },
+                    "settings": {
+                        "$ref": "#/components/schemas/BadgeSettings"
+                    }
+                },
+                "required": [
+                    "badges"
+                ]
+            },
             "MFAResponse": {
                 "type": "object",
                 "properties": {
@@ -5462,6 +5531,9 @@
                     "flags": {
                         "type": "integer"
                     },
+                    "thread_name": {
+                        "type": "string"
+                    },
                     "mobile_network_type": {
                         "type": "string"
                     },
@@ -5558,9 +5630,6 @@
                         "items": {
                             "type": "string"
                         }
-                    },
-                    "thread_name": {
-                        "type": "string"
                     },
                     "avatar_url": {
                         "type": "string"
@@ -5802,6 +5871,11 @@
                     "invite": {
                         "type": "string"
                     },
+                    "instance_invite": {
+                        "description": "Instance invite code, needed when the instance is invite-only",
+                        "maxLength": 64,
+                        "type": "string"
+                    },
                     "date_of_birth": {
                         "type": "string"
                     },
@@ -5825,6 +5899,11 @@
                         "items": {
                             "type": "string"
                         }
+                    },
+                    "join_reason": {
+                        "description": "Why the person wants to join, when the instance asks for it",
+                        "maxLength": 4000,
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -6797,6 +6876,9 @@
                     "username": {
                         "type": "string"
                     },
+                    "thread_name": {
+                        "type": "string"
+                    },
                     "nonce": {
                         "maxLength": 25,
                         "type": "string"
@@ -6858,9 +6940,6 @@
                         "items": {
                             "type": "string"
                         }
-                    },
-                    "thread_name": {
-                        "type": "string"
                     },
                     "avatar_url": {
                         "type": "string"
@@ -7563,6 +7642,23 @@
                     "provider",
                     "token"
                 ]
+            },
+            "InstanceInviteCreateSchema": {
+                "type": "object",
+                "properties": {
+                    "max_uses": {
+                        "description": "How many people can join with the invite",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1000
+                    },
+                    "max_age_seconds": {
+                        "description": "Seconds until the invite expires",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 31536000
+                    }
+                }
             },
             "PublicMessageListResponse": {
                 "type": "array",
@@ -9607,6 +9703,33 @@
                             "guestsRequireInvite": {
                                 "type": "boolean"
                             },
+                            "instanceInvites": {
+                                "type": "object",
+                                "properties": {
+                                    "perUser": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 10000
+                                    },
+                                    "minAccountAgeDays": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 3650
+                                    },
+                                    "maxUsesPerInvite": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 1000
+                                    },
+                                    "maxAgeDays": {
+                                        "description": "0 lets invites last forever",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 365
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
                             "requireCaptcha": {
                                 "type": "boolean"
                             },
@@ -9738,6 +9861,25 @@
                                     "null",
                                     "string"
                                 ]
+                            },
+                            "blockAutomatedBrowsers": {
+                                "description": "Refuse Cap core solves from headless and automated browsers",
+                                "type": "boolean"
+                            },
+                            "challenges": {
+                                "type": "object",
+                                "properties": {
+                                    "register": {
+                                        "$ref": "#/components/schemas/AdminCapChallengeSchema"
+                                    },
+                                    "login": {
+                                        "$ref": "#/components/schemas/AdminCapChallengeSchema"
+                                    },
+                                    "passwordReset": {
+                                        "$ref": "#/components/schemas/AdminCapChallengeSchema"
+                                    }
+                                },
+                                "additionalProperties": false
                             }
                         },
                         "additionalProperties": false
@@ -9902,6 +10044,19 @@
                     },
                     "disabled": {
                         "type": "boolean"
+                    },
+                    "suspended_until": {
+                        "description": "Pass null to lift a timed suspension",
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "join_status": {
+                        "description": "Approve or reject an account waiting for approval",
+                        "enum": [
+                            "approved",
+                            "rejected"
+                        ],
+                        "type": "string"
                     },
                     "verified": {
                         "type": "boolean"
@@ -10802,6 +10957,59 @@
                     }
                 }
             },
+            "AdminUsersBulkSchema": {
+                "type": "object",
+                "properties": {
+                    "user_ids": {
+                        "description": "The accounts to act on, at most 500 per request",
+                        "minItems": 1,
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "action": {
+                        "enum": [
+                            "delete",
+                            "disable"
+                        ],
+                        "type": "string"
+                    },
+                    "delete_messages": {
+                        "description": "Also delete every message the accounts sent. Needs the MANAGE_MESSAGES right. Deleting an account always removes its messages.",
+                        "type": "boolean"
+                    },
+                    "ban": {
+                        "description": "When deleting, keep an instance ban on each account id, the same as the single-account delete",
+                        "type": "boolean"
+                    },
+                    "reason": {
+                        "maxLength": 512,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "action",
+                    "user_ids"
+                ]
+            },
+            "AdminIpBanCreateSchema": {
+                "type": "object",
+                "properties": {
+                    "ip": {
+                        "maxLength": 64,
+                        "type": "string"
+                    },
+                    "reason": {
+                        "maxLength": 512,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "ip"
+                ]
+            },
             "AdminSessionsRevokeSchema": {
                 "type": "object",
                 "properties": {
@@ -11043,6 +11251,88 @@
                 "required": [
                     "content"
                 ]
+            },
+            "AdminCapChallengeSchema": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "description": "Proofs a browser has to find",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 500
+                    },
+                    "size": {
+                        "description": "Length of each salt in characters",
+                        "type": "integer",
+                        "minimum": 16,
+                        "maximum": 64
+                    },
+                    "difficulty": {
+                        "description": "Leading hex characters each hash has to match. Every step multiplies the work by 16",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8
+                    }
+                }
+            },
+            "AdminInstanceInviteCreateSchema": {
+                "type": "object",
+                "properties": {
+                    "max_uses": {
+                        "description": "0 means unlimited",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                    },
+                    "max_age_seconds": {
+                        "description": "Seconds until the invite expires, 0 means never",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 31536000
+                    },
+                    "note": {
+                        "maxLength": 200,
+                        "type": "string",
+                        "nullable": true
+                    }
+                }
+            },
+            "AdminInstanceInviteRevokeSchema": {
+                "type": "object",
+                "properties": {
+                    "disable": {
+                        "description": "none revokes only the code, joined also disables the accounts that used it, branch disables everyone below it in the invite tree",
+                        "enum": [
+                            "branch",
+                            "joined",
+                            "none"
+                        ],
+                        "type": "string"
+                    }
+                }
+            },
+            "AdminUserInvitesUpdateSchema": {
+                "type": "object",
+                "properties": {
+                    "bonus_invites": {
+                        "description": "Invites on top of the instance default, negative takes some away",
+                        "type": "integer",
+                        "minimum": -1000,
+                        "maximum": 10000
+                    }
+                },
+                "required": [
+                    "bonus_invites"
+                ]
+            },
+            "AdminUserInviteBranchSchema": {
+                "type": "object",
+                "properties": {
+                    "include_user": {
+                        "description": "Also disable the account itself, not only the people it brought in",
+                        "type": "boolean"
+                    }
+                }
             },
             "AdminChannelCreateSchema": {
                 "type": "object",
@@ -11465,6 +11755,204 @@
                     "api",
                     "cdn",
                     "gateway"
+                ]
+            },
+            "AdminAutomodWordListSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "maxLength": 64,
+                        "type": "string"
+                    },
+                    "name": {
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "type": "string"
+                    },
+                    "terms": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "action": {
+                        "enum": [
+                            "delete",
+                            "name",
+                            "suspend"
+                        ],
+                        "type": "string"
+                    },
+                    "suspendDays": {
+                        "minimum": 1,
+                        "maximum": 365,
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "action",
+                    "name",
+                    "terms"
+                ]
+            },
+            "AdminAutomodSettingsSchema": {
+                "type": "object",
+                "properties": {
+                    "slurs": {
+                        "type": "object",
+                        "properties": {
+                            "enabled": {
+                                "type": "boolean"
+                            },
+                            "includeSoftA": {
+                                "type": "boolean"
+                            },
+                            "suspendDays": {
+                                "minimum": 1,
+                                "maximum": 365,
+                                "type": "integer"
+                            },
+                            "deleteAllMessages": {
+                                "type": "boolean"
+                            },
+                            "violationDays": {
+                                "minimum": 1,
+                                "maximum": 3650,
+                                "type": "integer"
+                            },
+                            "actOnVerifiedReports": {
+                                "type": "boolean"
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "wordLists": {
+                        "maxItems": 50,
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/AdminAutomodWordListSchema"
+                        }
+                    },
+                    "allowList": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "identityBlockedTerms": {
+                        "maxItems": 256,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "registration": {
+                        "type": "object",
+                        "properties": {
+                            "joinReasonRequired": {
+                                "type": "boolean"
+                            },
+                            "joinReasonMinLength": {
+                                "minimum": 1,
+                                "maximum": 1000,
+                                "type": "integer"
+                            },
+                            "requireApproval": {
+                                "type": "boolean"
+                            },
+                            "maxAccountsPerIpPerDay": {
+                                "minimum": 0,
+                                "maximum": 100000,
+                                "type": "integer"
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "login": {
+                        "type": "object",
+                        "properties": {
+                            "maxFailedAttemptsPerAccount": {
+                                "minimum": 0,
+                                "maximum": 1000,
+                                "type": "integer"
+                            },
+                            "lockoutMinutes": {
+                                "minimum": 1,
+                                "maximum": 10080,
+                                "type": "integer"
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "AdminAutomodTestSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "maxLength": 4000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "text"
+                ]
+            },
+            "AdminAutomodReverseSchema": {
+                "type": "object",
+                "properties": {
+                    "reversal": {
+                        "enum": [
+                            "not_a_match",
+                            "undo"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "reversal"
+                ]
+            },
+            "AdminAutomodUsersSchema": {
+                "type": "object",
+                "properties": {
+                    "user_ids": {
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "user_ids"
+                ]
+            },
+            "AdminJoinRequestActionSchema": {
+                "type": "object",
+                "properties": {
+                    "user_ids": {
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "action": {
+                        "enum": [
+                            "approve",
+                            "reject"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "action",
+                    "user_ids"
                 ]
             },
             "IdentifySchema": {
@@ -12514,15 +13002,15 @@
                     "flags": {
                         "type": "integer"
                     },
+                    "pending": {
+                        "type": "boolean"
+                    },
                     "nick": {
                         "type": "string"
                     },
                     "joined_at": {
                         "type": "string",
                         "format": "date-time"
-                    },
-                    "pending": {
-                        "type": "boolean"
                     },
                     "deaf": {
                         "type": "boolean"
@@ -14021,6 +14509,36 @@
                         "type": "integer",
                         "nullable": true
                     },
+                    "suspended_until": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
+                    },
+                    "join_reason": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "join_status": {
+                        "anyOf": [
+                            {
+                                "enum": [
+                                    "approved",
+                                    "pending",
+                                    "rejected"
+                                ],
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
+                    },
                     "email": {
                         "type": "string"
                     },
@@ -14084,6 +14602,10 @@
                         },
                         "default": []
                     },
+                    "registration_ip": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "settings": {
                         "$ref": "#/components/schemas/UserSettings"
                     },
@@ -14098,6 +14620,16 @@
                         "items": {
                             "type": "string"
                         }
+                    },
+                    "badge_settings": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/BadgeSettings"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
                     },
                     "avatar_decoration_data": {
                         "$ref": "#/components/schemas/AvatarDecorationData"
@@ -14778,6 +15310,27 @@
                     "public_key",
                     "user",
                     "user_id"
+                ]
+            },
+            "BadgeSettings": {
+                "type": "object",
+                "properties": {
+                    "display_order": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "hidden_badges": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "display_order",
+                    "hidden_badges"
                 ]
             },
             "ProfileCollectible": {
@@ -21735,6 +22288,9 @@
                     "attachment": {
                         "$ref": "#/components/schemas/RateLimitOptions"
                     },
+                    "instanceInvite": {
+                        "$ref": "#/components/schemas/RateLimitOptions"
+                    },
                     "auth": {
                         "$ref": "#/components/schemas/AuthRateLimit"
                     }
@@ -21748,6 +22304,7 @@
                     "expression",
                     "guild",
                     "guildCreate",
+                    "instanceInvite",
                     "interaction",
                     "invite",
                     "oauth2",
@@ -21923,6 +22480,185 @@
                     "description",
                     "icon",
                     "id"
+                ]
+            },
+            "BadgeDirectoryEntry": {
+                "type": "object",
+                "properties": {
+                    "badge_id": {
+                        "type": [
+                            "string",
+                            "integer"
+                        ]
+                    },
+                    "legacy_id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "info_label": {
+                        "type": "string"
+                    },
+                    "leveling_instructions": {
+                        "type": "string"
+                    },
+                    "is_legacy": {
+                        "type": "boolean"
+                    },
+                    "owned": {
+                        "type": "boolean"
+                    },
+                    "hidden": {
+                        "type": "boolean"
+                    },
+                    "hideable": {
+                        "type": "boolean"
+                    },
+                    "reorderable": {
+                        "type": "boolean"
+                    },
+                    "is_earnable": {
+                        "type": "boolean"
+                    },
+                    "simple_icon_url": {
+                        "type": "string"
+                    },
+                    "simple_icon_raster_url": {
+                        "type": "string"
+                    },
+                    "obtained_at": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "rarity": {
+                        "type": "integer"
+                    },
+                    "current_tier": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "next_tier": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "tiers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "owned": {
+                                    "type": "boolean"
+                                },
+                                "rarity": {
+                                    "type": "integer"
+                                },
+                                "milestone_text": {
+                                    "type": "string"
+                                },
+                                "simple_icon_url": {
+                                    "type": "string"
+                                },
+                                "requirements": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {
+                                                "type": "string"
+                                            },
+                                            "threshold": {
+                                                "type": "integer"
+                                            }
+                                        },
+                                        "additionalProperties": false,
+                                        "required": [
+                                            "threshold",
+                                            "type"
+                                        ]
+                                    }
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                                "key",
+                                "milestone_text",
+                                "name",
+                                "owned",
+                                "rarity",
+                                "requirements",
+                                "simple_icon_url"
+                            ]
+                        }
+                    },
+                    "tier_obtained_at": {
+                        "$ref": "#/components/schemas/Record%3Cstring%2Cstring%3E"
+                    },
+                    "progress": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string"
+                                },
+                                "current": {
+                                    "type": "integer"
+                                },
+                                "floor": {
+                                    "type": "integer"
+                                },
+                                "threshold": {
+                                    "type": "integer"
+                                },
+                                "progress_helper_text": {
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                                "current",
+                                "floor",
+                                "progress_helper_text",
+                                "threshold",
+                                "type"
+                            ]
+                        }
+                    },
+                    "profile_badge": {
+                        "$ref": "#/components/schemas/ProfileBadge"
+                    }
+                },
+                "required": [
+                    "badge_id",
+                    "current_tier",
+                    "description",
+                    "hidden",
+                    "hideable",
+                    "is_earnable",
+                    "is_legacy",
+                    "legacy_id",
+                    "name",
+                    "next_tier",
+                    "obtained_at",
+                    "owned",
+                    "profile_badge",
+                    "progress",
+                    "rarity",
+                    "reorderable",
+                    "simple_icon_raster_url",
+                    "simple_icon_url",
+                    "tier_obtained_at",
+                    "tiers"
                 ]
             },
             "MessageCreateAttachment": {
@@ -23481,6 +24217,378 @@
                 ]
             }
         },
+        "/api/admin/automod/actions/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "The automod log, newest first. Filter by `rule`, `action`, `user_id` or `reversed`.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "rule",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "action",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "user_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "reversed",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "yes | no"
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/actions/{action_id}/reverse/": {
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Undo an automod action: lift the suspension it caused and overturn its violation. Deleted messages stay deleted. `not_a_match` also adds the matched word to the allow list.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodReverseSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "action_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "action_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Instance automod settings, action counts for the last day and week, and how many accounts wait for approval",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/join-requests/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Accounts that gave a reason for joining or wait for approval, newest first, with low-effort signals",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "pending | approved | rejected | all | low_effort"
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Approve or reject accounts. Rejected accounts can't sign in.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminJoinRequestActionSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/names/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Scan up to 10000 accounts after `after` (an id) for usernames or display names the automod rules or the blocked name words would refuse",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "after",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/names/disable": {
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Disable accounts and sign them out everywhere",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodUsersSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/settings/": {
+            "patch": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Save one or more automod sections. Lists replace the stored list.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodSettingsSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/test/": {
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Check text against the saved automod rules without acting on it",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodTestSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/admin/badges/": {
             "get": {
                 "x-right-required": "MANAGE_USERS",
@@ -24515,6 +25623,355 @@
                 ]
             }
         },
+        "/api/admin/instance-invites/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Instance invites, newest first, with who made them and how many people joined with each",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "state",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Filter by whether the invite still works"
+                    },
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "An exact code, or text from the note"
+                    },
+                    {
+                        "name": "creator_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Only invites made by this user"
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Create a staff invite. It doesn't count against anyone's invites",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminInstanceInviteCreateSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/instance-invites/{code}/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "An instance invite with everyone who joined with it and how many accounts sit below it in the invite tree",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "code"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/instance-invites/{code}/revoke/": {
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Revoke an instance invite, and optionally disable the accounts that joined with it or everyone below it in the invite tree",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminInstanceInviteRevokeSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "code"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/ips/bans/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Instance bans on IP addresses, newest first",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Ban an IP address. Registration and sign-in from it are refused, and existing tokens used from it stop working. An account that uses a token from a banned address gets an instance ban of its own.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminIpBanCreateSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/ips/bans/{ban_id}/": {
+            "delete": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Lift an IP ban, together with the bans it propagated to accounts that used the address",
+                "responses": {
+                    "204": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "ban_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "ban_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/ips/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "IP addresses that accounts registered on or signed in from, with how many accounts used each, most accounts first. Session addresses disappear when the session ends; registration addresses stay.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "The start of an address"
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/admin/reports/": {
             "get": {
                 "x-right-required": "MANAGE_USERS",
@@ -24732,7 +26189,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "Update instance information, client branding, registration, captcha, rate limits and e2ee limits",
+                "description": "Update instance information, client branding, registration, instance invites, captcha, rate limits and e2ee limits",
                 "requestBody": {
                     "required": true,
                     "content": {
@@ -25868,7 +27325,7 @@
                 ]
             }
         },
-        "/api/admin/users/": {
+        "/api/admin/users/bulk/": {
             "get": {
                 "x-right-required": "MANAGE_USERS",
                 "security": [
@@ -25876,7 +27333,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "Search users on this instance. `q` matches an exact id, or part of a username, display name or email.",
+                "description": "The ids of every account matching a user search, newest first, at most 5000. Takes the same q, ip and filter as the user search.",
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -25892,13 +27349,106 @@
                         }
                     },
                     {
+                        "name": "ip",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "filter",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Delete or disable up to 500 accounts, optionally deleting every message they sent. Your own account and, unless you are an operator, operators are skipped.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminUsersBulkSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/users/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Search users on this instance. `q` matches an exact id, an IP address, or part of a username, display name or email. `ip` lists the accounts that registered on or signed in from an address.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "ip",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "An IPv4 or IPv6 address"
+                    },
+                    {
                         "name": "filter",
                         "in": "query",
                         "required": false,
                         "schema": {
                             "type": "string"
                         },
-                        "description": "all | disabled | bots | verified | unverified"
+                        "description": "all | disabled | suspended | pending | with_reason | bots | verified | unverified"
                     },
                     {
                         "name": "limit",
@@ -26012,6 +27562,132 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/AdminUserUpdateSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/users/{user_id}/invites/disable-branch/": {
+            "post": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Disable every account a user brought in, directly or further down the invite tree, and revoke their invites. Staff accounts are skipped",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminUserInviteBranchSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/users/{user_id}/invites/": {
+            "get": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Who invited a user, the invites they made, everyone below them in the invite tree and how many invites they have left",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "patch": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Give a user extra instance invites on top of the instance default",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminUserInvitesUpdateSchema"
                             }
                         }
                     }
@@ -29314,7 +30990,7 @@
                 ]
             }
         },
-        "/api/auth/cap/challenge": {
+        "/api/auth/cap/challenge,/{context}/challenge": {
             "post": {
                 "security": [
                     {}
@@ -29324,12 +31000,23 @@
                         "description": "No description available"
                     }
                 },
+                "parameters": [
+                    {
+                        "name": "context",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "context"
+                    }
+                ],
                 "tags": [
                     "api"
                 ]
             }
         },
-        "/api/auth/cap/redeem": {
+        "/api/auth/cap/redeem,/{context}/redeem": {
             "post": {
                 "security": [
                     {}
@@ -29339,6 +31026,17 @@
                         "description": "No description available"
                     }
                 },
+                "parameters": [
+                    {
+                        "name": "context",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "context"
+                    }
+                ],
                 "tags": [
                     "api"
                 ]
@@ -29495,6 +31193,39 @@
                             "type": "number"
                         },
                         "description": "The length of each registration token. Defaults to 255."
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/auth/instance-invite/": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "Whether signing up needs an instance invite, and whether the given code can be used to sign up",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Instance invite code"
                     }
                 ],
                 "tags": [
@@ -45533,6 +47264,40 @@
                 ]
             }
         },
+        "/api/users/@me/badges/settings/": {
+            "patch": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BadgeSettingsSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BadgeSettings"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": [
+                    "api"
+                ]
+            }
+        },
         "/api/users/@me/billing/country-code/": {
             "get": {
                 "security": [
@@ -47594,6 +49359,127 @@
                 ]
             }
         },
+        "/api/users/@me/instance-invites/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Your instance invites, how many you have left and who joined with them",
+                "responses": {
+                    "200": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Create an instance invite out of your remaining invites",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InstanceInviteCreateSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "No description available"
+                    },
+                    "400": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/APIErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/APIErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/users/@me/instance-invites/{code}/": {
+            "delete": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Revoke one of your instance invites. Unused uses go back to your remaining invites",
+                "responses": {
+                    "204": {
+                        "description": "No description available"
+                    },
+                    "404": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/APIErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "code"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/users/@me/join-request-guilds/": {
             "get": {
                 "security": [
@@ -49516,6 +51402,85 @@
                             "type": "string"
                         },
                         "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/users/{user_id}/badges/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BadgeDirectoryResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/users/{user_id}/badges/{badge_id}/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BadgeDirectoryEntry"
+                                }
+                            }
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    },
+                    {
+                        "name": "badge_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "badge_id"
                     }
                 ],
                 "tags": [

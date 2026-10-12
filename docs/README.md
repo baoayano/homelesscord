@@ -2,6 +2,7 @@
 
 ## Releases
 
+- [0.1.0-homelesscord.2](releases/0.1.0-homelesscord.2.md): native badge management and the October 2026 upstream update.
 - [0.1.0-homelesscord.1](releases/0.1.0-homelesscord.1.md): first downstream alpha prerelease, free evolving Nitro badges, native tooltip cards and Staff priority.
 
 ## Self-hosting
