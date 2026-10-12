@@ -35,6 +35,7 @@
 
 ## Development
 
+- [downstream.md](development/downstream.md): Homelesscord fork setup, branding and reviewed upstream merges in isolated worktrees.
 - [client-patches.md](development/client-patches.md): how the Discord client is patched, built and checked.
 - [native-ui.md](development/native-ui.md): shared native UI adapters for plugins.
 - [dialog-dismissal.md](development/dialog-dismissal.md): how owned dialogs dismiss and how the developer portal handles late responses.

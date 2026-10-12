@@ -43,6 +43,9 @@
     "generate:openapi": "bun scripts/openapi.js",
     "apply:migrations": "bun dist/apply-migrations.js",
     "dev:setup": "scripts/dev/worktree-setup.sh",
+    "fork:connect": "bun scripts/dev/fork.mjs connect",
+    "upstream:check": "bun scripts/dev/fork.mjs check",
+    "upstream:sync": "bun scripts/dev/fork.mjs sync",
     "release:pack": "bun scripts/release.js"
   },
   "dependencies": {

@@ -215,6 +215,8 @@ Start with `scripts/dev; scripts/tests`.
 
 Start with `CONTRIBUTING.MD; docs/self-hosting/native.md; docs/self-hosting/deploy.md; scripts/client.js`.
 
+Downstream remote setup, update checks and merge preparation are available through `fork:connect`, `upstream:check` and `upstream:sync`, described in [downstream.md](downstream.md). Automated PR updates remain deferred until the downstream's first verified release.
+
 - [ ] **OPS-001** Refresh upstream history and report whether new commits need integration.
 - [ ] **OPS-002** Keep normal pushes directly to main within the user-authorized workflow.
 - [ ] **OPS-003** Commit verified changes in small coherent batches.

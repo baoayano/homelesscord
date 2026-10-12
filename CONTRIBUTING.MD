@@ -137,6 +137,8 @@ This repository holds no Discord code. `bun run generate:client` downloads the w
 | Shared code       | `src/util`, `src/database`, `src/schemas`    | Config, entities, migrations and the request and response schemas the API validates against.                                                                                                                          |
 ## Branches
 
+Downstream fork setup and upstream review commands are described in [downstream.md](docs/development/downstream.md). Keep origin pointed at your own repository and integrate upstream through a separate review worktree.
+
 Branch off `main` and keep one topic per branch. To work on several things at once, give each one its own git worktree, port and database:
 
 ```sh

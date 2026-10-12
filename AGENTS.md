@@ -63,6 +63,8 @@ scripts/dev/worktree-setup.sh 3001 meowcord
 | `bun run lint`, `bun run format`                                       | Biome.                                                                                                                          |
 | `bun run test`                                                         | Unit tests in `scripts/tests`, `scripts/dev` and `dist`, using `node:test` under `bun test`. Build first.                       |
 
+Downstream forks use `bun run fork:connect <owner/repository>`, `bun run upstream:check` and `bun run upstream:sync <new-sibling-worktree>`. See [docs/development/downstream.md](docs/development/downstream.md). Sync prepares an uncommitted merge in its own worktree and leaves local runtime configuration and dirty files in the original checkout intact.
+
 The browser scripts use `playwright-core` from `~/.cache/fosscord-tools`. Install it with `mkdir -p ~/.cache/fosscord-tools && bun add --cwd ~/.cache/fosscord-tools playwright-core`.
 
 ## Before pushing
