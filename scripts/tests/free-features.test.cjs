@@ -82,6 +82,7 @@ test("profile response keeps free features and custom badges alongside one evolv
         },
         "@spacebar/api/util/utility/profile": utilities(),
         "@spacebar/api/util/utility/nitroBadges": nitroUtilities(),
+        "@spacebar/api/util/utility/staffBadge": { STAFF_BADGE_ID: "1" },
         "@spacebar/api/util/handlers/Application": {},
     });
     let result;
@@ -92,7 +93,7 @@ test("profile response keeps free features and custom badges alongside one evolv
     assert.equal(result.premium_guild_since, null);
     assert.deepEqual(
         Array.from(result.badges, (x) => x.id),
-        ["operator", "8000000000000000001", "nitro_account_tenure_72_month"],
+        ["nitro_account_tenure_72_month", "operator", "8000000000000000001"],
     );
     assert.deepEqual(Array.from(result.user_profile.theme_colors), [123, 456]);
 });
