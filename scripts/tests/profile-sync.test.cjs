@@ -217,6 +217,7 @@ const harness = () => {
             if (name === "@spacebar/api/util/utility/prideBadges") return badgeModule.exports;
             if (name === "@spacebar/api/util/utility/profile") return profileModule.exports;
             if (name === "@spacebar/api/util/utility/nitroBadges") return nitroModule.exports;
+            if (name === "@spacebar/api/util/utility/staffBadge") return { STAFF_BADGE_ID: "1" };
             if (name === "@spacebar/api/util/handlers/Application") return {};
             throw Error(name);
         },
@@ -405,10 +406,10 @@ test("ordinary profile appends selected pride flags without replacing assigned b
     h.user.badge_ids = ["assigned"];
     const response = await h.get({}, "123");
     assert.deepEqual(
-        Array.from(response.badges.slice(0, -1), (badge) => badge.description),
+        Array.from(response.badges.slice(1), (badge) => badge.description),
         ["Admin-assigned", "Transgender", "Rainbow"],
     );
-    assert.equal(response.badges.at(-1).id, "nitro_account_tenure_72_month");
+    assert.equal(response.badges[0].id, "nitro_account_tenure_72_month");
     assert.equal(response.user.pride_badges, undefined);
     assert.deepEqual(h.user.badge_ids, ["assigned"]);
 });
@@ -430,12 +431,31 @@ test("ordinary profile replaces assigned subscription badges with one earned Nit
     ];
     const response = await h.get();
     assert.deepEqual(
-        Array.from(response.badges.slice(0, -1), (badge) => badge.description),
+        Array.from(response.badges.slice(1), (badge) => badge.description),
         ["Admin-assigned", "Transgender"],
     );
     assert.equal(response.badges.filter((badge) => badge.id.startsWith("nitro_account_tenure_")).length, 1);
-    assert.equal(response.badges.at(-1).id, "nitro_account_tenure_72_month");
+    assert.equal(response.badges[0].id, "nitro_account_tenure_72_month");
     assert.deepEqual(h.user.badge_ids, ["assigned", "premium_badge", "subscriber_badge", "nitro_badge"]);
+});
+
+test("Nitro follows Staff by its fixed ID even with edited artwork and an unordered database result", async () => {
+    const h = harness();
+    h.user.pride_badges = ["rainbow"];
+    h.user.badge_ids = ["assigned", "1", "second"];
+    h.user.fixture_badges = [
+        { id: "assigned", description: "Staff", icon: "assigned" },
+        { id: "second", description: "Second custom badge", icon: "second" },
+        { id: "1", description: "Edited operator badge", icon: "custom-staff-art" },
+    ];
+    for (const query of [{}, { guild_id: "123456" }]) {
+        const response = await h.get(query);
+        assert.deepEqual(
+            Array.from(response.badges, (badge) => badge.id),
+            ["1", "nitro_account_tenure_72_month", "assigned", "second", "8000000000000000001"],
+        );
+    }
+    assert.deepEqual(h.user.badge_ids, ["assigned", "1", "second"]);
 });
 
 test("guild profile rejects outsiders before reading the target profile or guild member", async () => {

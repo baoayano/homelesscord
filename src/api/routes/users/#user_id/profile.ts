@@ -10,6 +10,7 @@ import { prideBadges } from "@spacebar/api/util/utility/prideBadges";
 
 import { isSubscriptionBadge } from "@spacebar/api/util/utility/profile";
 import { nitroBadge } from "@spacebar/api/util/utility/nitroBadges";
+import { STAFF_BADGE_ID } from "@spacebar/api/util/utility/staffBadge";
 
 import { profileApplication } from "@spacebar/api/util/handlers/Application";
 
@@ -102,6 +103,10 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
 
     badges.push(...prideBadges(user.pride_badges));
     const nitro = nitroBadge(user, Config.get().client.instanceName);
+    const visibleBadges = badges.filter((badge) => !isSubscriptionBadge(badge));
+    const orderedBadges = nitro
+        ? [...visibleBadges.filter((badge) => badge.id === STAFF_BADGE_ID), nitro.badge, ...visibleBadges.filter((badge) => badge.id !== STAFF_BADGE_ID)]
+        : visibleBadges;
 
     const connected_accounts: PartialConnectedAccountResponse[] = user.connected_accounts
         .filter((x) => x.visibility != 0)
@@ -121,7 +126,7 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
         premium_guild_since: null,
         profile_themes_experiment_bucket: 4,
         user_profile: profileMetadata(user),
-        badges: [...badges.filter((badge) => !isSubscriptionBadge(badge)), ...(nitro ? [nitro.badge] : [])],
+        badges: orderedBadges,
         guild_badges: [],
         widgets: user.profile_widgets ?? [],
         legacy_username: null,
