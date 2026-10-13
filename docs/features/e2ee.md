@@ -1,6 +1,6 @@
 # End-to-end encrypted messages
 
-DMs and group DMs encrypt new messages and attachments by default. Ordinary password signup and login create or unlock the encrypted key backup in the background; users can start chatting without an encryption setup step. Private-channel encryption is required, including for bot, application and webhook message sends; there is no private plaintext opt-out. The server defaults `limits.e2ee.trustServerByDefault` to `true`. Guild text channels remain outside this implementation, and earlier plaintext messages stay plaintext.
+DMs and group DMs encrypt new messages and attachments by default. Ordinary password signup and login create or unlock the encrypted key backup in the background; users can start chatting without an encryption setup step. Private-channel encryption is required, including for bot, application and webhook message sends; there is no private plaintext opt-out. DMs and group DMs with users of other instances are encrypted the same way, see [Conversations with users of other instances](#conversations-with-users-of-other-instances). The server defaults `limits.e2ee.trustServerByDefault` to `true`. Guild text channels remain outside this implementation, and earlier plaintext messages stay plaintext.
 
 ## Protocol
 
@@ -131,7 +131,7 @@ Encrypted messages carry a new `encrypted` field. `content` holds a fallback str
 }
 ```
 
-The AEAD additional data binds the channel id, the sender, the sender device and the nonce, so a ciphertext can't be moved to another channel or replayed. Encrypted messages never get link embeds. Reactions, pins, typing, read states and reply structure stay in plaintext.
+The AEAD additional data binds the channel id, the sender, the sender device and the nonce, so a ciphertext can't be moved to another channel or replayed. Version 1 binds local ids. Version 2, used when a member or the channel belongs to another instance, binds canonical `@id@instance` ids instead, see below. Encrypted messages never get link embeds. Reactions, pins, typing, read states and reply structure stay in plaintext.
 
 The encrypted payload is JSON with `content` and, when the message has them, `attachments` and `stickers`. Polls and clips aren't encrypted, so the attach menu disables "Create Poll" and clips in an encrypted DM and the server rejects them there.
 
@@ -178,6 +178,34 @@ The client plugin derives its settings layout nodes from Equicord's entry builde
 - Rate limits for key queries, device registration, prekey rotation, password checks and resets. Registration counts only new device ids, `limits.e2ee.deviceRegistrationsPerHour` (30 by default), and re-signing an existing device has its own limit, `deviceUpdatesPerHour` (60). Key queries follow `keyQueriesPerMinute` (60). Operators can change these and the pending device lifetime from the admin dashboard's Site settings, and the new values apply without a restart. The generic `/users/@me` write limit skips the e2ee routes, which all have their own.
 - `E2eeKeyBackup` and `E2eeBackupKey`, with `GET`, `PUT` and `PATCH /users/@me/e2ee/backup`, `POST /users/@me/e2ee/backup/keys`, `POST /users/@me/e2ee/backup/keys/query` and `PUT /users/@me/e2ee/backup/trust`, which replaces the sealed verification list when the request names its current version. All of them only touch the caller's own rows. Uploads are capped at 100 keys a request and only accepted for encrypted messages in the caller's channels. `PUT /users/@me/e2ee/identity` accepts a rotation when it's signed by the current identity key.
 
+## Conversations with users of other instances
+
+A DM or group DM that includes someone from another [federated](federation.md) instance is encrypted from its first message, like any other private chat. The instance where the conversation was created hosts it and stores the ciphertext. Every other member's instance, their home, keeps a mirror and relays their requests to the host.
+
+### Version 2 envelopes
+
+Local ids differ on each instance, so a signature over them would not verify on the other side. A version 2 envelope has `"v": 2` and signs canonical ids: the channel, the sender, `mid` on an edit, and `user_id` in `keys[]` and `backup[]` are all `@snowflake@instance`. Device ids are hashes of the device's signing key, the same on every instance, and are never translated. The client asks `GET /federation/objects` for the canonical ids, and the signed payload and the AES-GCM additional data use them in place of the local ids. Conversations with only local members keep version 1, byte for byte.
+
+The server takes version 2 in a federated conversation and version 1 everywhere else, and answers `E2EE_INVALID_ENVELOPE` (90003) to the other one. On a version 2 edit, `mid` must be the canonical id of the edited message. It translates `keys[].user_id` and `backup[].user_id` to local ids for the recipient and device checks, which work as in version 1: every active device of every member needs a key, or the server answers `E2EE_DEVICE_MISMATCH`. The relay copies `encrypted` between instances without touching it, so the bytes the sender signed are the bytes every member receives.
+
+Identity statements stay per user. A device statement and a rotation statement sign the user's snowflake on their home instance, so the client checks a remote contact's devices against the snowflake in that contact's canonical id, not against the local shadow id.
+
+### Key directory
+
+`POST /e2ee/keys/query` answers for remote members too. When it lists a shadow user, the instance asks the user's home with a signed `GET /federation/v2/users/<canonical id>/e2ee` and caches the answer for 10 minutes. The home answers only to an instance that shares a DM, a group DM or a friendship with the user, or one the host confirms as the host of a conversation the user is in. Before caching, the asking instance checks that each device id is the hash of its signing key and that each signed prekey verifies, and drops the device otherwise. A device whose identity signature doesn't verify is listed as pending, so no client encrypts to it. The home forwards `E2EE_DEVICES_UPDATE` and `E2EE_IDENTITY_UPDATE` for its users, and the other instance drops its cached copy and passes the event on to its own clients. Adding a remote member to an encrypted group DM fails with `E2EE_RECIPIENT_NO_DEVICES` (90007) when their instance doesn't return an active device.
+
+### Backups and history
+
+Each member's content key is wrapped to their own backup key, which is listed in the directory with their identity. A member reads history on a new browser through their own instance: the mirror relays `GET /channels/<id>/messages` to the host, and the key backup at `/users/@me/e2ee/backup/keys` accepts the local ids of mirrored messages, so a browser that logs in with the password decrypts the whole conversation without another device online.
+
+### Safety numbers and strict mode
+
+Safety numbers for a remote contact are computed over the contact's home snowflake and their identity key, and each side computes the same 60 digits as the other. In default mode a browser accepts identity changes from the directory, which for a remote contact means trusting both the user's own instance and the contact's home. Strict safety mode pins the identity key, blocks sending when it changes and shows the safety number for comparison, so neither instance can swap a key without the user seeing it.
+
+### What each instance sees
+
+The host stores the ciphertext, the attachments and the metadata of the conversation: who is in it, who sent what and when, sizes, reactions and read state. Each home sees the same metadata for its own members' view, because events and history pass through it, and it caches attachment ciphertext in its media proxy. No instance gets a content key, except when a member reports a message.
+
 ## Reporting encrypted messages
 
 The server can't read an encrypted message, so a report on one would only show the fallback text. When a user reports a message in an encrypted channel, the client hook on `POST /reporting/message` and `POST /reporting/first_dm` adds `e2ee_content_key`, the 32-byte content key of that one message, which the reporter's browser already holds from decrypting it. It also adds `e2ee_context_keys`, the keys of the encrypted messages it can read in the 50 messages around the reported one, so the report can show the conversation. No other key leaves the browser, and the server never stores a key.
@@ -186,11 +214,13 @@ It looks up the sender's device, checks that the device belongs to the message's
 
 The admin dashboard marks the report "Verified encrypted text" when all of this passes. A report without a key, with a key that doesn't open the message, or with a signature that doesn't verify is stored as "Encrypted, not verified" with the reason, and shows the fallback text. The server checks each context message the same way and saves the text only for the ones that pass. `scripts/tests/encrypted-report.test.cjs` covers these cases, and `e2ee-test.mjs` reports a message through the real client and checks the stored text.
 
+A report about a message in a conversation hosted on another instance goes to the host through the home relay, which translates the ids in `e2ee_context_keys`. The host verifies a version 2 envelope with the canonical ids of the channel, the author and the message, and looks up the author's devices in the key directory when the author is remote.
+
 Instance automod only reads plaintext. It skips encrypted messages and only acts on one when a report carries a copy whose signature verifies, as [automod.md](automod.md#encrypted-messages) describes.
 
 ## What it doesn't protect
 
-The server ships the client JavaScript, so a malicious operator can ship a client that leaks keys. That is the limit of any E2EE on the web. Publishing the patch bundle hash and a pinning extension or desktop wrapper reduce it. Metadata is visible to the server: who talks to whom, when, sizes, reactions and read state. For files that includes the number of attachments, each ciphertext size, which is the file size plus 16 bytes per 64 KiB, and the voice message flag. Sticker images still load from the instance's CDN, so the server sees which sticker a client renders. Default mode trusts the server key directory, including later identity changes and the server's claim that a requesting browser is signed in to the same account. A compromised server could substitute identities or authorize a device link; default mode does not independently prove those claims to the user. Strict safety mode adds contact pinning, safety-number comparison and explicit approval instead. Trusted-server mode escrows the backup secret encrypted at rest under a master key kept outside the database. The strict browser option skips recovery upload and retrieval; it does not delete an escrow previously published by another trusted browser. Disabling server trust prevents recovery endpoints from accepting or returning secrets. Discord's own analytics and Sentry code runs in the same page, so their payloads need auditing to keep plaintext out.
+The server ships the client JavaScript, so a malicious operator can ship a client that leaks keys. That is the limit of any E2EE on the web. Publishing the patch bundle hash and a pinning extension or desktop wrapper reduce it. Metadata is visible to the server: who talks to whom, when, sizes, reactions and read state. For files that includes the number of attachments, each ciphertext size, which is the file size plus 16 bytes per 64 KiB, and the voice message flag. Sticker images still load from the instance's CDN, so the server sees which sticker a client renders. In a conversation with users of other instances, the host and every member's home see this metadata. Default mode trusts the server key directory, including later identity changes and the server's claim that a requesting browser is signed in to the same account. A compromised server could substitute identities or authorize a device link; default mode does not independently prove those claims to the user. Strict safety mode adds contact pinning, safety-number comparison and explicit approval instead. Trusted-server mode escrows the backup secret encrypted at rest under a master key kept outside the database. The strict browser option skips recovery upload and retrieval; it does not delete an escrow previously published by another trusted browser. Disabling server trust prevents recovery endpoints from accepting or returning secrets. Discord's own analytics and Sentry code runs in the same page, so their payloads need auditing to keep plaintext out.
 
 Password mode trades some of that protection for convenience. Whoever holds a copy of the database has the salt and the sealed secret, so they can guess passwords offline, at the cost of one 64 MiB Argon2id run per guess. A weak or reused password makes the encryption about as strong as that password. Recovery-code mode avoids this, because 160 random bits can't be guessed, but losing the code and every signed-in device means losing the history. The backup secret also sits in each unlocked browser's IndexedDB, so malware with access to the profile can read it there.
 
@@ -211,4 +241,10 @@ Development setup seeds an empty private DM and posts sample messages only in th
 PORT=<port> E2EE_TEST_DATABASE_NAME=<db> bun scripts/dev/e2ee-test.mjs
 ```
 
-The harness registers disposable accounts and refuses an unexpected database before writing. It never clears global rate limits. It restores password-backed access before removing its browser profiles, and keeps the profiles when restoration fails. [setup.md](../self-hosting/setup.md) covers the development setup.
+The harness registers disposable accounts and refuses an unexpected database before writing.
+
+`scripts/dev/federation-e2ee-test.mjs` starts two instances on their own new databases and runs the same browser flows across them: a DM both ways with edits, an encrypted image, safety numbers in strict mode, a group DM with members on both instances, history after a password login on a fresh browser and a report the host verifies. It drops its databases and browser profiles at the end.
+
+```sh
+CHROME_PATH=<browser> bun scripts/dev/federation-e2ee-test.mjs
+``` It never clears global rate limits. It restores password-backed access before removing its browser profiles, and keeps the profiles when restoration fails. [setup.md](../self-hosting/setup.md) covers the development setup.

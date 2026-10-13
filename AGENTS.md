@@ -42,6 +42,8 @@ The server runs from `dist`, compiled by `tsc` (TypeScript 7 native). `bun run b
 
 Bun 1.4 runs everything: installs, the server, scripts and tests. Don't use npm, npx or node.
 
+The owner manages port 3001. Use port 3002 for isolated development checks. Never start, stop or restart the owner's server on port 3001 unless the owner explicitly requests it. Publishing commits and syncing upstream do not authorize deployment.
+
 ```sh
 bun install
 bun run generate:client

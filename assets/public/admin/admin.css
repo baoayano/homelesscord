@@ -1699,3 +1699,46 @@ section.card,
 form.card {
   scroll-margin-top: 16px;
 }
+
+.federation-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 16px;
+  margin: 12px 0 0;
+}
+
+.federation-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.federation-facts dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.federation-id {
+  overflow-wrap: anywhere;
+}
+
+.federation-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.federation-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.federation-prose {
+  max-width: 70ch;
+  text-wrap: pretty;
+}
+
+.federation-block-form {
+  align-items: flex-end;
+  flex-wrap: wrap;
+}

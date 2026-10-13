@@ -36,6 +36,12 @@ Please do not leave any Markdown files or screenshots in the main repo. Leave th
 
 Use biome and two space indentation.
 
+## Listing an instance
+
+Public instances are listed in `instances.json` at the repository root. To add yours, add an entry with `id` (the lowercase host, with the port when it isn't 443), `name`, `url` and `source_url` (or `null`), run `bun scripts/instances-md.mjs` to regenerate `instances.md`, and open a pull request with both files. Don't edit `instances.md` by hand, `scripts/tests/instances-list.test.cjs` fails when the two files differ. The federation registry imports `instances.json` every hour. An instance that announces itself to the registry gets reviewed without a pull request too, see [docs/self-hosting/registry.md](docs/self-hosting/registry.md).
+
+The registry is a Cloudflare Worker in `extra/registry` with its own `package.json`. Run `bun install` and `bun run test` in that folder after changing it.
+
 ## Development
 
 You need Bun 1.4, PostgreSQL or SQLite and, for voice and video, Go 1.24 or newer. PostgreSQL remains the backend used by `dev:setup`; SQLite uses Bun's built-in driver. See [databases.md](docs/self-hosting/databases.md) for selecting either backend. Bun installs the packages, runs the server and runs every script. The browser scripts below use `playwright-core` and Google Chrome or another Chromium build.

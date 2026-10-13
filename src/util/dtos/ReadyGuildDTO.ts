@@ -21,6 +21,7 @@ export type GuildOrUnavailable = { id: string; unavailable: boolean } | (Guild &
 const guildIsAvailable = (guild: GuildOrUnavailable): guild is Guild & { joined_at: Date; unavailable: false; threads: Channel[] } => guild.unavailable != true;
 
 export interface IReadyGuildDTO {
+    federated_instance?: string;
     application_command_counts?: { 1: number; 2: number; 3: number }; // ????????????
     channels: Channel[];
     data_mode: string; // what is this
@@ -110,6 +111,7 @@ function publicGuildProfile(profile: { tag?: string | null; badge?: unknown; bad
 }
 
 export class ReadyGuildDTO implements IReadyGuildDTO {
+    federated_instance?: string;
     application_command_counts?: { 1: number; 2: number; 3: number }; // ????????????
     channels: Channel[];
     data_mode: string; // what is this
@@ -192,6 +194,7 @@ export class ReadyGuildDTO implements IReadyGuildDTO {
         this.member_count = guild.member_count;
         this.members = guild.members?.map((x) => x.toPublicMember());
         this.premium_subscription_count = guild.premium_subscription_count;
+        if (guild.federated_instance) this.federated_instance = guild.federated_instance;
         this.properties = {
             name: guild.name,
             description: guild.description,

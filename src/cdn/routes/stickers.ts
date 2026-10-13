@@ -7,6 +7,7 @@ import { Sticker } from "@spacebar/database";
 import { StickerFormatType, StickerType } from "@spacebar/schemas";
 import { ensureStandardStickerPacks } from "@spacebar/api/util";
 import { storage, internalUpload, setCacheControl, setCacheControlNotFound, fetchUpstreamAsset } from "../util";
+import { extension, sendRemoteFallback } from "../util/federationMedia";
 
 const ANIMATED_MIME_TYPES = ["image/apng", "image/gif", "image/gifv"];
 const STATIC_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/avif", "image/svg+xml", "image/svg"];
@@ -49,6 +50,7 @@ router.get("/:sticker_id", setCacheControl, async (req: Request, res: Response) 
     const path = `${pathPrefix}/${sticker_id}`;
 
     const file = (await storage.get(path)) ?? (await fetchStandardSticker(sticker_id, path));
+    if (!file && (await sendRemoteFallback(req, res, sticker_id, (remote) => `/${pathPrefix}/${remote}${extension(String(req.params.sticker_id))}`))) return;
     if (!file) return setCacheControlNotFound(req, res);
     const type = await fileTypeFromBuffer(file);
 

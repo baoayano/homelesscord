@@ -35,6 +35,7 @@ export * from "./NameValidation";
 export * from "./Version";
 export * from "./Presence";
 export * from "./MediaProxy";
+export * from "./federation";
 export * from "./VideoFrame";
 export * from "./ApexExperiments";
 export * from "./VoiceHealth";

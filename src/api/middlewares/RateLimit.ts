@@ -97,6 +97,7 @@ export default function rateLimit(opts: {
         if (opts.onlyUsers && !req.user_id) return next();
         if (opts.onlyAnonymous && req.user_id) return next();
         if (req.rights?.has("BYPASS_RATE_LIMITS")) return next();
+        if (opts.onlyIp && req.federationRelay) return next();
 
         const bucket_id = opts.bucket || routeBucket(req);
         const executor_id = !opts.onlyIp && req.user_id ? req.user_id : req.ip || "127.0.0.1";

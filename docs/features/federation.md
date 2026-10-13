@@ -1,0 +1,146 @@
+# Federation
+
+Approved Meowcord instances list each other's public servers in Discovery, and people on one instance can join servers on another, add friends there and send them DMs. DMs and group DMs across instances are end-to-end encrypted, and people can talk and share video in voice channels of servers on another instance. These are phases 1 to 5 of the [federation plan](../development/federation.md). The wire format is in [federation-protocol.md](../development/federation-protocol.md).
+
+## For people using the instance
+
+Discover has an Other instances tab next to the Discord categories. It lists two things:
+
+- Servers on other approved instances, with their name, icon, description, member count and the instance they're on. Join adds the server to your server list with your account on this instance and opens it. Open on its instance opens its invite page on that instance in a new tab instead. When a join fails, the card shows the error text the server answered with.
+- The approved instances themselves, with their address and whether signups are open, need an invite, need approval or are closed.
+
+Your own instance answers this list. Your browser never contacts the other instances to draw the page, and their icons come through the instance's media proxy.
+
+The rest of the client handles other instances like this:
+
+- Join a Server takes `https://<instance>/invite/<code>` or `<instance>/invite/<code>`. When the host isn't this instance, the invite preview and the join go through `/api/v9/federation/invites/<instance>/<code>`, and the dialog shows the server's error text when either fails.
+- A link to `/invite/<code>` on an instance from the Other instances list shows an invite card in chat, and clicking the link opens the usual invite flow, both through the same federation route. Links to hosts that aren't on the list stay ordinary links.
+- Add Friend takes `name@instance`. The client looks the user up with `/api/v9/federation/users/lookup?handle=name@instance` and sends the request to `PUT /api/v9/users/@me/relationships/<id>` with the local id it gets back.
+- Users from other instances have usernames like `name@instance`. Where a message or the member list shows their display name instead, a small tag with the instance follows it, and their profile has a globe badge naming the instance.
+- Servers that live on another instance show "Hosted on <instance>" at the top of the server menu and the server icon's right-click menu. The client takes the instance from the guild's `federated_instance` field, and asks `/api/v9/federation/objects?ids=...` for guilds that arrive without it.
+
+## Chat across instances
+
+Your account stays on your own instance, and your client only talks to it. When you do something in a server or conversation that lives on another instance, your instance relays the call there, and that instance runs it as a copy of your account with the same permission checks, automod and rate limits as for its own users. Events come back the same way.
+
+- Joining a server on another instance adds it to your server list. Its channels, roles, emojis, stickers and members are copied to your instance, and only the channels you can see are copied. You read history, send, edit and delete messages, react, mention people, type, see the member list and leave like in a local server. Your own instance's automod checks what you send before it leaves.
+- People from other instances appear as `name@instance`. Their profile comes from their instance and refreshes when it changes, at most once a minute per user.
+- Friend requests work both ways. Add Friend takes `name@instance`.
+- A DM or group DM lives on the instance of the person who started it. Messages, typing and the members of a group DM work in both directions.
+- Status and activities of friends and people you share a DM with show up within a second or two, and a status from another instance expires after 30 minutes without an update.
+- Reporting a message or a server from another instance sends the report to that instance's staff.
+
+DMs and group DMs that include someone from another instance are end-to-end encrypted like local ones. Your instance fetches the other person's keys from their instance, which only hands them out to instances that share a conversation or a friendship with them. Safety numbers compare the same way, and strict safety mode guards against either instance swapping a key. A group DM can only add someone from another instance whose instance returns at least one device. [e2ee.md](e2ee.md#conversations-with-users-of-other-instances) has the details and what each instance can see.
+
+## Voice across instances
+
+You join a voice channel in a server on another instance like any other voice channel, and the call carries voice and camera video. Voice states of people from other instances show in the channel list on every instance.
+
+The other instance never learns your IP address:
+
+- Your client opens its voice connection to your own instance at `/federated-voice`. Your instance checks it and forwards it to the host's voice gateway as a signed connection, so the host only sees your instance.
+- Your client sends media only through the TURN relay inside your instance's SFU. The client patch `80-federated-voice.js` creates the call's peer connection with your instance's relay as its only ICE server and `iceTransportPolicy: "relay"`, so the browser never offers its own addresses. The host's SFU sees the relay's address, which is your instance's address.
+- The relay credential your instance hands out only lets the relay reach the host's SFU address, and it expires after 12 hours.
+- When your instance has no relay, it refuses to start the call instead of letting it fall back to a direct connection.
+
+Calls between people on the same instance are unchanged and don't use the relay.
+
+DAVE end-to-end encryption is off in calls that span instances. DAVE ties its keys to user ids, and each instance has its own ids for the same person, so clients on different instances can't join the same DAVE group. For the same reason a server with members from other instances runs all its calls without DAVE, its own members' calls included. Media is still encrypted between each client and the SFU it talks to. Calls in servers without members from other instances keep DAVE.
+
+What doesn't work across instances yet: Go Live streams, and DM and group DM calls with people on other instances. When the home instance restarts, its users drop out of calls on other instances and have to join again.
+
+### TURN relay
+
+The relay runs inside `pion-sfu` and starts when the SFU has `TURN_SECRET`. The server signs relay credentials with the same secret. When the server starts the SFU itself through `PION_SFU_BIN` and `TURN_SECRET` is empty, it makes up a random secret on every start and passes it to the SFU. Docker runs the SFU as its own service, so set `TURN_SECRET` in `.env` there, or calls in servers on other instances are refused.
+
+| Variable              | Read by        | Default                       | Meaning                                                                                                         |
+| --------------------- | -------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `TURN_SECRET`         | SFU and server | random per start, native only | Shared secret for credentials, the TURN REST scheme. Empty in Docker turns the relay off. `openssl rand -hex 32` |
+| `TURN_PORT`           | SFU and server | `3478`                        | Port the relay listens on, UDP and TCP. `0` turns the relay off.                                                |
+| `TURN_PUBLIC_IP`      | SFU and server | `WRTC_PUBLIC_IP`              | Address clients reach the relay on and the relay announces as its relayed address. IPv4 or a host name.          |
+| `TURN_LISTEN_IP`      | SFU            | `0.0.0.0`                     | IPv4 address the relay binds to.                                                                                |
+| `TURN_RELAY_PORT_MIN` | SFU            | `49160`                       | First UDP port of the relayed range. Each call uses one port from it.                                           |
+| `TURN_RELAY_PORT_MAX` | SFU            | `49200`                       | Last UDP port of the relayed range.                                                                             |
+| `TURN_REALM`          | SFU            | `meowcord`                    | TURN realm.                                                                                                     |
+| `TURN_CREDENTIAL_TTL` | server         | `43200`                       | Seconds a relay credential stays valid, at least 60.                                                            |
+
+Open these ports in the firewall next to the voice port: `TURN_PORT` over UDP and TCP, 3478 by default, and the relayed range over UDP, 49160 to 49200 by default. Behind NAT, forward the same ports and set `TURN_PUBLIC_IP` to the outside address. The relay only accepts credentials it can verify, and each credential only reaches the IPv4 address named in it, so it can't be used as an open relay.
+
+A credential's username is `<expiry>:<peer IPv4>:<tag>` and its password is `base64(HMAC-SHA1(secret, username))`. The SFU logs `TURN allocation for <client> over <protocol> relays from <address>` and `TURN relay <address> may now reach <peer>` for every call it relays. The host logs `[WebRTC] media of <user> from <instance> in <room> comes from <address>` for every call from another instance.
+
+## For server owners
+
+Server Settings has an Other instances section, visible only to the owner. Turning on Show on other instances does this:
+
+1. The server gets a permanent invite if it has none. The invite points at the system channel, or the first text channel.
+2. The server's name, icon, description, member count and invite link go into this instance's signed discovery list at `/.well-known/meowcord/discovery`.
+3. Other instances show it after it's verified. By default the registry's operators verify servers. An instance can choose to verify servers itself instead.
+
+The section shows the invite link people from other instances use and one of these states: waiting for verification, verified, hidden by an admin of this instance, or blocked. Turning the switch off takes the server out of this instance's discovery list right away. Other instances fetch the list every 5 minutes, so they drop it by then.
+
+## For instance admins
+
+Federation is on by default. Each instance keeps an Ed25519 key in `federation.key`, next to `jwt.key` in the working directory. The server creates it on first start with mode 600. Back it up with `jwt.key`, because a new key means the registry has to read the instance's key again. Docker keeps it in the `state` volume, and the native systemd unit keeps it in the working directory.
+
+The admin dashboard has a Federation page under Instance, for operators. It has:
+
+- The registry address, the sequence and expiry of the last accepted registry list, the last check and its error, and a Check the registry now button.
+- Settings for taking part, announcing, showing unlisted peers, the registry address and key, who verifies servers, and the peer list with each peer's last fetch.
+- The announce state with a Send to registry button. Instances on localhost, an IP address or a private name never announce.
+- The instance's entry for `instances.json`, a Copy entry button and a link to edit the file on GitHub. The registry lists an instance after a maintainer merges that pull request.
+- Every local server that turned on Show on other instances, its registry status, and a button to hide or show it.
+- When admins verify servers themselves, the servers other instances list, each with a button to verify it or take the verification back.
+- Local blocks of instances, servers and users. Servers and users use canonical ids such as `@123@meow.example`. A block of an instance also hides its servers and users.
+- The registry's approved instances and blocks, read only.
+- Event delivery to each other instance: its state, the events waiting, delivered and dropped, and the last error. An instance that answered nothing for 24 hours is marked unreachable. The queues live in memory, so a restart drops what was waiting.
+- The users and servers from other instances that this instance stores, with a button to block each one.
+
+Blocking an instance stops event delivery to it and refuses its relays, joins and inbox requests right away.
+
+The registry list is signed. The instance refuses a list with a bad signature, an unknown version, a lower sequence than the last one it accepted, or a past expiry, and keeps the last good one. When that one expires, Other instances shows nothing until a newer list arrives.
+
+### Config keys
+
+| Key                                      | Default                                       | Meaning                                                                                                                                         |
+| ---------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `federation.enabled`                     | `true`                                        | Fetch the registry, publish the discovery list and show Other instances.                                                                        |
+| `federation.registry.url`                | `https://meowcord-registry.tiag.workers.dev`   | Registry address. Fetched every 5 minutes through `fetchPublicUrl`.                                                                             |
+| `federation.registry.publicKey`          | The registry's key                            | Ed25519 public key, raw 32 bytes in base64url. Changing it or the address forgets the stored list and its sequence.                              |
+| `federation.announce`                    | `true`                                        | Send a signed announce on start and every 24 hours. `scripts/dev/worktree-setup.sh` turns it off for development instances.                     |
+| `federation.allowUnlistedPeers`          | `false`                                       | Show the instances in `federation.peers` even when the registry doesn't list them. The first key a peer serves is kept, and a changed key fails. |
+| `federation.peers`                       | `[]`                                          | Instance ids such as `meow.example`.                                                                                                            |
+| `federation.discovery.verification`      | `registry`                                    | `registry` shows servers the registry verified. `instance` shows servers this instance's admins verified on the Federation page.                |
+| `federation.media.cacheSize`             | `67108864` (64 MiB)                           | Bytes of remote media kept in memory. A file larger than a quarter of it isn't cached. Capped at 4 GiB.                                           |
+| `federation.media.maxFileSize`           | `52428800` (50 MiB)                           | Largest remote file the media proxy fetches. Larger files get `413`. Capped at 64 MiB.                                                          |
+| `federation.media.cacheSeconds`          | `3600`                                        | How long a fetched file stays in the cache, and the `max-age` sent to clients.                                                                 |
+| `federation.media.requestsPerMinute`     | `600`                                         | Fetches to one instance per minute when the file isn't cached, and separately uploads to one instance per minute. More get `429` with `Retry-After`. |
+
+The instance id is the host of `general.serverName`, or of `api.endpointPublic` when the server name is empty, in lowercase, with the port when it isn't 443.
+
+## Media from other instances
+
+People never load anything from another instance. The home instance fetches it and serves it from its own CDN:
+
+- `GET /federation-media/<instance id>/<path>` fetches `<path>` from that instance's address and returns it. It only works for instances that may federate: `active` in the registry list with a current protocol, or a peer in `federation.peers` with `federation.allowUnlistedPeers` on and a fetched well-known document, and not blocked by the registry or locally. Any other instance gets `403` without a request.
+- Only these CDN paths are fetched: attachments, avatars, banners, guild icons, splashes, discovery splashes, emojis, stickers, guild member avatars and banners, role icons, avatar decorations and the `/external/...` embed proxy. Any other path, a `..` segment, an encoded slash or backslash, or a NUL byte gets `404`. Only the query keys `size`, `format`, `quality`, `passthrough`, `animated`, `keep_aspect_ratio`, `width`, `height`, `ex`, `is` and `hm` are passed on.
+- The fetch goes through `fetchPublicUrl` with no redirects, a 20 second timeout and `federation.media.maxFileSize`. A redirect answers `502`. The type comes from the file's bytes, then the remote header. Images, video and audio pass for every path, Lottie JSON for stickers, and attachments of any other type are sent as `text/plain` or `application/octet-stream`. Avatars and other images that aren't images get `415`. Every answer has `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`, and byte ranges work.
+- Fetched files stay in a memory cache for `federation.media.cacheSeconds`, up to `federation.media.cacheSize` bytes, least recently used first out. A `404` from the remote is remembered for a minute.
+- The avatar, banner, guild icon, emoji, sticker and member avatar routes fall back to the remote file when the file isn't stored locally and the id belongs to an object from another instance. Member avatars only fall back when the user and the server come from the same instance.
+- Message, user, guild and sticker payloads from another instance get every absolute URL on a federating instance's address that matches one of the paths above rewritten to `/federation-media/...` on this instance. Message `content` is left alone, and so are links that aren't media, such as invite links.
+- An upload into a channel on another instance gets an `upload_url` on this instance, `/federation-upload/<instance id>/<expiry>.<signature>/attachments/...`, signed with `security.requestSignature` and valid for 24 hours. This instance reads the file, up to `cdn.maxAttachmentSize` and at most 64 MiB, and sends it to the host with one `PUT`.
+
+## Endpoints
+
+| Endpoint                                   | Who                    | What                                                                                     |
+| ------------------------------------------ | ---------------------- | ---------------------------------------------------------------------------------------- |
+| `GET /.well-known/meowcord`                | Anyone                 | The instance's id, name, public key, protocol version and signup state.                  |
+| `GET /.well-known/meowcord/discovery`      | Anyone                 | The signed list of local servers that turned on Show on other instances.                 |
+| `GET /api/v9/federation/discovery`         | Signed-in users        | The Other instances directory, cached for 30 seconds.                                    |
+| `GET`, `PATCH /api/v9/guilds/:id/global-discovery` | The server owner | Read or change Show on other instances.                                                |
+| `/api/v9/admin/federation/...`             | Operators              | Overview, settings, refresh, announce, registry, guilds, blocks and verified servers.    |
+| `GET /federation-media/<instance id>/<path>` | Anyone                | Media from another instance, fetched and cached by this instance.                        |
+| `PUT /federation-upload/<instance id>/...` | Holders of a signed URL | An upload into a channel on another instance, forwarded to it.                          |
+| `GET`, `POST /api/v9/federation/invites/<instance id>/<code>` | Signed-in users | Preview or join a server on another instance.                                |
+| `GET /api/v9/federation/users/lookup?handle=name@instance` | Signed-in users | Resolve a user on another instance to a local id.                                 |
+| `GET /api/v9/federation/objects?ids=<local ids>` | Signed-in users | Canonical ids for local ids. At most 100 ids.                                            |
+| `/federation/v2/...`                        | Other instances, signed | Relay, inbox, join, snapshot, user profiles and encryption keys, see the protocol.       |

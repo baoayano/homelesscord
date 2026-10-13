@@ -197,6 +197,20 @@ export const snowflakeTime = (id: string) => {
 
 const binding = (mid: string | undefined, nonce: string | undefined) => (mid ? `m:${mid}` : `n:${nonce ?? ""}`);
 
+const canonicalInstance = (canonical: string) => canonical.slice(canonical.indexOf("@", 1) + 1);
+
+const canonicalSnowflake = (canonical: string) => canonical.slice(1, canonical.indexOf("@", 1));
+
+const isCanonical = (value: unknown): value is string => typeof value === "string" && /^@\d{1,20}@[a-z0-9.:-]+$/.test(value);
+
+interface Binding {
+    v: 1 | 2;
+    channel: string;
+    sender: string;
+    mid?: string;
+    user: (localId: string) => string;
+}
+
 const messageAad = (channelId: string, senderId: string, senderDevice: string, bind: string) => `fosscord-e2ee/v1/msg\n${channelId}\n${senderId}\n${senderDevice}\n${bind}`;
 
 const storedKeyAad = (userId: string, messageId: string, sig: string) => `fosscord-e2ee/v1/backup-key\n${userId}\n${messageId}\n${sig}`;
@@ -314,6 +328,9 @@ export class Engine {
     private directory = new Map<string, Promise<DirectoryEntry>>();
     private members = new Map<string, Promise<string[]>>();
     private profiles = new Map<string, Promise<ChannelMember>>();
+    private canonical = new Map<string, Promise<string | null>>();
+    private resolvedCanonical = new Map<string, string>();
+    private federation = true;
     private plaintext = new Map<string, Payload>();
     private contentKeys = new Map<string, string>();
     private listeners = new Set<() => void>();
@@ -1089,7 +1106,7 @@ export class Engine {
             } else if (
                 contact.identityKey !== identityKey &&
                 previous?.public_key === contact.identityKey &&
-                (await verify(previous.public_key, rotationMessage(userId, previous.public_key, identityKey), previous.signature))
+                (await verify(previous.public_key, rotationMessage(await this.signedUserId(userId), previous.public_key, identityKey), previous.signature))
             ) {
                 contact.previousKeys = [...new Set([...(contact.previousKeys ?? []), contact.identityKey])].slice(-16);
                 contact.identityKey = identityKey;
@@ -1116,12 +1133,13 @@ export class Engine {
         }
         const devices: DirectoryDevice[] = [];
         let backupKey: string | null = null;
+        const signedId = await this.signedUserId(userId);
         if (identityKey) {
             const known = this.knownKeys(userId, identityKey);
             for (const device of keys.devices) {
                 if (!device.identity_signature) continue;
                 if ((await deviceIdFor(device.signing_key)) !== device.device_id) continue;
-                const message = deviceMessage(userId, device.device_id, device.signing_key);
+                const message = deviceMessage(signedId, device.device_id, device.signing_key);
                 const signers = device.status === "revoked" ? known : [identityKey];
                 let signed = false;
                 for (const key of signers) if (!signed) signed = await verify(key, message, device.identity_signature);
@@ -1138,7 +1156,7 @@ export class Engine {
                 });
             }
             const backup = keys.backup_key;
-            if (backup && (await verify(identityKey, backupKeyMessage(userId, backup.public_key), backup.signature))) backupKey = backup.public_key;
+            if (backup && (await verify(identityKey, backupKeyMessage(signedId, backup.public_key), backup.signature))) backupKey = backup.public_key;
         }
         const identityCreatedAt = keys.identity_created_at ? Date.parse(keys.identity_created_at) : null;
         return {
@@ -1182,6 +1200,68 @@ export class Engine {
         this.pushTrust([userId]).catch((error) => console.error("[e2ee] couldn't sync the verification", error));
     }
 
+    knownCanonical(id: string) {
+        return this.resolvedCanonical.get(id);
+    }
+
+    private async canonicalIds(ids: string[]) {
+        if (!this.federation) return null;
+        const missing = [...new Set(ids)].filter((id) => !this.canonical.has(id));
+        for (let i = 0; i < missing.length; i += 100) {
+            const chunk = missing.slice(i, i + 100);
+            const batch = this.api.request<Record<string, string>>("get", `/federation/objects?ids=${chunk.join(",")}`);
+            for (const id of chunk) {
+                const entry = batch.then(
+                    (res) => {
+                        if (!isCanonical(res?.[id])) return null;
+                        this.resolvedCanonical.set(id, res[id]);
+                        return res[id];
+                    },
+                    (error: { status?: number }) => {
+                        this.canonical.delete(id);
+                        if (error?.status === 404) {
+                            this.federation = false;
+                            return null;
+                        }
+                        throw error;
+                    },
+                );
+                this.canonical.set(id, entry);
+            }
+        }
+        const values = await Promise.all(ids.map((id) => this.canonical.get(id) ?? Promise.resolve(null)));
+        if (!this.federation || values.some((value) => !value)) return null;
+        return new Map(ids.map((id, i) => [id, values[i] as string]));
+    }
+
+    private async signedUserId(userId: string) {
+        if (userId === this.userId || !this.userId) return userId;
+        const ids = await this.canonicalIds([this.userId, userId]).catch(() => null);
+        if (!ids) return userId;
+        const theirs = ids.get(userId)!;
+        return canonicalInstance(theirs) === canonicalInstance(ids.get(this.userId)!) ? userId : canonicalSnowflake(theirs);
+    }
+
+    private async bindingFor(channelId: string, senderId: string, members: string[], mid: string | undefined, version?: number): Promise<Binding> {
+        const local: Binding = { v: 1, channel: channelId, sender: senderId, mid, user: (id) => id };
+        if (version === 1) return local;
+        const ids = await this.canonicalIds([channelId, senderId, ...members, ...(mid ? [mid] : [])]);
+        if (!ids) {
+            if (version === 2) throw new E2eeError("BAD_ENVELOPE", t("This message came from another instance and can't be checked here"));
+            return local;
+        }
+        const own = canonicalInstance(ids.get(this.userId!) ?? ids.get(senderId)!);
+        const federated = version === 2 || [...ids.values()].some((id) => canonicalInstance(id) !== own);
+        if (!federated) return local;
+        return {
+            v: 2,
+            channel: ids.get(channelId)!,
+            sender: ids.get(senderId)!,
+            mid: mid ? ids.get(mid) : undefined,
+            user: (id) => ids.get(id) ?? id,
+        };
+    }
+
     async encrypt(channelId: string, payload: Payload, opts: { nonce?: string; mid?: string }): Promise<Envelope> {
         if (!this.device || !this.userId) throw new E2eeError("NOT_READY", t("Encryption is still starting up"));
         if (!this.linked) throw new E2eeError("NOT_LINKED", t("This browser isn't unlocked for encrypted messages yet"));
@@ -1210,14 +1290,15 @@ export class Engine {
             });
         }
 
-        const bind = binding(opts.mid, opts.nonce);
-        const aad = messageAad(channelId, this.userId, this.device.deviceId, bind);
+        const ids = await this.bindingFor(channelId, this.userId, members, opts.mid);
+        const bind = binding(ids.mid, opts.nonce);
+        const aad = messageAad(ids.channel, ids.sender, this.device.deviceId, bind);
         const contentKey = randomBytes(32);
         const iv = randomBytes(12);
         const ct = await aesEncrypt(contentKey, iv, utf8(JSON.stringify(payload)), aad);
         const keys = await Promise.all(
             targets.map(async ({ userId, device }) => ({
-                user_id: userId,
+                user_id: ids.user(userId),
                 device_id: device.deviceId,
                 prekey_id: device.prekeyId,
                 ...(await hpkeSeal(device.prekeyPublic, contentKey, WRAP_INFO, `${aad}\n${device.deviceId}`)),
@@ -1227,21 +1308,21 @@ export class Engine {
             entries
                 .filter((e) => e.backupKey)
                 .map(async (e) => ({
-                    user_id: e.userId,
-                    ...(await hpkeSeal(e.backupKey!, contentKey, BACKUP_INFO, `${aad}\nbackup:${e.userId}`)),
+                    user_id: ids.user(e.userId),
+                    ...(await hpkeSeal(e.backupKey!, contentKey, BACKUP_INFO, `${aad}\nbackup:${ids.user(e.userId)}`)),
                 })),
         );
         const unsigned = {
-            v: 1,
+            v: ids.v,
             alg: ALGORITHM,
             sender_device: this.device.deviceId,
-            ...(opts.mid ? { mid: opts.mid } : {}),
+            ...(ids.mid ? { mid: ids.mid } : {}),
             iv: toB64u(iv),
             ct: toB64u(ct),
             keys,
             ...(backup.length ? { backup } : {}),
         };
-        const sig = await sign(this.device.privateKey, signedPayload(channelId, this.userId, bind, unsigned));
+        const sig = await sign(this.device.privateKey, signedPayload(ids.channel, ids.sender, bind, unsigned));
         const envelope = { ...unsigned, sig };
         this.plaintext.set(`${opts.mid ?? ""}:${sig}`, parsePayload(JSON.parse(JSON.stringify(payload))));
         return envelope;
@@ -1249,7 +1330,9 @@ export class Engine {
 
     cached(message: RawMessage) {
         const env = message.encrypted;
-        return env ? (this.plaintext.get(`${message.id}:${env.sig}`) ?? this.plaintext.get(`${env.mid ?? ""}:${env.sig}`)) : undefined;
+        return env
+            ? (this.plaintext.get(`${message.id}:${env.sig}`) ?? this.plaintext.get(`${env.mid && env.v === 1 ? env.mid : env.mid ? message.id : ""}:${env.sig}`))
+            : undefined;
     }
 
     async contentKey(message: RawMessage) {
@@ -1261,7 +1344,7 @@ export class Engine {
 
     async decrypt(message: RawMessage, remember = true): Promise<Payload> {
         const env = message.encrypted;
-        if (!env || env.v !== 1 || env.alg !== ALGORITHM || !Array.isArray(env.keys)) throw new E2eeError("BAD_ENVELOPE", "Unsupported envelope");
+        if (!env || (env.v !== 1 && env.v !== 2) || env.alg !== ALGORITHM || !Array.isArray(env.keys)) throw new E2eeError("BAD_ENVELOPE", "Unsupported envelope");
         const hit = this.cached(message);
         if (remember && hit !== undefined) {
             this.plaintext.set(`${message.id}:${env.sig}`, hit);
@@ -1270,7 +1353,7 @@ export class Engine {
         if (!this.device) throw new E2eeError("NOT_READY", t("Encryption is still starting up"));
         const senderId = message.author?.id;
         if (!senderId) throw new E2eeError("BAD_ENVELOPE", "Missing author");
-        if (env.mid && env.mid !== message.id) throw new E2eeError("BAD_ENVELOPE", "Envelope belongs to another message");
+        if (env.v === 1 && env.mid && env.mid !== message.id) throw new E2eeError("BAD_ENVELOPE", "Envelope belongs to another message");
         const nonce = message.nonce == null ? undefined : String(message.nonce);
         if (!env.mid && !nonce) throw new E2eeError("BAD_ENVELOPE", "Missing nonce");
 
@@ -1286,19 +1369,22 @@ export class Engine {
             throw new E2eeError("BAD_SIGNATURE", t("The sender's device couldn't be verified"));
         }
         if (sender.status === "revoked" && (!sender.revokedAt || sentAt >= sender.revokedAt)) throw new E2eeError("BAD_SIGNATURE", t("Sent from a device that was removed"));
-        const bind = binding(env.mid, nonce);
+        const ids = await this.bindingFor(message.channel_id, senderId, [this.userId!], env.mid ? message.id : undefined, env.v);
+        if (env.v === 2 && env.mid && env.mid !== ids.mid) throw new E2eeError("BAD_ENVELOPE", "Envelope belongs to another message");
+        const bind = binding(ids.mid, nonce);
         const { sig, ...unsigned } = env;
-        if (!(await verify(sender.signingKey, signedPayload(message.channel_id, senderId, bind, unsigned), sig))) throw new E2eeError("BAD_SIGNATURE", t("Signature check failed"));
+        if (!(await verify(sender.signingKey, signedPayload(ids.channel, ids.sender, bind, unsigned), sig))) throw new E2eeError("BAD_SIGNATURE", t("Signature check failed"));
 
-        const aad = messageAad(message.channel_id, senderId, env.sender_device, bind);
+        const aad = messageAad(ids.channel, ids.sender, env.sender_device, bind);
         const mine = env.keys.find((k) => k.device_id === this.device!.deviceId);
         const prekey = mine && this.prekeys.find((p) => p.id === mine.prekey_id);
         let contentKey: Bytes | null = null;
         if (mine && prekey) contentKey = await hpkeOpen(prekey.keyPair, mine.enc, mine.wrapped, WRAP_INFO, `${aad}\n${mine.device_id}`);
-        const backupEntry = env.backup?.find((b) => b.user_id === this.userId);
+        const ownId = ids.user(this.userId!);
+        const backupEntry = env.backup?.find((b) => b.user_id === ownId);
         const backupKey = this.backupKeyPair;
         if (!contentKey && backupEntry && backupKey)
-            contentKey = await hpkeOpen(backupKey.keyPair, backupEntry.enc, backupEntry.wrapped, BACKUP_INFO, `${aad}\nbackup:${this.userId}`).catch(() => null);
+            contentKey = await hpkeOpen(backupKey.keyPair, backupEntry.enc, backupEntry.wrapped, BACKUP_INFO, `${aad}\nbackup:${ownId}`).catch(() => null);
         if (!contentKey && backupKey) {
             const stored = await this.lookupStoredKey(message.id);
             if (stored) contentKey = await hpkeOpen(backupKey.keyPair, stored.enc, stored.wrapped, BACKUP_INFO, storedKeyAad(this.userId, message.id, sig)).catch(() => null);
@@ -1311,8 +1397,7 @@ export class Engine {
         const payload = parsePayload(JSON.parse(fromUtf8(await aesDecrypt(contentKey, fromB64u(env.iv), fromB64u(env.ct), aad))));
         this.contentKeys.set(`${message.id}:${sig}`, toB64u(contentKey));
         if (mine && prekey && backupKey) {
-            const covered =
-                !!backupEntry && !!(await hpkeOpen(backupKey.keyPair, backupEntry.enc, backupEntry.wrapped, BACKUP_INFO, `${aad}\nbackup:${this.userId}`).catch(() => null));
+            const covered = !!backupEntry && !!(await hpkeOpen(backupKey.keyPair, backupEntry.enc, backupEntry.wrapped, BACKUP_INFO, `${aad}\nbackup:${ownId}`).catch(() => null));
             if (!covered) await this.queueBackup(message.id, sig, contentKey);
         }
         if (remember) this.plaintext.set(`${message.id}:${env.sig}`, payload);
@@ -1421,7 +1506,7 @@ export class Engine {
             }
             return out;
         };
-        const [own, other] = await Promise.all([part(this.userId, mine), part(userId, theirs)]);
+        const [own, other] = await Promise.all([part(this.userId, mine), part(await this.signedUserId(userId), theirs)]);
         return own < other ? own + other : other + own;
     }
 }

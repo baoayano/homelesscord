@@ -89,13 +89,15 @@ for (const name of files) {
                           ? { HTTPError }
                           : n === "../util"
                             ? util
-                            : n === "@spacebar/database"
-                              ? {}
-                              : n === "@spacebar/schemas"
+                            : n === "../util/federationMedia"
+                              ? { sendRemoteFallback: async () => false, sendRemoteMemberMedia: async () => false, extension: () => "" }
+                              : n === "@spacebar/database"
                                 ? {}
-                                : n === "@spacebar/api/util"
-                                  ? { ensureStandardStickerPacks: async () => {} }
-                                  : require(n),
+                                : n === "@spacebar/schemas"
+                                  ? {}
+                                  : n === "@spacebar/api/util"
+                                    ? { ensureStandardStickerPacks: async () => {} }
+                                    : require(n),
         },
     );
     app.use(`/${name}`, m.exports.default);

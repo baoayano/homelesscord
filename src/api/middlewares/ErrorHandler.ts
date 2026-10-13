@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { HTTPError } from "lambert-server/HTTPError";
-import { ApiError, DiscordApiErrors, FieldError, FieldErrors } from "@spacebar/util";
+import { ApiError, DiscordApiErrors, FederationRequestError, FieldError, FieldErrors } from "@spacebar/util";
 import { StringLengthOutOfBoundsException } from "@spacebar/extensions";
 const EntityNotFoundErrorRegex = /"(\w+)"/;
 const UNKNOWN_ENTITY_ERRORS: Record<string, ApiError> = {
@@ -57,6 +57,10 @@ export function ErrorHandler(error: Error & { type?: string }, req: Request, res
             message = known?.message ?? `${entity} could not be found`;
             code = known?.code ?? 404;
             httpcode = 404;
+        } else if (error instanceof FederationRequestError) {
+            code = 0;
+            httpcode = error.status === 401 ? 502 : error.status;
+            message = error.message;
         } else if (error instanceof FieldError) {
             code = Number(error.code);
             message = error.message;

@@ -58,6 +58,7 @@ export const checkToken = (
         relations?: string[]; // TODO: clean up
         ipAddress?: string;
         fingerprint?: string;
+        federationRelay?: boolean;
     },
 ): Promise<UserTokenData> =>
     new Promise((resolve, reject) => {
@@ -91,6 +92,7 @@ export const checkToken = (
                         "data",
                         "flags",
                         "verified",
+                        "federated_instance",
                     ]), // TODO: clean up
                     relations: !opts?.relations ? undefined : OrmUtils.keysToObject(opts.relations), // TODO: clean up
                 }),
@@ -105,6 +107,11 @@ export const checkToken = (
             if (!user) {
                 logAuth("validateUser rejected: User not found");
                 return rejectAndLog(reject, 401, "User not found");
+            }
+
+            if (!!user.federated_instance !== (!!opts?.federationRelay && (decoded as { fed?: number }).fed === 1)) {
+                logAuth("validateUser rejected: federation relay tokens only work for shadow users through the relay");
+                return rejectAndLog(reject, 401, "Invalid Token");
             }
 
             if (decoded.did && !session) {
@@ -277,6 +284,32 @@ const compactTokenSecret = () => {
     }
     return compactSecret;
 };
+
+let relaySecretKeypair: KeyObject | undefined;
+let relaySecret: string;
+export const federationRelaySecret = () => {
+    const privateKey = JwtKeypairManager.keypair.privateKey;
+    if (relaySecretKeypair !== privateKey) {
+        relaySecret = crypto
+            .createHash("sha256")
+            .update("federation-relay")
+            .update(privateKey.export({ format: "pem", type: "sec1" }))
+            .digest("base64url");
+        relaySecretKeypair = privateKey;
+    }
+    return relaySecret;
+};
+
+const federationTokens = new Map<string, { token: string; until: number }>();
+export function generateFederationToken(id: string) {
+    const cached = federationTokens.get(id);
+    if (cached && cached.until > Date.now()) return cached.token;
+    const iat = Math.floor(Date.now() / 1000);
+    const token = jwt.sign({ id, iat, exp: iat + 300, ver: CurrentTokenFormatVersion, fed: 1 }, JwtKeypairManager.keypair.privateKey, { algorithm: "ES512" });
+    if (federationTokens.size > 5000) federationTokens.clear();
+    federationTokens.set(id, { token, until: Date.now() + 240_000 });
+    return token;
+}
 
 async function assertNotSuspended(id: string) {
     const user = await User.findOneOrFail({

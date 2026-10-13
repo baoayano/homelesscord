@@ -14,9 +14,13 @@ try {
 }
 const executablePath = process.env.CHROME_PATH || "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser";
 const cachedCss = (fs.existsSync("assets/cache") ? fs.readdirSync("assets/cache") : [])
+    .sort()
     .filter((file) => file.endsWith(".css"))
     .map((file) => path.join("assets/cache", file))
-    .find((file) => fs.readFileSync(file, "utf8").includes(".layerContainer__59d0d{"));
+    .filter((file) => {
+        const css = fs.readFileSync(file, "utf8");
+        return [".layerContainer__59d0d{", ".layer_bc663c{", ".scrim__40128{"].some((selector) => css.includes(selector));
+    });
 const fixture = `<!doctype html><html><body><div class="layerContainer__59d0d">
 <div class="scrim__40128" data-testid="backdrop"></div>
 <div class="layer__59d0d layer_bc663c inactive_bc663c" data-testid="inactive"><section role="dialog" aria-label="Profile editor"><label>Display name<input value="Draft stays here"></label></section></div>
@@ -32,10 +36,10 @@ document.querySelector('[data-testid="popout"]').onclick=()=>{state.popout++;};
 const fixtureCss = `body{margin:0;background:#191b20;color:white;font-family:Arial,sans-serif}.layerContainer__59d0d{--background-scrim:#0008;--space-24:24px}.layer_bc663c:not(.inactive_bc663c){pointer-events:none}.layer_bc663c section{width:75%;max-width:500px;height:200px;box-sizing:border-box;background:#30333b;padding:24px;pointer-events:auto}.layer_bc663c.inactive_bc663c section{width:100%;max-width:none;height:100%}.layer__529b0{left:30px;top:40px}.layer__529b0 button{height:40px}button,input{font:inherit}button{min-height:40px}`;
 
 test("native modal layer hit-testing preserves current backdrop fix at desktop and mobile widths", {
-    skip: !playwright || !fs.existsSync(executablePath) || !cachedCss,
+    skip: !playwright || !fs.existsSync(executablePath) || cachedCss.length === 0,
 }, async (t) => {
     const browser = await playwright.chromium.launch({ executablePath, headless: true });
-    const nativeCss = fs.readFileSync(cachedCss, "utf8");
+    const nativeCss = cachedCss.map((file) => fs.readFileSync(file, "utf8")).join("\n");
     const patchCss = fs.readFileSync("client/plugins/fosscordModals/style.css", "utf8");
     try {
         for (const width of [1440, 390])

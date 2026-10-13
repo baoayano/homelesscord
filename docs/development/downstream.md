@@ -51,6 +51,18 @@ Commit the reviewed merge in the worktree with a lowercase conventional subject.
 
 Stop any test server and remove only its database and worktree when the update is finished. Keep upstream merge history intact rather than rebasing published `main`.
 
+The owner manages the instance on port 3001. Review updates on port 3002 with a fresh database, and keep the compiled server and Equicord assets in the review worktree. Publishing or integrating commits does not start, stop or restart port 3001.
+
+## Update on 2026-10-13
+
+The downstream integrates 57 upstream commits through `8c47a77`, including instance discovery, federation administration, media proxying, encrypted conversations and relayed voice between instances. The merge keeps the free Nitro registration date initializer alongside the new federated user field and login restrictions. Profile badge management and its overflow count remain part of the downstream.
+
+The cached-client reply patch test reads the native module's actual constant names rather than assuming one minified identifier. This fixes a harness failure that also occurs before the upstream merge with client build 633029.
+
+The native modal hit-testing fixture loads both the container stylesheet and the lazy modal stylesheet. Both desktop and mobile checks reproduce the original interception and verify backdrop dismissal, popout clicks and preserved editor drafts.
+
+Verification uses a fresh PostgreSQL database on port 3002. The API parity probe passes 151 checks with 1 skip, the federation API probe passes 106 checks, the federation voice and video probe passes 33 checks, and both local and cross-instance encryption browser suites pass. The SFU Go tests, the registry's 18 unit tests and the required client patches also pass against build 633029. The test environment uses standalone Chromium and WebKit with local shared libraries.
+
 ## Downstream features
 
 Place client behavior in a dedicated Equicord plugin and follow [client-patches.md](client-patches.md). Server features use cohesive modules with small changes at their integration points. There is no general server plugin loader. Preserve required encryption and Pride behavior and keep paid capabilities free.

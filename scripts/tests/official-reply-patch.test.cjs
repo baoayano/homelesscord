@@ -22,7 +22,9 @@ test("native official reply patch preserves other system and guild restrictions"
     const original = cachedBundles.map((file) => fs.readFileSync(path.join("assets/cache", file), "utf8").match(match)?.[0]).find(Boolean);
     assert.ok(original, "patch must match the cached actual native channel class");
     const changed = original.replace(match, patch.replace);
-    const Channel = new Function("f", `return class { ${changed} }`)({ rbe: { DM: 1 } });
+    const constants = original.match(/this\.type===([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\.DM/);
+    assert.ok(constants, "the native DM type constants must be available to the test harness");
+    const Channel = new Function(constants[1], `return class { ${changed} }`)({ [constants[2]]: { DM: 1 } });
     const channel = new Channel();
     channel.type = 1;
     for (const [recipient, expected] of [

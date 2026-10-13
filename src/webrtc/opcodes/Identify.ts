@@ -1,7 +1,8 @@
-import { Channel, GoLiveStreams, Member, Recipient, StreamSession, VoiceState } from "@spacebar/database";
+import { IsNull, Not } from "typeorm";
+import { Channel, GoLiveStreams, Guild, Member, Recipient, StreamSession, User, VoiceState } from "@spacebar/database";
 import { CLOSECODES } from "@spacebar/gateway";
 import { ChannelType, validateSchema, VoiceIdentifySchema } from "@spacebar/schemas";
-import { getPermission, listenEvent } from "@spacebar/util";
+import { FederatedVoice, getPermission, listenEvent } from "@spacebar/util";
 import { generateSsrc, mediaServer, Send, VoiceModeration, VoiceOPCodes, VoicePayload, WebRtcWebSocket } from "@spacebar/webrtc";
 import { SSRCs } from "@spacebarchat/spacebar-webrtc-types";
 import { subscribeToProducers } from "./Video";
@@ -28,10 +29,20 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
         ],
     });
 
+    if (this.federation) {
+        const shadow = await User.findOne({ where: { id: user_id }, select: { id: true, federated_instance: true } });
+        if (!voiceState?.guild_id || voiceState.guild_id !== server_id || shadow?.federated_instance !== this.federation.sender)
+            return this.close(CLOSECODES.Authentication_failed);
+    }
+
     if (voiceState) {
+        const mirrored = voiceState.guild_id
+            ? await Guild.exists({ where: { id: voiceState.guild_id, federated_instance: Not(IsNull()) } })
+            : await Channel.exists({ where: { id: voiceState.channel_id, federated_instance: Not(IsNull()) } });
+        if (mirrored) return this.close(CLOSECODES.Authentication_failed);
         type = voiceState.guild_id === server_id ? "guild-voice" : "dm-voice";
         authenticated = true;
-    } else {
+    } else if (!this.federation) {
         // if its not a guild/dm voice connection, check if it is a go live stream
         const streamSession = await StreamSession.findOne({
             where: {
@@ -118,6 +129,18 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
             await moderate(update);
         });
         this.sessionCleanups = [...(this.sessionCleanups ?? []), unlisten];
+    }
+
+    if (this.federation) {
+        const key = `${user_id}:${session_id}`;
+        FederatedVoice.connected.add(key);
+        const leave = async () => {
+            const live = VoiceSessions.find(server_id, session_id);
+            if (live && !live.sessionEnded) return;
+            FederatedVoice.connected.delete(key);
+            await FederatedVoice.apply(user_id, session_id, { guild_id: null, channel_id: null, self_mute: false, self_deaf: false });
+        };
+        this.sessionCleanups = [...(this.sessionCleanups ?? []), leave];
     }
 
     // once connected subscribe to tracks from other users

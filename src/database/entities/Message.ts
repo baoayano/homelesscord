@@ -504,7 +504,10 @@ export class Message extends BaseClass {
         const components = proxyComponentsMedia((this.components ?? json.components ?? []) as BaseMessageComponents[]);
         return {
             ...json,
-            attachments: (this.attachments ?? json.attachments)?.map((attachment) => Attachment.prototype.signUrls.call(attachment, data)),
+            attachments: (this.attachments ?? json.attachments)?.map((attachment) => {
+                const { url } = attachment as { url?: unknown };
+                return typeof url === "string" && cdn && !url.startsWith(`${cdn}/attachments/`) ? attachment : Attachment.prototype.signUrls.call(attachment, data);
+            }),
             components: components
                 ? components.map((comp) => {
                       comp = structuredClone(comp);

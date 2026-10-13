@@ -1,5 +1,6 @@
 import { Request, Response, Router } from "express";
 import { route } from "@spacebar/api/middlewares";
+import { e2eeDevicesOf, E2eeErrors } from "@spacebar/api/util";
 import { Channel, Recipient, Relationship, User } from "@spacebar/database";
 import { ChannelDeleteEvent, ChannelRecipientAddEvent, ChannelUpdateEvent, Config, DiscordApiErrors, DmChannelDTO, emitEvent } from "@spacebar/util";
 import { ChannelType, MessageType, PublicUserProjection } from "@spacebar/schemas";
@@ -99,6 +100,13 @@ router.put(
 
         if (!channel.recipients || channel.recipients.length == 0 || channel.recipients.filter((r) => r.user_id == req.user_id).length == 0) {
             throw DiscordApiErrors.UNKNOWN_CHANNEL; // TODO: is this the right error
+        }
+
+        const added = await User.findOne({ where: { id: user_id }, select: { id: true, federated_instance: true } });
+        if (added?.federated_instance && (channel.e2ee_enabled_at || channel.type !== ChannelType.GROUP_DM)) {
+            const devices = await e2eeDevicesOf([user_id], { channel_id, force: true });
+            if (!devices.some((device) => device.status === "active"))
+                return res.status(400).json({ code: E2eeErrors.RECIPIENT_NO_DEVICES.code, message: E2eeErrors.RECIPIENT_NO_DEVICES.message, user_ids: [user_id] });
         }
 
         if (channel.type !== ChannelType.GROUP_DM) {

@@ -13,6 +13,7 @@
 - [deploy.md](self-hosting/deploy.md): production with Docker Compose, backups, updates, reverse proxies and phones.
 - [external-services.md](self-hosting/external-services.md): every outside service the instance can contact and how each is turned on.
 - [stickers.md](self-hosting/stickers.md): provisioning the standard sticker artwork locally and editing sticker packs.
+- [registry.md](self-hosting/registry.md): the federation registry Worker, its endpoints, how we review instances and discovery servers, and how an instance gets listed.
 
 ## Features
 
@@ -24,6 +25,7 @@
 - [automod.md](features/automod.md): the slur auto-ban, word lists, join reasons, account approval, sign-in and signup limits and the Automod admin page.
 - [captcha.md](features/captcha.md): Cap challenge work for registration, sign-in and password reset, and refusing automated browsers.
 - [e2ee.md](features/e2ee.md): end-to-end encrypted DMs, key backup and recovery.
+- [federation.md](features/federation.md): Other instances in Discovery, chat with servers and people on other instances, the owner switch, the Federation admin page, its config keys and endpoints.
 - [link-embeds.md](features/link-embeds.md): link previews, video players and components media.
 - [homepage.md](features/homepage.md): the instance homepage at `/` and the settings that change it.
 - [identity-moderation.md](features/identity-moderation.md): blocked words in usernames, display names and nicknames.
@@ -50,5 +52,7 @@
 - [native-ui.md](development/native-ui.md): shared native UI adapters for plugins.
 - [dialog-dismissal.md](development/dialog-dismissal.md): how owned dialogs dismiss and how the developer portal handles late responses.
 - [parity.md](development/parity.md): every Discord feature and its state here.
+- [federation.md](development/federation.md): the plan for discovery and chat across instances. Phases 1 to 5 are built, including encrypted DMs and group DMs and voice across instances.
+- [federation-protocol.md](development/federation-protocol.md): the version 1 contract between instances and the registry, and version 2 for chat between instances.
 - [work-backlog.md](development/work-backlog.md): the task queue.
 - [admin-api-coverage.md](development/admin-api-coverage.md): which API operations the admin dashboard covers, with the [machine-readable map](development/admin-api-coverage.json).

@@ -119,7 +119,7 @@ ${final ? 1 : 0}`);
     if (!pending) {
       pending = ask({ type: "fosscord-e2ee-poster", blob, content_type: entry.content_type }, clientId);
       posters.set(path, pending);
-      pending.then((image2) => image2 || posters.delete(path));
+      pending.then((image) => image || posters.delete(path));
     }
     const image = await pending;
     if (!image)

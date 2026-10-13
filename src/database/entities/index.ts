@@ -79,3 +79,4 @@ export * from "./StorageQuotaOperation";
 export * from "./StorageInventoryRun";
 export * from "./StorageInventoryWork";
 export * from "./InstanceInvite";
+export * from "./Federation";

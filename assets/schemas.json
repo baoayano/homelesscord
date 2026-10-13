@@ -198,7 +198,7 @@
             "length": {
                 "type": "integer"
             },
-            "__@unscopables@754": {
+            "__@unscopables@756": {
                 "type": "object",
                 "additionalProperties": false,
                 "patternProperties": {
@@ -324,17 +324,17 @@
                     "with": {
                         "type": "boolean"
                     },
-                    "__@iterator@752": {
+                    "__@iterator@754": {
                         "type": "boolean"
                     },
-                    "__@unscopables@754": {
+                    "__@unscopables@756": {
                         "type": "boolean"
                     }
                 }
             }
         },
         "required": [
-            "__@unscopables@754",
+            "__@unscopables@756",
             "length"
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -4309,6 +4309,18 @@
             "discovery_excluded": {
                 "type": "boolean"
             },
+            "global_discovery": {
+                "type": "boolean"
+            },
+            "global_discovery_hidden": {
+                "type": "boolean"
+            },
+            "federated_instance": {
+                "type": [
+                    "null",
+                    "string"
+                ]
+            },
             "vanity_url_code": {
                 "type": [
                     "null",
@@ -4448,6 +4460,8 @@
             "emojis",
             "features",
             "get_annotations",
+            "global_discovery",
+            "global_discovery_hidden",
             "id",
             "insert",
             "invites",
@@ -13035,6 +13049,117 @@
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
+    "GuildGlobalDiscoverySchema": {
+        "type": "object",
+        "properties": {
+            "enabled": {
+                "type": "boolean"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "enabled"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AdminFederationSettingsSchema": {
+        "type": "object",
+        "properties": {
+            "enabled": {
+                "type": "boolean"
+            },
+            "registryUrl": {
+                "maxLength": 512,
+                "type": "string"
+            },
+            "registryPublicKey": {
+                "maxLength": 64,
+                "type": "string"
+            },
+            "announce": {
+                "type": "boolean"
+            },
+            "allowUnlistedPeers": {
+                "type": "boolean"
+            },
+            "peers": {
+                "maxItems": 200,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "verification": {
+                "enum": [
+                    "instance",
+                    "registry"
+                ],
+                "type": "string"
+            }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AdminFederationBlockSchema": {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "enum": [
+                    "guild",
+                    "instance",
+                    "user"
+                ],
+                "type": "string"
+            },
+            "target": {
+                "minLength": 1,
+                "maxLength": 300,
+                "type": "string"
+            },
+            "reason": {
+                "maxLength": 1000,
+                "type": "string"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "kind",
+            "target"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AdminFederationGuildSchema": {
+        "type": "object",
+        "properties": {
+            "hidden": {
+                "type": "boolean"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "hidden"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AdminFederationVerifySchema": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "minLength": 1,
+                "maxLength": 300,
+                "type": "string"
+            },
+            "verified": {
+                "type": "boolean"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "id",
+            "verified"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
     "IdentifySchema": {
         "type": "object",
         "properties": {
@@ -13950,7 +14075,7 @@
                     "length": {
                         "type": "integer"
                     },
-                    "__@unscopables@754": {
+                    "__@unscopables@756": {
                         "type": "object",
                         "additionalProperties": false,
                         "patternProperties": {
@@ -14076,17 +14201,17 @@
                             "with": {
                                 "type": "boolean"
                             },
-                            "__@iterator@752": {
+                            "__@iterator@754": {
                                 "type": "boolean"
                             },
-                            "__@unscopables@754": {
+                            "__@unscopables@756": {
                                 "type": "boolean"
                             }
                         }
                     }
                 },
                 "required": [
-                    "__@unscopables@754",
+                    "__@unscopables@756",
                     "length"
                 ]
             },
@@ -15515,6 +15640,12 @@
                 "type": "integer",
                 "default": 0
             },
+            "federated_instance": {
+                "type": [
+                    "null",
+                    "string"
+                ]
+            },
             "default_thread_rate_limit_per_user": {
                 "type": "integer",
                 "default": 0
@@ -15987,6 +16118,12 @@
             },
             "avatar_decoration_id": {
                 "type": "string"
+            },
+            "federated_instance": {
+                "type": [
+                    "null",
+                    "string"
+                ]
             },
             "tag": {
                 "type": "string"
@@ -17500,6 +17637,20 @@
                 "type": "boolean",
                 "default": false
             },
+            "global_discovery": {
+                "type": "boolean",
+                "default": false
+            },
+            "global_discovery_hidden": {
+                "type": "boolean",
+                "default": false
+            },
+            "federated_instance": {
+                "type": [
+                    "null",
+                    "string"
+                ]
+            },
             "vanity_url_code": {
                 "type": [
                     "null",
@@ -17607,6 +17758,8 @@
             "discovery_weight",
             "emojis",
             "features",
+            "global_discovery",
+            "global_discovery_hidden",
             "id",
             "invites",
             "members",

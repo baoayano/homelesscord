@@ -1,0 +1,323 @@
+.fosscord-federation-page {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 96px 32px 48px;
+    box-sizing: border-box;
+}
+
+.fosscord-federation-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 640px;
+    margin-bottom: 32px;
+}
+
+.fosscord-federation-lede {
+    text-wrap: pretty;
+}
+
+.fosscord-federation-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 40px;
+    scroll-margin-top: 96px;
+}
+
+.fosscord-federation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+    gap: 16px;
+}
+
+.fosscord-federation-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 8px;
+}
+
+.fosscord-federation-card {
+    display: flex;
+    min-width: 0;
+    border-radius: 8px;
+    background: var(--background-surface-high, var(--background-secondary));
+    color: inherit;
+    text-decoration: none;
+    box-shadow:
+        0 0 0 1px var(--border-subtle, transparent),
+        0 1px 2px rgb(0 0 0 / 6%);
+    transition:
+        background-color 120ms ease-out,
+        scale 200ms ease-out;
+}
+
+a.fosscord-federation-card:active {
+    scale: 0.98;
+}
+
+.fosscord-federation-card:focus-visible {
+    outline: 2px solid var(--focus-primary, var(--brand-500));
+    outline-offset: 2px;
+}
+
+@media (hover: hover) {
+    a.fosscord-federation-card:hover {
+        background: var(--background-surface-higher, var(--background-modifier-hover));
+    }
+}
+
+.fosscord-federation-guild {
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+}
+
+.fosscord-federation-guild-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.fosscord-federation-guild-icon {
+    width: 48px;
+    height: 48px;
+    flex: none;
+    border-radius: 16px;
+    object-fit: cover;
+    outline: 1px solid rgb(255 255 255 / 8%);
+    outline-offset: -1px;
+}
+
+.theme-light .fosscord-federation-guild-icon,
+.theme-light .fosscord-federation-instance-icon {
+    outline-color: rgb(0 0 0 / 8%);
+}
+
+.fosscord-federation-instance-tag {
+    min-width: 0;
+    max-width: 60%;
+    overflow: hidden;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--background-mod-subtle, var(--background-modifier-accent));
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fosscord-federation-title {
+    overflow-wrap: break-word;
+}
+
+.fosscord-federation-description {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow-wrap: break-word;
+    text-wrap: pretty;
+}
+
+.fosscord-federation-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: auto;
+    padding-top: 4px;
+}
+
+.fosscord-federation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding-top: 8px;
+}
+
+.fosscord-federation-open {
+    border-radius: 4px;
+    color: var(--text-link, var(--text-default));
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 18px;
+    text-decoration: none;
+}
+
+.fosscord-federation-open:focus-visible {
+    outline: 2px solid var(--focus-primary, var(--brand-500));
+    outline-offset: 2px;
+}
+
+@media (hover: hover) {
+    .fosscord-federation-open:hover {
+        text-decoration: underline;
+    }
+}
+
+.fosscord-federation-user-tag {
+    display: inline-block;
+    max-width: 160px;
+    overflow: hidden;
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--background-mod-subtle, var(--background-modifier-accent));
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.fosscord-federation-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--interactive-muted, var(--text-muted));
+}
+
+.fosscord-federation-number {
+    font-variant-numeric: tabular-nums;
+}
+
+.fosscord-federation-instance {
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+}
+
+.fosscord-federation-instance-icon {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 12px;
+    object-fit: cover;
+    outline: 1px solid rgb(255 255 255 / 8%);
+    outline-offset: -1px;
+}
+
+.fosscord-federation-instance-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.fosscord-federation-ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fosscord-federation-icon {
+    display: block;
+    position: relative;
+    overflow: hidden;
+}
+
+.fosscord-federation-icon-fill {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+img.fosscord-federation-icon-fill {
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+}
+
+img.fosscord-federation-icon-fill[data-loaded="true"] {
+    opacity: 1;
+}
+
+.fosscord-federation-initials {
+    display: grid;
+    place-items: center;
+    background: var(--background-mod-strong, var(--background-modifier-accent));
+    color: var(--text-strong, var(--header-primary));
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.fosscord-federation-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 24px;
+    border-radius: 8px;
+    background: var(--background-mod-subtle, var(--background-secondary));
+}
+
+.fosscord-federation-loading {
+    height: 160px;
+    border-radius: 8px;
+    background: var(--background-mod-subtle, var(--background-secondary));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .fosscord-federation-loading {
+        animation: fosscord-federation-pulse 1.4s ease-in-out infinite;
+    }
+}
+
+@keyframes fosscord-federation-pulse {
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.fosscord-federation-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 660px;
+}
+
+.fosscord-federation-status {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 8px;
+    background: var(--background-mod-subtle, var(--background-secondary));
+}
+
+.fosscord-federation-invite {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fosscord-federation-invite-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fosscord-federation-link {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: break-word;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--background-base-lowest, var(--background-tertiary));
+    color: var(--text-default);
+    font-size: 13px;
+}
+
+@media (max-width: 640px) {
+    .fosscord-federation-page {
+        padding: 80px 16px 32px;
+    }
+}

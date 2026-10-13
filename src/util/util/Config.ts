@@ -46,10 +46,12 @@ export class Config {
         const identityBlockedTerms = config.user?.identityBlockedTerms;
         const automodWordLists = config.automod?.wordLists;
         const automodAllowList = config.automod?.allowList;
+        const federationPeers = config.federation?.peers;
         config = OrmUtils.mergeDeep({}, { ...new ConfigValue() }, config);
         if (Array.isArray(identityBlockedTerms)) config.user.identityBlockedTerms = [...identityBlockedTerms];
         if (Array.isArray(automodWordLists)) config.automod.wordLists = automodWordLists.map((list) => ({ ...list, terms: [...(list.terms ?? [])] }));
         if (Array.isArray(automodAllowList)) config.automod.allowList = [...automodAllowList];
+        if (Array.isArray(federationPeers)) config.federation.peers = [...federationPeers];
         replaceStaleDefaults(config);
         delete (config.security?.captcha as { service?: unknown } | undefined)?.service;
 

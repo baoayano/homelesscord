@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { Session, User } from "@spacebar/database";
 import { Random } from "@spacebar/extensions";
-import { checkOAuth2Token, checkToken, getClientPlatform, isOAuth2AccessToken, Rights, UserTokenData } from "@spacebar/util";
+import { checkOAuth2Token, checkToken, federationRelaySecret, getClientPlatform, isOAuth2AccessToken, Rights, UserTokenData } from "@spacebar/util";
 import { storageOwnership } from "../../cdn/util/storageOwnership";
 import { CORS } from "./CORS";
 
@@ -19,6 +19,7 @@ declare global {
             fingerprint?: string;
             isAuthenticated: boolean;
             oauth2?: UserTokenData["oauth2"];
+            federationRelay?: boolean;
         }
     }
 }
@@ -50,7 +51,10 @@ export async function handleAuthentication(req: Request) {
     }
 
     try {
-        const options = { ipAddress: req.ip, fingerprint: req.fingerprint };
+        const relayHeader = req.headers["x-meowcord-relay"];
+        req.federationRelay =
+            typeof relayHeader === "string" && relayHeader === federationRelaySecret() && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
+        const options = { ipAddress: req.ip, fingerprint: req.fingerprint, federationRelay: req.federationRelay };
         const { decoded, user, session, oauth2 } = (req.tokenData = isOAuth2AccessToken(req.headers.authorization)
             ? await checkOAuth2Token(req.headers.authorization, options)
             : await checkToken(req.headers.authorization, options));

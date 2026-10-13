@@ -99,8 +99,12 @@ async function resolveFetchAddress(url: URL, signal: AbortSignal, trustedCdnOrig
         (!Config.get().security.allowPrivateNetworkRequests && !isTrustedCdnAsset(url, trustedCdnOrigin) && addresses.some(({ address }) => isPrivateAddress(address)))
     )
         throw new Error("Public URL resolves to a forbidden address");
-    return addresses[0];
+    return addresses;
 }
+
+const unreachable = (error: unknown) =>
+    ["ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "EADDRNOTAVAIL", "ETIMEDOUT"].includes((error as NodeJS.ErrnoException)?.code ?? "") ||
+    /could not reach the host \(code [345]\)/.test(String(error));
 
 async function readPublicResponse(response: IncomingMessage, maxBytes: number, method: string) {
     if (method === "HEAD" || [204, 205, 304].includes(response.statusCode ?? 0)) {
@@ -170,7 +174,7 @@ export async function fetchPublicUrl(url: string, init: RequestInit = {}, redire
         });
     const requestUrl = async (target: URL, remaining: number, method: string, headers: Headers, payload?: Buffer): Promise<Response> => {
         if (limits.allowExternal === false && !isTrustedCdnAsset(target, limits.trustedCdnOrigin)) throw new Error("External public requests are disabled");
-        const address = await resolveFetchAddress(target, signal, limits.trustedCdnOrigin);
+        const addresses = await resolveFetchAddress(target, signal, limits.trustedCdnOrigin);
         const outgoing = Object.fromEntries(headers.entries());
         outgoing["accept-encoding"] = "identity";
         delete outgoing.host;
@@ -178,12 +182,20 @@ export async function fetchPublicUrl(url: string, init: RequestInit = {}, redire
         delete outgoing["transfer-encoding"];
         delete outgoing["content-length"];
         if (payload) outgoing["content-length"] = String(payload.length);
-        const viaProxy = !isTrustedCdnAsset(target, limits.trustedCdnOrigin) && !isPrivateAddress(address.address) && proxy !== "direct";
-        if (viaProxy && !proxy) throw new Error("PUBLIC_FETCH_PROXY is not set, so requests to user-chosen URLs are refused");
-        const exchange =
-            viaProxy && proxy
-                ? await socksExchange(proxy, target, address.address, method, outgoing, payload, signal, maxBytes)
-                : await exchangeDirect(target, address, method, outgoing, payload);
+        const exchange = await (async () => {
+            for (const [index, address] of addresses.entries()) {
+                const viaProxy = !isTrustedCdnAsset(target, limits.trustedCdnOrigin) && !isPrivateAddress(address.address) && proxy !== "direct";
+                if (viaProxy && !proxy) throw new Error("PUBLIC_FETCH_PROXY is not set, so requests to user-chosen URLs are refused");
+                try {
+                    return viaProxy && proxy
+                        ? await socksExchange(proxy, target, address.address, method, outgoing, payload, signal, maxBytes)
+                        : await exchangeDirect(target, address, method, outgoing, payload);
+                } catch (error) {
+                    if (index === addresses.length - 1 || signal.aborted || !unreachable(error)) throw error;
+                }
+            }
+            throw new Error("Public URL has no reachable address");
+        })();
         const location = exchange.headers.find(([name]) => name === "location")?.[1];
         if ([301, 302, 303, 307, 308].includes(exchange.status) && location && init.redirect !== "manual") {
             if (init.redirect === "error") throw new Error("Public redirect refused");

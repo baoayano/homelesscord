@@ -78,7 +78,7 @@ const trustsServer = () =>
     (window as unknown as { GLOBAL_ENV?: { E2EE_TRUST_SERVER?: boolean } }).GLOBAL_ENV?.E2EE_TRUST_SERVER !== false &&
     browserStorage?.getItem("fosscord-e2ee-strict-safety") !== "true";
 const engine = new Engine(api, classifyChannel, trustsServer);
-const attachments = createAttachments();
+const attachments = createAttachments((id) => engine.knownCanonical(id));
 attachments.start();
 
 interface StickerStore {
