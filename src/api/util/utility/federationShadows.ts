@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In } from "typeorm";
 import { User, UserSettings } from "@spacebar/database";
-import { blockSets, Config, FederationRequestError, isInstanceId, parseCanonicalId, remoteHandle, Snowflake, SNOWFLAKE } from "@spacebar/util";
+import { blockSets, Config, FederationRequestError, isInstanceId, parseCanonicalId, remoteHandle, remotePublicFlags, Snowflake, SNOWFLAKE } from "@spacebar/util";
 import { currentDocument, localBlocks } from "./federation";
 import { localIds, toWire, WireUser } from "./federationIds";
 import { rewriteRemoteMedia } from "./federationMedia";
@@ -47,7 +47,7 @@ const cleanProfile = (raw: Record<string, unknown>, instance: string) => ({
     accent_color: Number.isSafeInteger(raw.accent_color) ? (raw.accent_color as number) : null,
     pronouns: text(raw.pronouns, 64),
     bio: text(raw.bio, 1024) ?? "",
-    public_flags: Number.isSafeInteger(Number(raw.public_flags)) ? Number(raw.public_flags) & ~(1 << 12) : 0,
+    public_flags: remotePublicFlags(raw.public_flags),
 });
 
 const placeholderProfile = (canonical: string, instance: string) => cleanProfile({ username: `user${(parseCanonicalId(canonical)?.id ?? "").slice(-6)}` }, instance);

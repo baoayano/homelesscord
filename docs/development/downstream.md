@@ -71,6 +71,12 @@ Verification on a fresh 3002 database passes 1453 unit tests with 31 optional sk
 
 Local voice sends and receives audio in both directions. The extended federation voice probe passes 125 of 126 checks; Bob receives no decoded samples in the final group call after the preceding guild, stream, restart and DM cases, including a repeat with a 20 second media wait. The registry worker integration harness reaches Workerd's Ready log but local HTTP requests stall when Wrangler runs under Bun in this environment. Its D1 migrations and unit tests pass. These limitations do not restart or deploy the owner's 3001 instance.
 
+## Update through 48719bd
+
+The 2026-10-14 update merges 9 upstream commits through `48719bd`. It makes forgot-password responses consistent across accounts, shares short rate limits between workers, limits anonymous and top-level routes, restricts credentialed CORS to instance origins, guards undefined query values and confines lurker guild events to the caller. Cluster events also reach the sending worker. Remote accounts lose official, system and staff flags through equivalent PostgreSQL and SQLite migrations. Downstream Nitro and badge management remain intact.
+
+The rapid update runs the server build, lint, unit suite and API parity probe on a fresh SQLite database at port 3002. Full local and federation encryption browser suites are not repeated within this update's requested 4 minute window. The owner's server on port 3001 remains under the owner's control.
+
 ## Downstream features
 
 Place client behavior in a dedicated Equicord plugin and follow [client-patches.md](client-patches.md). Server features use cohesive modules with small changes at their integration points. There is no general server plugin loader. Preserve required encryption and Pride behavior and keep paid capabilities free.

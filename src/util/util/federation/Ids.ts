@@ -133,6 +133,21 @@ export const remoteHandle = (username: string, instance: string) => {
     return `${base.replace(/@/g, "")}@${instance}`.slice(0, 300);
 };
 
+export const REMOTE_PUBLIC_FLAGS = (1 << 6) | (1 << 7) | (1 << 8) | (1 << 30);
+
+export const remotePublicFlags = (value: unknown) => {
+    const flags = Number(value);
+    return Number.isSafeInteger(flags) && flags > 0 ? flags & REMOTE_PUBLIC_FLAGS : 0;
+};
+
+export const sanitizeRemoteUser = (user: Record<string, unknown>) => {
+    user.public_flags = remotePublicFlags(user.public_flags);
+    if ("flags" in user) user.flags = user.public_flags;
+    if ("system" in user) user.system = false;
+    delete user.staff;
+    return user;
+};
+
 export const stripHandle = (username: string, instance: string) => (username.endsWith(`@${instance}`) ? username.slice(0, -instance.length - 1) : username);
 
 export const translatePath = (path: string, map: (segment: string) => string | null) => {

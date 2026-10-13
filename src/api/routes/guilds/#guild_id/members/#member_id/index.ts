@@ -456,7 +456,7 @@ router.put(
                     embedded_activities: [],
                     voice_states: full.voice_states.map((x) => x.toPublicVoiceState()),
                 },
-                ...(sessionId ? { session_id: sessionId } : { user_id: member_id }),
+                ...(sessionId ? { session_id: sessionId, session_user_id: member_id } : { user_id: member_id }),
             } satisfies GuildCreateEvent);
             return res.send({
                 ...guild,

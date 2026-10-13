@@ -59,6 +59,7 @@ export const checkToken = (
         ipAddress?: string;
         fingerprint?: string;
         federationRelay?: boolean;
+        propagateBans?: boolean;
     },
 ): Promise<UserTokenData> =>
     new Promise((resolve, reject) => {
@@ -146,7 +147,7 @@ export const checkToken = (
                       userId: user.id,
                       ipAddress: opts?.ipAddress,
                       fingerprint: opts?.fingerprint,
-                      propagateBan: true,
+                      propagateBan: opts?.propagateBans ?? true,
                   })
                 : [];
             if (banReasons.length > 0) {
@@ -228,7 +229,7 @@ export const hashOAuth2Token = (token: string) => crypto.createHash("sha256").up
 
 export const isOAuth2AccessToken = (authorization: string) => /^Bearer [A-Za-z0-9_-]{20,}$/.test(authorization);
 
-export async function checkOAuth2Token(authorization: string, opts?: { ipAddress?: string; fingerprint?: string }): Promise<UserTokenData> {
+export async function checkOAuth2Token(authorization: string, opts?: { ipAddress?: string; fingerprint?: string; propagateBans?: boolean }): Promise<UserTokenData> {
     const token = await OAuth2Token.findOne({
         where: {
             access_token_hash: hashOAuth2Token(authorization.slice("Bearer ".length)),
@@ -249,7 +250,7 @@ export async function checkOAuth2Token(authorization: string, opts?: { ipAddress
             userId: user.id,
             ipAddress: opts?.ipAddress,
             fingerprint: opts?.fingerprint,
-            propagateBan: true,
+            propagateBan: opts?.propagateBans ?? true,
         });
         if (banReasons.length > 0) throw new HTTPError("Invalid Token", 418);
     }

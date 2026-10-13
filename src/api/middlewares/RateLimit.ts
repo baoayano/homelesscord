@@ -13,9 +13,26 @@ type RateLimit = {
     hits: number;
     blocked: boolean;
     expires_at: Date;
+    max_hits?: number;
+    window?: number;
+    pending?: number;
+};
+
+type RouteLimit = {
+    paths: string[];
+    method?: "get" | "post" | "use";
+    bucket?: string;
+    count: number;
+    window: number;
+    onlyIp?: boolean;
 };
 
 const Cache = new Map<string, RateLimit>();
+const SharedHits = new Set<string>();
+const SharedFlushInterval = 250;
+let sharedCounting = false;
+let sharedTimer: ReturnType<typeof setInterval> | undefined;
+let sharing: Promise<void> | undefined;
 const EventRateLimit = "RATELIMIT";
 const InvalidRequestStatuses = new Set([401, 403, 429]);
 const MajorParameters = new Set(["channels", "guilds", "webhooks"]);
@@ -53,11 +70,57 @@ const startRateLimitPruning = () => {
             pruningStopped = true;
             clearInterval(pruningTimer);
             pruningTimer = undefined;
-            await pruning;
+            clearInterval(sharedTimer);
+            sharedTimer = undefined;
+            await Promise.all([pruning, sharing]);
         });
     }
     pruningTimer = setInterval(pruneRateLimits, 60_000).unref();
 };
+
+export function flushSharedRateLimits(): Promise<void> {
+    if (sharing) return sharing;
+    const batch = [...SharedHits].flatMap((key) => {
+        const entry = Cache.get(key);
+        return entry?.pending ? [{ key, entry, hits: entry.pending }] : [];
+    });
+    SharedHits.clear();
+    if (!batch.length) return Promise.resolve();
+    for (const { entry } of batch) entry.pending = 0;
+    const work = Promise.resolve()
+        .then(() => StoredRateLimit.addHits(batch.map(({ key, entry, hits }) => ({ id: key, executor_id: entry.executor_id, hits, window: entry.window ?? 1 }))))
+        .then((rows) => {
+            const totals = new Map(rows.map((row) => [row.id, row]));
+            for (const { key, entry } of batch) {
+                const row = totals.get(key);
+                if (!row || Cache.get(key) !== entry) continue;
+                entry.hits = row.hits + (entry.pending ?? 0);
+                entry.expires_at = row.expires_at;
+                if (entry.max_hits !== undefined && entry.hits >= entry.max_hits) entry.blocked = true;
+            }
+        })
+        .catch((error) => {
+            for (const { key, entry, hits } of batch) {
+                if (Cache.get(key) !== entry) continue;
+                entry.pending = (entry.pending ?? 0) + hits;
+                SharedHits.add(key);
+            }
+            console.error("[RateLimit] failed to share hits with other processes", error);
+        })
+        .finally(() => {
+            sharing = undefined;
+        });
+    sharing = work;
+    return work;
+}
+
+export function shareRateLimits(enabled: boolean) {
+    sharedCounting = enabled;
+    clearInterval(sharedTimer);
+    sharedTimer = undefined;
+    SharedHits.clear();
+    if (enabled) sharedTimer = setInterval(flushSharedRateLimits, SharedFlushInterval).unref?.();
+}
 
 export function addressBucket(address: string | undefined) {
     if (!address) return "127.0.0.1";
@@ -229,6 +292,7 @@ export async function initRateLimits(app: Router) {
     });
 
     startRateLimitPruning();
+    shareRateLimits(!!process.env.EVENT_TRANSMISSION || !!RabbitMQ.connection);
 
     app.use(rateLimit({ bucket: "ip", onlyIp: true, onlyAnonymous: true, global: true, ...ip }));
     app.use(rateLimit({ bucket: "global", onlyUsers: true, global: true, ...global }));
@@ -268,6 +332,54 @@ export async function initRateLimits(app: Router) {
     app.use("/auth/register", rateLimit({ onlyIp: true, success: true, ...routes.auth.register }));
     app.get("/auth/pride-badges", rateLimit({ bucket: "auth/pride-badges", onlyIp: true, count: 30, window: 60 }));
     app.get("/auth/instance-invite", rateLimit({ bucket: "auth/instance-invite", onlyIp: true, count: 30, window: 60 }));
+    applyRouteLimits(app, anonymousRouteLimits);
+}
+
+export const anonymousRouteLimits: RouteLimit[] = [
+    { paths: ["/-", "/ping"], count: 60, window: 30 },
+    { paths: ["/auth/cap"], count: 60, window: 30 },
+    { paths: ["/auth/captcha", "/auth/fingerprint", "/auth/location-metadata", "/apex/experiments", "/experiments"], count: 15, window: 30 },
+    { paths: ["/auth/password/validate", "/unique-username"], count: 30, window: 30 },
+    { paths: ["/data-packages"], bucket: "data-packages", count: 10, window: 60 },
+    { paths: ["/invites/:invite_code"], method: "get", bucket: "GET invites/:code", count: 30, window: 30 },
+    { paths: ["/guilds/templates/:template_code"], method: "get", bucket: "GET guilds/templates/:code", count: 15, window: 30 },
+    {
+        paths: ["/guilds/:guild_id/widget.json", "/guilds/:guild_id/widget.png", "/guilds/:guild_id/shield.svg"],
+        method: "get",
+        bucket: "guild-widget",
+        onlyIp: true,
+        count: 30,
+        window: 30,
+    },
+    { paths: ["/oembed"], count: 15, window: 30 },
+    { paths: ["/science", "/track"], count: 30, window: 30 },
+    { paths: ["/gateway", "/download", "/updates", "/incidents", "/scheduled-maintenances", "/status", "/policies"], count: 30, window: 30 },
+    { paths: ["/connections"], method: "get", count: 30, window: 30 },
+];
+
+export const topLevelRouteLimits: RouteLimit[] = [
+    { paths: ["/error-reporting-proxy"], onlyIp: true, count: 15, window: 30 },
+    { paths: ["/verify-email"], onlyIp: true, count: 10, window: 60 },
+    { paths: ["/healthz", "/readyz"], onlyIp: true, count: 60, window: 30 },
+    { paths: ["/static"], onlyIp: true, count: 300, window: 30 },
+    { paths: ["/.well-known"], onlyIp: true, count: 60, window: 30 },
+    { paths: ["/_spacebar/api/openapi.json", "/_spacebar/api/schemas.json"], onlyIp: true, count: 10, window: 30 },
+    { paths: ["/_spacebar/api"], count: 60, window: 30 },
+    { paths: ["/__development"], onlyIp: true, count: 15, window: 30 },
+    { paths: ["/widget"], onlyIp: true, count: 30, window: 30 },
+    { paths: ["/admin", "/developers", "/status", "/guidelines", "/privacy", "/terms", "/tos"], onlyIp: true, count: 60, window: 30 },
+    { paths: ["/"], method: "get", onlyIp: true, count: 60, window: 30 },
+];
+
+export const topLevelRateLimitExemptions = ["/federation/v2"];
+
+function applyRouteLimits(app: Router, limits: RouteLimit[]) {
+    for (const { paths, method = "use", ...options } of limits) app[method](paths, rateLimit(options));
+}
+
+export function initTopLevelRateLimits(app: Router) {
+    if (!Config.get().limits.rate.enabled) return;
+    applyRouteLimits(app, topLevelRouteLimits);
 }
 
 function hitRoute(opts: { key: string; executor_id: string; bucket_id: string; max_hits: number; window: number }) {
@@ -279,11 +391,18 @@ function hitRoute(opts: { key: string; executor_id: string; bucket_id: string; m
             expires_at: new Date(Date.now() + opts.window * 1000),
             hits: 0,
             blocked: false,
+            max_hits: opts.max_hits,
+            window: opts.window,
         };
         Cache.set(opts.key, limit);
     }
 
     limit.hits++;
+    limit.max_hits = opts.max_hits;
     if (limit.hits >= opts.max_hits) limit.blocked = true;
+    if (sharedCounting) {
+        limit.pending = (limit.pending ?? 0) + 1;
+        SharedHits.add(opts.key);
+    }
     return limit;
 }

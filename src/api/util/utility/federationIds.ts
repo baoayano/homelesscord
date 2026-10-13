@@ -9,6 +9,7 @@ import {
     JSONReplacer,
     parseCanonicalId,
     remoteHandle,
+    sanitizeRemoteUser,
     rewriteIncoming,
     rewriteOutgoing,
     Snowflake,
@@ -165,6 +166,7 @@ export async function fromWire<T>(value: T, sender: string, onUsers?: (users: Wi
         else {
             user.username = remoteHandle(String(user.username), parsed.instance);
             user.discriminator = "0";
+            sanitizeRemoteUser(user);
             const trusted = parsed.instance === sender;
             remote.push({ local_id: user.id, canonical: original, instance: parsed.instance, object: user, trusted });
             if (!trusted) local.push(user);

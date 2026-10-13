@@ -299,6 +299,10 @@ export async function consume(this: WebSocket, opts: EventOpts): Promise<void> {
 async function consumeEvent(this: WebSocket, opts: EventOpts): Promise<void> {
     if (this.resumedBy) return consume.call(resolveSocket(this), opts);
     const { data, event } = opts;
+    if (opts.session_user_id && opts.session_user_id !== this.user_id) {
+        opts.acknowledge?.();
+        return;
+    }
     const id = (opts.guild_id || opts.channel_id || opts.user_id || opts.session_id) as string;
     const guild_id = eventGuild(this, opts);
     let permission = guild_id ? (this.permissions[guild_id] ?? new Permissions(0)) : Permissions.DEFAULT_DM_PERMISSIONS;

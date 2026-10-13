@@ -128,10 +128,12 @@ router.post(
 
         if (!regTokenUsed && !register.allowMultipleAccounts) {
             // TODO: check if fingerprint was eligible generated
-            const exists = await User.findOne({
-                where: { fingerprints: body.fingerprint },
-                select: { id: true },
-            });
+            const exists = body.fingerprint
+                ? await User.findOne({
+                      where: { fingerprints: body.fingerprint },
+                      select: { id: true },
+                  })
+                : null;
 
             if (exists) {
                 throw FieldErrors({

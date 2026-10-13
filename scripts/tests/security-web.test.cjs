@@ -71,15 +71,64 @@ test("oauth2 redirect uris refuse script and local schemes", () => {
         assert.equal(isAllowedRedirectUri(uri), true, uri);
 });
 
+const corsModule = (config = { api: { endpointPublic: null }, cdn: { endpointPublic: "https://cdn.example.com" }, admin: {} }) =>
+    loadModule("src/api/middlewares/CORS.ts", { express: {}, "@spacebar/util": { Config: { get: () => config } } });
+
+function corsHeaders(origin, method = "GET") {
+    const { CORS } = corsModule();
+    const headers = {};
+    const res = {
+        set: (name, value) => {
+            headers[name.toLowerCase()] = value;
+            return res;
+        },
+        vary: (name) => {
+            headers.vary = name;
+            return res;
+        },
+        status: () => res,
+        end: () => res,
+    };
+    const requestHeaders = { Origin: origin, "Access-Control-Request-Headers": "authorization" };
+    CORS({ method, header: (name) => requestHeaders[name], get: () => "chat.example.com", protocol: "https", secure: true }, res, () => undefined);
+    return headers;
+}
+
+test("only the instance's own origins get credentialed cors responses", () => {
+    for (const origin of ["https://chat.example.com", "https://cdn.example.com"]) {
+        const headers = corsHeaders(origin, "OPTIONS");
+        assert.equal(headers["access-control-allow-origin"], origin);
+        assert.equal(headers["access-control-allow-credentials"], "true", origin);
+    }
+    for (const origin of ["https://evil.example", "http://chat.example.com", "https://chat.example.com.evil.example", "null"]) {
+        const headers = corsHeaders(origin, "OPTIONS");
+        assert.equal(headers["access-control-allow-origin"], origin);
+        assert.equal(headers["access-control-allow-credentials"], undefined, origin);
+        assert.equal(headers.vary, "Origin");
+    }
+    assert.equal(corsHeaders(undefined)["access-control-allow-origin"], "*");
+    assert.equal(corsHeaders(undefined)["access-control-allow-credentials"], undefined);
+});
+
+test("requests from other origins don't propagate instance bans or use the ban fingerprint cookie", () => {
+    const authentication = fs.readFileSync("src/api/middlewares/Authentication.ts", "utf8");
+    assert.match(authentication, /fingerprint: foreignOrigin \? undefined : req\.fingerprint/);
+    assert.match(authentication, /propagateBans: !foreignOrigin/);
+    const token = fs.readFileSync("src/util/util/Token.ts", "utf8");
+    assert.equal(token.match(/propagateBan: opts\?\.propagateBans \?\? true/g)?.length, 2);
+    assert.doesNotMatch(token, /propagateBan: true/);
+});
+
 test("pages refuse to be framed by other sites and the widget stays embeddable", () => {
-    const { CORS } = loadModule("src/api/middlewares/CORS.ts", { express: {} });
+    const { CORS } = corsModule();
     const headers = {};
     const res = {
         set: (name, value) => {
             headers[name.toLowerCase()] = value;
         },
+        vary: () => undefined,
     };
-    CORS({ method: "GET", header: () => undefined, secure: true }, res, () => undefined);
+    CORS({ method: "GET", header: () => undefined, get: () => "chat.example.com", protocol: "https", secure: true }, res, () => undefined);
     assert.match(headers["content-security-policy"], /frame-ancestors 'self'/);
     assert.equal(headers["x-content-type-options"], "nosniff");
     assert.equal(headers["referrer-policy"], "strict-origin-when-cross-origin");

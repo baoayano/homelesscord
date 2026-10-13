@@ -14,7 +14,7 @@ import {
     UserTokenData,
 } from "@spacebar/util";
 import { storageOwnership } from "../../cdn/util/storageOwnership";
-import { CORS } from "./CORS";
+import { CORS, isInstanceOrigin } from "./CORS";
 
 declare global {
     // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -65,7 +65,8 @@ export async function handleAuthentication(req: Request) {
         const relayHeader = req.headers["x-meowcord-relay"];
         req.federationRelay =
             typeof relayHeader === "string" && relayHeader === federationRelaySecret() && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
-        const options = { ipAddress: req.ip, fingerprint: req.fingerprint, federationRelay: req.federationRelay };
+        const foreignOrigin = !!req.headers.origin && !isInstanceOrigin(req, req.headers.origin);
+        const options = { ipAddress: req.ip, fingerprint: foreignOrigin ? undefined : req.fingerprint, federationRelay: req.federationRelay, propagateBans: !foreignOrigin };
         const { decoded, user, session, oauth2 } = (req.tokenData = isOAuth2AccessToken(req.headers.authorization)
             ? await checkOAuth2Token(req.headers.authorization, options)
             : await checkToken(req.headers.authorization, options));

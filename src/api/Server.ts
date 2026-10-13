@@ -24,7 +24,7 @@ import { ProcessLifecycle, SystemdLifecycle } from "../util/util/ProcessLifecycl
 import { outboundProxyStatus } from "../util/util/networking/SocksTransport";
 import { Monitoring } from "../util/monitoring/Monitoring";
 import { BcryptWorkerPool } from "../util/util/workers/bcrypt/BcryptWorkerPool";
-import { Authentication, CORS, ExternalProxy, ImageProxy, KlipyProxy, BodyParser, ErrorHandler, initRateLimits, initTranslation } from "./middlewares";
+import { Authentication, CORS, ExternalProxy, ImageProxy, KlipyProxy, BodyParser, ErrorHandler, initRateLimits, initTopLevelRateLimits, initTranslation } from "./middlewares";
 import { initInstance } from "./util/handlers/Instance";
 import { initEmbeddedActivities } from "./activities";
 import { recoverPendingPolls, dispatchMessagePush, startMessagePurger, startScheduledMessageSender, startThreadArchiver } from "./util";
@@ -104,6 +104,7 @@ export class SpacebarServer extends Server {
         const api = Router({ mergeParams: true });
 
         await initRateLimits(api);
+        initTopLevelRateLimits(this.app);
         await initTranslation(api);
         api.use(homeRelay);
 

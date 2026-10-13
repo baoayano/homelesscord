@@ -61,6 +61,7 @@ function harness(remove) {
             clearInterval: (timer) => {
                 if (timer) timer.cancelled = true;
             },
+            process: { env: {} },
         },
     );
     return { start: () => module.exports.initRateLimits(app), lifecycle, timers, deletions, errors };

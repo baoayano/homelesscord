@@ -51,7 +51,7 @@ const register = async (role) => {
         captcha_key: await solveCap({ origin }),
     });
     const user = await must("GET", "/users/@me", token);
-    return { token, id: user.id };
+    return { token, id: user.id, email: `${username}@security-probe.test` };
 };
 
 const gateway = (onOpen) =>
@@ -72,6 +72,22 @@ const gateway = (onOpen) =>
             if (frame.op === 10) onOpen(socket, frames);
         });
         socket.addEventListener("close", (event) => finish(event.code));
+    });
+
+const connect = (token) =>
+    new Promise((resolve, reject) => {
+        const socket = new WebSocket(`${origin.replace("http", "ws")}/?v=9&encoding=json`);
+        const frames = [];
+        const timer = setTimeout(() => reject(new Error("no READY within 8 seconds")), 8000);
+        socket.addEventListener("message", (event) => {
+            const frame = JSON.parse(String(event.data));
+            frames.push(frame);
+            if (frame.op === 10) identify(socket, token);
+            if (frame.t === "READY") {
+                clearTimeout(timer);
+                resolve({ socket, frames, session_id: frame.d.session_id });
+            }
+        });
     });
 
 const identify = (socket, token) => socket.send(JSON.stringify({ op: 2, d: { token, capabilities: 16381, properties: { os: "Mac OS X", browser: "probe" }, compress: false } }));
@@ -208,6 +224,70 @@ await check("changing the case or slashes of a path doesn't reset its rate limit
         if (previous !== undefined && remaining >= previous) return `${variant} got a fresh count of ${remaining}`;
         previous = remaining;
     }
+});
+
+await check("forgot password answers the same for a known and an unknown email", async () => {
+    const timed = async (login) => {
+        const started = performance.now();
+        const res = await request("POST", "/auth/forgot", null, { login });
+        return { status: res.status, text: res.text, ms: performance.now() - started };
+    };
+    const known = await timed(victim.email);
+    const unknown = await timed(`nobody_${randomBytes(4).toString("hex")}@security-probe.test`);
+    if (known.status !== unknown.status || known.text !== unknown.text) return `known: HTTP ${known.status} ${known.text}, unknown: HTTP ${unknown.status} ${unknown.text}`;
+    if (known.status !== 200 || !known.text.includes("password_reset")) return `HTTP ${known.status} ${known.text}`;
+    if (Math.min(known.ms, unknown.ms) < 380) return `answered in ${Math.round(known.ms)} and ${Math.round(unknown.ms)} ms, under the 400 ms floor`;
+    if (Math.abs(known.ms - unknown.ms) > 150) return `known took ${Math.round(known.ms)} ms, unknown took ${Math.round(unknown.ms)} ms`;
+});
+
+await check("top-level routes such as the error reporting proxy are rate limited by ip", async () => {
+    for (let i = 0; i < 40; i++) {
+        const res = await request("POST", `${origin}/error-reporting-proxy/web`, null, { probe: i });
+        if (res.status === 429) return;
+        if (!res.headers.get("x-ratelimit-limit")) return `HTTP ${res.status} without rate limit headers`;
+    }
+    return "40 reports were accepted in a row";
+});
+
+await check("anonymous invite lookups share one bucket instead of one per code", async () => {
+    const buckets = new Set();
+    for (const code of ["aaaaaaaa", "bbbbbbbb"]) buckets.add((await request("GET", `/invites/${code}`)).headers.get("x-ratelimit-bucket"));
+    if (buckets.size !== 1 || !buckets.has("GET invites/:code")) return `buckets ${[...buckets].join(", ")}`;
+});
+
+await check("cors only allows credentials for the instance's own origin", async () => {
+    const preflight = (from) =>
+        fetch(`${api}/users/@me`, { method: "OPTIONS", headers: { origin: from, "access-control-request-method": "GET", "access-control-request-headers": "authorization" } });
+    const foreign = await preflight("https://evil.example");
+    if (foreign.headers.get("access-control-allow-credentials")) return "a foreign origin got credentials";
+    const own = await preflight(origin);
+    if (own.headers.get("access-control-allow-credentials") !== "true") return "the instance's own origin lost credentials";
+});
+
+await check("the lurker join route only sends GUILD_CREATE to the caller's own session", async () => {
+    const watcher = await connect(victim.token);
+    const lurker = await connect(attacker.token);
+    try {
+        const patched = await request("PATCH", `/guilds/${victimGuild.id}`, victim.token, { features: ["DISCOVERABLE"] });
+        if (patched.status >= 300) return `making the guild discoverable failed with HTTP ${patched.status}`;
+        const before = watcher.frames.length;
+        const other = await request("PUT", `/guilds/${victimGuild.id}/members/@me?lurker=true&session_id=${watcher.session_id}`, attacker.token);
+        if (other.status >= 300) return `lurking failed with HTTP ${other.status}`;
+        const own = await request("PUT", `/guilds/${victimGuild.id}/members/@me?lurker=true&session_id=${lurker.session_id}`, attacker.token);
+        if (own.status >= 300) return `lurking with the caller's own session failed with HTTP ${own.status}`;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (watcher.frames.slice(before).some((frame) => frame.t === "GUILD_CREATE")) return "another user's session got GUILD_CREATE";
+        if (!lurker.frames.some((frame) => frame.t === "GUILD_CREATE" && frame.d?.id === victimGuild.id))
+            return `the caller's own session got no GUILD_CREATE, got ${lurker.frames.map((frame) => frame.t ?? frame.op).join(" ")} ${own.text.slice(0, 80)}`;
+    } finally {
+        watcher.socket.close();
+        lurker.socket.close();
+    }
+});
+
+await check("an interaction without an application id is refused instead of matching any application", async () => {
+    const res = await request("POST", "/interactions", attacker.token, { type: 3, channel_id: attackerChannel.id, data: { custom_id: "probe", component_type: 2 }, nonce: "1" });
+    if (res.json?.code !== 10002) return `HTTP ${res.status} ${res.text.slice(0, 120)}`;
 });
 
 for (const { name, pass, detail } of results) console.log(`${pass ? "pass" : "fail"}  ${name}${detail ? `  (${detail})` : ""}`);

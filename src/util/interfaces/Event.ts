@@ -23,6 +23,7 @@ export interface Event {
     guild_id?: string;
     user_id?: string;
     session_id?: string;
+    session_user_id?: string;
     channel_id?: string;
     created_at?: Date;
     event: EVENT;

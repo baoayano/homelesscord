@@ -475,6 +475,30 @@ async function main() {
             data: { guild_id: rogueGuild, user: { id: `@1300000000000000500@${THIRD}`, username: "carol", global_name: "Not Carol", discriminator: "0" }, roles: [] },
         },
     ]);
+    const forger = rc(77);
+    await inbox([
+        {
+            event: "GUILD_MEMBER_UPDATE",
+            guild_id: rogueGuild,
+            data: {
+                guild_id: rogueGuild,
+                user: {
+                    id: forger,
+                    username: "official",
+                    global_name: "Official",
+                    discriminator: "0",
+                    system: true,
+                    public_flags: (1 << 0) | (1 << 12) | (1 << 16) | (1 << 18) | (1 << 28) | (1 << 29) | (1 << 6),
+                },
+                roles: [],
+            },
+        },
+    ]);
+    check(
+        "a host can't give its users the OFFICIAL, SYSTEM, staff or verified tags",
+        psql(`SELECT public_flags FROM users WHERE id = ${quote(localOf(forger))}`) === String(1 << 6),
+        psql(`SELECT public_flags FROM users WHERE id = ${quote(localOf(forger))}`),
+    );
     const after = await call("GET", "/users/@me", alice.token);
     check("a host can't rewrite a local user's profile", after.body.username === aliceName && after.body.global_name !== "hacked");
     check(
