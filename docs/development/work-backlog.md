@@ -30,6 +30,7 @@ The native directory and customization popover use the backend catalog and persi
 - [x] Make mouse, touch, pen and keyboard reordering use the same pointer targets in Firefox and Chromium, with a grab cursor, drag preview and insertion line.
 - [x] Give owned badge details a title, description and known rarity without inventing acquisition dates or retired status.
 - [x] Show native Nitro progress for self and other profiles in both directory layouts using the badge owner's registration months.
+- [x] Forward Nitro tooltip clicks and keyboard activation to the native badge action so discovery opens the viewed account's Nitro details.
 
 ## Pride flags and profile badges (P1)
 

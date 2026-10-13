@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-import type { ReactElement } from "react";
+import type { ButtonHTMLAttributes, ReactElement } from "react";
 import { filters, mapMangledModuleLazy } from "@webpack";
 import { React } from "@webpack/common";
 
@@ -39,7 +39,7 @@ export const nitroTooltipBody = (badge: Badge) => {
     return `Nitro since ${new Intl.DateTimeFormat(navigator.language, { dateStyle: "short", timeZone: "UTC" }).format(date)}`;
 };
 
-export function renderNitroBadge(badge: Badge, image: ReactElement<{ src: string }>) {
+export function renderNitroBadge(badge: Badge, image: ReactElement<{ src: string }>, triggerProps: ButtonHTMLAttributes<HTMLButtonElement> = {}) {
     const tier = nitroTier(badge);
     if (!tier) return null;
     const artwork = tier.months === "0" ? image.props.src : (NativeArtwork.getArtwork(`premium_tenure_${tier.months}_month_v2`)?.standard ?? image.props.src);
@@ -47,13 +47,15 @@ export function renderNitroBadge(badge: Badge, image: ReactElement<{ src: string
         NativeTooltip.MiniTooltip,
         { key: badge.id, title: tier.title, body: nitroTooltipBody(badge), variant: "nitro", badgeImage: artwork, badgeName: tier.title },
         <button
+            {...triggerProps}
             type="button"
             tabIndex={0}
             aria-label={badge.description}
-            style={{ display: "inline-flex", background: "none", border: 0, padding: 0 }}
+            style={{ ...triggerProps.style, display: "inline-flex", background: "none", border: 0, padding: 0, cursor: "pointer" }}
             onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                triggerProps.onClick?.(event);
             }}
         >
             {image}

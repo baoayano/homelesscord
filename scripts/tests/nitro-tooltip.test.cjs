@@ -107,6 +107,26 @@ test("default cards reuse the bundled classic icon and have a caption when the d
     );
 });
 
+test("Nitro cards forward native directory clicks and preserve trigger behavior", () => {
+    const h = harness();
+    const event = { preventDefault() {}, stopPropagation() {} };
+    const clicks = [];
+    const hover = () => {};
+    const props = { onClick: (value) => clicks.push(value), onMouseEnter: hover, "aria-haspopup": "dialog", "aria-expanded": false, style: { filter: "none" } };
+    for (const months of [0, 1, 3, 6, 12, 24, 36, 60, 72]) {
+        const card = h.renderNitroBadge(badge(months), { props: { src: "/badge-icons/fixture.png" } }, props);
+        const trigger = card.props.children[0];
+        trigger.props.onClick(event);
+        assert.equal(trigger.props.onMouseEnter, hover);
+        assert.equal(trigger.props["aria-haspopup"], "dialog");
+        assert.equal(trigger.props["aria-expanded"], false);
+        assert.equal(trigger.props.style.filter, "none");
+        assert.equal(trigger.props.style.cursor, "pointer");
+    }
+    assert.equal(clicks.length, 9);
+    assert.ok(clicks.every((value) => value === event));
+});
+
 test("the native profile patch matches the cached module and preserves syntax without enabling experiments", () => {
     const plugin = load("client/plugins/fosscordNitroBadges/index.ts", {
         "@utils/types": { default: (value) => value, __esModule: true },
@@ -135,6 +155,6 @@ test("the native profile patch matches the cached module and preserves syntax wi
     assert.ok(match.test(withBadgeApi), "native card interception survives the upstream badge component wrapper");
     assert.doesNotThrow(() => new Function("e", "t", "n", withBadgeApi.replace(match, patch.replacement.replace.replaceAll("$self", "FosscordNitroBadges"))));
     const changed = original.replace(match, patch.replacement.replace.replaceAll("$self", "FosscordNitroBadges"));
-    assert.ok(changed.includes("if(FosscordNitroBadges.isNitroBadge(e))return FosscordNitroBadges.renderNitroBadge(e,d);"));
+    assert.ok(changed.includes("if(FosscordNitroBadges.isNitroBadge(e))return FosscordNitroBadges.renderNitroBadge(e,d,u);"));
     assert.doesNotThrow(() => new Function("e", "t", "n", changed));
 });

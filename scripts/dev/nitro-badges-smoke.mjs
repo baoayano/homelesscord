@@ -22,7 +22,7 @@ const login = async (login, password) => {
     assert.equal(response.status, 200, "fixture login");
     return response.json();
 };
-const [self, friend] = await Promise.all([login(accounts.TEST_EMAIL, accounts.TEST_PASSWORD), login("friend@fosscord.test", accounts.FRIEND_PASSWORD)]);
+const self = await login(accounts.TEST_EMAIL, accounts.TEST_PASSWORD);
 const response = await fetch(`${origin}/api/v9/users/@me/profile`, { headers: { authorization: self.token } });
 assert.equal(response.status, 200);
 const profile = await response.json();
@@ -54,12 +54,19 @@ for (const badge of manifest.badges) {
     );
 }
 
-const browser = await playwright.chromium.launch({ executablePath: process.env.CHROME_PATH || playwright.chromium.executablePath(), headless: true });
+const engine = process.env.BROWSER || "chromium";
+assert.ok(["chromium", "firefox"].includes(engine), "supported browser");
+const browser = await playwright[engine].launch({
+    ...(engine === "chromium" ? { executablePath: process.env.CHROME_PATH || playwright.chromium.executablePath() } : {}),
+    headless: true,
+});
 try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    await context.addInitScript((token) => localStorage.setItem("token", JSON.stringify(token)), friend.token);
     const page = await context.newPage();
-    await page.goto(`${origin}/channels/@me`);
+    await page.goto(`${origin}/login`);
+    await page.locator('input[name="email"]').fill("friend@fosscord.test");
+    await page.locator('input[name="password"]').fill(accounts.FRIEND_PASSWORD);
+    await page.locator('button[type="submit"]').click();
     await page.getByRole("button", { name: "User Settings", exact: true }).waitFor({ timeout: 45000 });
     await page.getByText("All", { exact: true }).first().click();
     await page
@@ -91,8 +98,19 @@ try {
     for (const image of await card.locator("img").all()) assert.equal(new URL(await image.getAttribute("src"), origin).origin, origin, "tooltip artwork is local");
     const link = await image.evaluate((element) => element.closest("a")?.getAttribute("href") ?? null);
     assert.equal(link, null, "badge does not link to a subscription page");
+    const checkDirectory = async () => {
+        const directory = page.locator("[data-fosscord-badge-directory]");
+        await directory.waitFor();
+        await directory.locator('[role="tab"][aria-selected="true"]').waitFor();
+        assert.equal(await directory.locator('[role="tab"][aria-selected="true"]').getAttribute("id"), "badge-tab-1", "click selects Nitro");
+        await directory.getByText(`Nitro since ${profile.premium_since.slice(0, 10)}`, { exact: true }).waitFor();
+        assert.ok((await directory.innerText()).includes(`Nitro since ${profile.premium_since.slice(0, 10)}`), "directory follows the clicked badge owner");
+        assert.equal(await directory.getByRole("button", { name: /buy|subscribe|renew|nitro home|gift/i }).count(), 0, "no subscription actions");
+        await directory.getByRole("button", { name: "Close", exact: true }).click();
+        await directory.waitFor({ state: "hidden" });
+    };
     await trigger.click();
-    assert.equal(await page.getByRole("dialog").count(), 0, "badge click does not open a subscription modal");
+    await checkDirectory();
     await page.mouse.move(0, 0);
     await page.getByText("View Full Profile", { exact: true }).click();
     const expanded = page.getByRole("dialog").filter({ has: page.locator(selector) });
@@ -111,6 +129,11 @@ try {
     assert.ok((await card.innerText()).includes(titles[months]), "keyboard focus opens the native card");
     if (process.env.NITRO_CARD_SCREENSHOT) await card.screenshot({ path: process.env.NITRO_CARD_SCREENSHOT, animations: "disabled" });
     if (process.env.NITRO_SMOKE_SCREENSHOT) await page.screenshot({ path: process.env.NITRO_SMOKE_SCREENSHOT });
+    await page.keyboard.press("Enter");
+    await checkDirectory();
+    await expandedImage.locator("..").focus();
+    await page.keyboard.press("Space");
+    await checkDirectory();
     console.log(
         JSON.stringify({
             badge: nitro[0].id,
@@ -119,6 +142,8 @@ try {
             tooltip,
             side_profile: "passed",
             expanded_profile: "passed",
+            directory_click_and_keyboard: "passed",
+            browser: engine,
         }),
     );
 } finally {

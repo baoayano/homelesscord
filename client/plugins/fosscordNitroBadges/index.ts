@@ -16,8 +16,8 @@ export default definePlugin({
         {
             find: "UserProfileBadgeListRows",
             replacement: {
-                match: /(?=if\(\i\)return\(0,\i\.jsx\)\(\i,\{shouldShow:!\i,legacyBadgeId:(\i)\.id,[\s\S]{0,650}?\(0,\i\.jsx\)\(\i\.Anchor,\{[^{}]*?children:(\i)\}\)\})/,
-                replace: "if($self.isNitroBadge($1))return $self.renderNitroBadge($1,$2);",
+                match: /(?=if\(\i\)return\(0,\i\.jsx\)\(\i,\{shouldShow:!\i,legacyBadgeId:(\i)\.id,[\s\S]{0,650}?\(0,\i\.jsx\)\(\i\.Anchor,\{\.\.\.(\i),children:(\i)\}\)\})/,
+                replace: "if($self.isNitroBadge($1))return $self.renderNitroBadge($1,$3,$2);",
             },
         },
     ],

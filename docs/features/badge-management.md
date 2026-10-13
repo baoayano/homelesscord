@@ -2,6 +2,8 @@
 
 The required FosscordBadgeManagement plugin connects the native badge directory and customization popover to the server catalog. Open User Settings, Profiles, Your badges, View Badges, then Customize Your Badges. The profile badge pencil opens the same popover. Drag any visible badge, including Staff and Nitro, or use Move to Front and Move to Back. Hide or unhide eligible badges from More options, then choose Save. Reset discards pending edits.
 
+The free Nitro tooltip forwards the native profile badge action, including mouse clicks, Enter and Space. Badge discovery opens the viewed account's directory with Nitro selected. Own-profile customization retains the same native action as other badges. Hover and focus still show the Nitro card, and no subscription action is added.
+
 The editor uses pointer events for mouse, touch and pen dragging. The badge shows a grab cursor, follows the pointer in a small preview, and shows an insertion line before the drop. A valid drop changes the pending order; Save persists it. Releasing outside the popover or pressing Escape cancels the drag. The grip supports Space or Enter to pick up, arrow keys, Home and End to choose a position, Enter to drop and Escape to cancel. Staff and Nitro can move like other visible badges. Reduced motion disables the short reorder animation.
 
 While the directory is open, an existing profile popout and its frame stay rendered below the modal backdrop. Outside clicks reach the backdrop instead of the profile. The directory, its badge previews and other customization popovers remain above it. Closing the directory restores the profile's original layer without remounting it or discarding drafts.
