@@ -228,7 +228,7 @@ Start with `scripts/dev; scripts/tests`.
 
 Start with `CONTRIBUTING.MD; docs/self-hosting/native.md; docs/self-hosting/deploy.md; scripts/client.js`.
 
-Downstream remote setup, update checks and merge preparation are available through `fork:connect`, `upstream:check` and `upstream:sync`, described in [downstream.md](downstream.md). Automated PR updates remain deferred until the downstream's first verified release.
+Downstream remote setup, update checks and merge preparation are available through `fork:connect`, `upstream:check` and `upstream:sync`, described in [downstream.md](downstream.md). The 2026-10-13 sync integrates 57 upstream commits through `8c47a77`. Automated PR updates remain deferred until the downstream's first verified release.
 
 - [ ] **OPS-001** Refresh upstream history and report whether new commits need integration.
 - [ ] **OPS-002** Keep normal pushes directly to main within the user-authorized workflow.
@@ -240,7 +240,7 @@ Downstream remote setup, update checks and merge preparation are available throu
 - [ ] **OPS-010** Keep private keys, credentials and test accounts out of Git. Runtime environment variants are ignored while `.env.example` stays public, and a regression covers environment files, recovery keys, generated account files and client caches. Arbitrary filenames and historical secret scanning remain open.
 - [ ] **OPS-011** Check rollback and asset-cache behavior after client updates.
 - [ ] **OPS-012** Document benchmark and browser limitations honestly.
-- [ ] **OPS-013** Close the OpenAPI discovery gaps: five routes without route middleware, 21 unresolved response schemas and 260 missing response declarations.
+- [ ] **OPS-013** Close the OpenAPI discovery gaps: five routes without route middleware, 21 unresolved response schemas and 344 missing response declarations. The 2026-10-13 specification contains 622 paths and 626 schemas.
 - [ ] **PATCH-020** Integrate the held widget asset upload changes from the supplied `fosscord-changes.patch`: `src/api/routes/users/@me/widgets/assets/upload.ts`, `src/api/util/handlers/ProfileWidgetSelection.ts`, `src/cdn/routes/widget-assets.ts`, `src/util/util/WidgetUploads.ts` and its export in `src/util/util/index.ts`. The supplied upload parser runs before authorization, signed URLs allow replay, pending uploads have no durable reservation or expiry cleanup, saved files have no persistent quota and the public read buffers whole files. They need durable bounded reservations and storage accounting first.
 - [ ] **TLS-001** Repair shared-port HTTP and HTTPS under Bun. Both answer plain HTTP but fail TLS negotiation on the same port. A separate `HTTPS_PORT` works for HTTP/2 and HTTP/1.1 and is the documented configuration until this is fixed.
 

@@ -216,7 +216,7 @@
                     "length": {
                         "type": "integer"
                     },
-                    "__@unscopables@754": {
+                    "__@unscopables@756": {
                         "type": "object",
                         "additionalProperties": false,
                         "patternProperties": {
@@ -342,17 +342,17 @@
                             "with": {
                                 "type": "boolean"
                             },
-                            "__@iterator@752": {
+                            "__@iterator@754": {
                                 "type": "boolean"
                             },
-                            "__@unscopables@754": {
+                            "__@unscopables@756": {
                                 "type": "boolean"
                             }
                         }
                     }
                 },
                 "required": [
-                    "__@unscopables@754",
+                    "__@unscopables@756",
                     "length"
                 ]
             },
@@ -3996,6 +3996,16 @@
                     "discovery_excluded": {
                         "type": "boolean"
                     },
+                    "global_discovery": {
+                        "type": "boolean"
+                    },
+                    "global_discovery_hidden": {
+                        "type": "boolean"
+                    },
+                    "federated_instance": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "vanity_url_code": {
                         "type": "string",
                         "nullable": true
@@ -4132,6 +4142,8 @@
                     "emojis",
                     "features",
                     "get_annotations",
+                    "global_discovery",
+                    "global_discovery_hidden",
                     "id",
                     "insert",
                     "invites",
@@ -11955,6 +11967,107 @@
                     "user_ids"
                 ]
             },
+            "GuildGlobalDiscoverySchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "enabled"
+                ]
+            },
+            "AdminFederationSettingsSchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "registryUrl": {
+                        "maxLength": 512,
+                        "type": "string"
+                    },
+                    "registryPublicKey": {
+                        "maxLength": 64,
+                        "type": "string"
+                    },
+                    "announce": {
+                        "type": "boolean"
+                    },
+                    "allowUnlistedPeers": {
+                        "type": "boolean"
+                    },
+                    "peers": {
+                        "maxItems": 200,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "verification": {
+                        "enum": [
+                            "instance",
+                            "registry"
+                        ],
+                        "type": "string"
+                    }
+                }
+            },
+            "AdminFederationBlockSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "enum": [
+                            "guild",
+                            "instance",
+                            "user"
+                        ],
+                        "type": "string"
+                    },
+                    "target": {
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "type": "string"
+                    },
+                    "reason": {
+                        "maxLength": 1000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "kind",
+                    "target"
+                ]
+            },
+            "AdminFederationGuildSchema": {
+                "type": "object",
+                "properties": {
+                    "hidden": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "hidden"
+                ]
+            },
+            "AdminFederationVerifySchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "type": "string"
+                    },
+                    "verified": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "id",
+                    "verified"
+                ]
+            },
             "IdentifySchema": {
                 "type": "object",
                 "properties": {
@@ -12826,7 +12939,7 @@
                             "length": {
                                 "type": "integer"
                             },
-                            "__@unscopables@754": {
+                            "__@unscopables@756": {
                                 "type": "object",
                                 "additionalProperties": false,
                                 "patternProperties": {
@@ -12952,17 +13065,17 @@
                                     "with": {
                                         "type": "boolean"
                                     },
-                                    "__@iterator@752": {
+                                    "__@iterator@754": {
                                         "type": "boolean"
                                     },
-                                    "__@unscopables@754": {
+                                    "__@unscopables@756": {
                                         "type": "boolean"
                                     }
                                 }
                             }
                         },
                         "required": [
-                            "__@unscopables@754",
+                            "__@unscopables@756",
                             "length"
                         ]
                     },
@@ -14263,6 +14376,10 @@
                         "type": "integer",
                         "default": 0
                     },
+                    "federated_instance": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "default_thread_rate_limit_per_user": {
                         "type": "integer",
                         "default": 0
@@ -14713,6 +14830,10 @@
                     },
                     "avatar_decoration_id": {
                         "type": "string"
+                    },
+                    "federated_instance": {
+                        "type": "string",
+                        "nullable": true
                     },
                     "tag": {
                         "type": "string"
@@ -16151,6 +16272,18 @@
                         "type": "boolean",
                         "default": false
                     },
+                    "global_discovery": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "global_discovery_hidden": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "federated_instance": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "vanity_url_code": {
                         "type": "string",
                         "nullable": true
@@ -16255,6 +16388,8 @@
                     "discovery_weight",
                     "emojis",
                     "features",
+                    "global_discovery",
+                    "global_discovery_hidden",
                     "id",
                     "invites",
                     "members",
@@ -23933,6 +24068,9 @@
             "name": "error-reporting-proxy"
         },
         {
+            "name": "federation"
+        },
+        {
             "name": "guidelines"
         },
         {
@@ -24955,6 +25093,414 @@
                         "description": "name"
                     }
                 ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/announce/": {
+            "post": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Send a signed announce to the registry now, even when daily announces are off",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/blocks/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "This instance's own federation blocks, on top of the registry's",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Block an instance by id, or a server or user by canonical id",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminFederationBlockSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/blocks/{block_id}/": {
+            "delete": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Lift one of this instance's own blocks. Registry blocks can't be lifted here.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "block_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "block_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/delivery/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Event delivery to each other instance: queue length, totals, the last error and whether it is unreachable",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/guilds/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Local servers whose owners turned on Show on other instances, with their registry status",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/guilds/{guild_id}/": {
+            "patch": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Hide a server from other instances, or show it again. The owner's switch stays as it is.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminFederationGuildSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Federation settings, this instance's identity, the registry sync and announce state, and peer fetch results",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/refresh/": {
+            "post": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Fetch the registry document now and refresh peer discovery lists",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/registry/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "The last registry document this instance accepted: approved instances, blocks and the discovery index",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/settings/": {
+            "patch": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Change federation settings. The peer list replaces the stored list.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminFederationSettingsSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/shadows/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Users and servers from other instances that this instance stores, newest first",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/verified/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Servers from the discovery lists of approved instances and peers, and whether this instance's admins verified them",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Verify a remote server for this instance's Discovery, or take the verification back",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminFederationVerifySchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
                 "tags": [
                     "api"
                 ],
@@ -36067,6 +36613,180 @@
                 ]
             }
         },
+        "/api/federation/discovery/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Other instances from the registry and the servers they list for global discovery, with icons through this instance's media proxy",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/federation/invites/{instance}/{code}/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Preview an invite of a server on another instance, fetched through this instance",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "instance",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "instance"
+                    },
+                    {
+                        "name": "code",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "code"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            },
+            "post": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Join a server on another instance through one of its invites. Answers like POST /invites/:code",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "instance",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "instance"
+                    },
+                    {
+                        "name": "code",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "code"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/federation/objects/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Canonical @id@instance ids for local ids, at most 100",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "ids",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Comma separated local ids"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/federation/users/lookup/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Resolve a name@instance handle to a user with a local id, for friend requests and DMs",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "handle",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "name@instance"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/games/autocomplete/": {
             "get": {
                 "security": [
@@ -38869,6 +39589,72 @@
                         "bearer": []
                     }
                 ],
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/guilds/{guild_id}/global-discovery/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Whether this server shows on other instances, for its owner",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            },
+            "patch": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Turn Show on other instances on or off. Turning it on creates a permanent invite when the server has none.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/GuildGlobalDiscoverySchema"
+                            }
+                        }
+                    }
+                },
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -52539,6 +53325,50 @@
                 ]
             }
         },
+        "/.well-known/meowcord/discovery/": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "Signed list of this instance's servers whose owners turned on Show on other instances",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    ""
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/.well-known/meowcord/": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "This instance's federation identity: protocol version, instance id, public key and registration state",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    ""
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/.well-known/spacebar/client/": {
             "get": {
                 "security": [
@@ -52946,6 +53776,215 @@
                 },
                 "tags": [
                     "error-reporting-proxy"
+                ]
+            }
+        },
+        "/federation/v2/guilds/{guild_id}/snapshot/": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "A server as one remote member sees it. Needs a signed request from that member's home instance.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/inbox/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "Gateway events from a host instance for this instance's users. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/join/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "Join a remote user to a server through an invite and answer the server snapshot. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/relay/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "Run an API call as a remote user's shadow. Needs a signed request from that user's home instance.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/users/lookup": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "Public profile of one of this instance's users by username. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/users/{user_id}": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "Public profile of one of this instance's users by canonical id. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/users/{user_id}/e2ee": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "description": "Encryption keys of one of this instance's users, as /e2ee/keys/query answers them. Only for instances with a user who shares a conversation or friendship with them. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/voice/state/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "Join, move or leave a voice channel as a remote user's shadow, like gateway op 4 for a local user. Needs a signed request from that user's home instance.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
                 ]
             }
         },
