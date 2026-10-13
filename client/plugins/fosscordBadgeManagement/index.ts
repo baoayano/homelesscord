@@ -76,8 +76,6 @@ export default definePlugin({
                     match: /\(0,\i\.\i\)\((\i),(\i),\{pendingBadgeDisplayOrder:(\i),pendingBadgeHiddenBadges:(\i)\}\)/,
                     replace: "$self.previewBadges($1,$2,{pendingBadgeDisplayOrder:$3,pendingBadgeHiddenBadges:$4})",
                 },
-                { match: /Math\.max\(\i\.length-\i\.\i,0\)/, replace: "0" },
-                { match: /\[(\i)\.slice\(0,\i\.\i\)\]/, replace: "[$1]" },
                 { match: /(role:"dialog",tabIndex:-1,)/, replace: '$1"data-fosscord-badge-customization":"",' },
                 { match: /targetElementRef:\i&&!\i\?(\i):\i,position:"bottom",align:"left",spacing:4/, replace: 'targetElementRef:$1,position:"bottom",align:"left",spacing:4' },
                 {

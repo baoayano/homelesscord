@@ -142,6 +142,26 @@ test("badge details wait for the viewer badge before reading its fields", () => 
     assert.equal(showLegacyAction({ badge_id: 99, is_legacy: false }, helpers, false, { $: { STAFF: 22 } }), null);
 });
 
+test("profile badge overflow keeps the native visible limit and remaining count", () => {
+    const plugin = load("client/plugins/fosscordBadgeManagement/index.ts", {
+        "@utils/types": { default: (value) => value, __esModule: true },
+        "../fosscordCore/shared": { FosscordAuthor: {} },
+        "./bridge": {},
+        "./style.css?managed": { default: "", __esModule: true },
+    }).default;
+    const rows = plugin.patches.find((patch) => patch.find === "UserProfileBadgeListRows");
+    let source = "let P=M?Math.max(b.length-d.k9,0):0;let t=M?[b.slice(0,d.k9)]:[b];";
+    for (const replacement of rows.replacement) {
+        const pattern = replacement.match.source.replaceAll("\\i", "[A-Za-z_$][\\w$]*");
+        source = source.replace(new RegExp(pattern, replacement.match.flags), replacement.replace.replaceAll("$self", "BadgeManagement"));
+    }
+    const render = new Function("badges", "limit", "enabled", `const b=badges,d={k9:limit},M=enabled;${source}return {count:P,visible:t[0]};`);
+    const badges = Array.from({ length: 9 }, (_, index) => index);
+    assert.deepEqual(render(badges, 6, true), { count: 3, visible: badges.slice(0, 6) });
+    assert.deepEqual(render(badges.slice(0, 5), 6, true), { count: 0, visible: badges.slice(0, 5) });
+    assert.deepEqual(render(badges, 6, false), { count: 0, visible: badges });
+});
+
 test("every management patch matches the reviewed native module and preserves its syntax", () => {
     const plugin = load("client/plugins/fosscordBadgeManagement/index.ts", {
         "@utils/types": { default: (v) => v, __esModule: true },
