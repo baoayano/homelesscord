@@ -8,6 +8,7 @@ import { SSRCs } from "@spacebarchat/spacebar-webrtc-types";
 import { subscribeToProducers } from "./Video";
 import { relaySpeaking } from "./Speaking";
 import { VoiceSessions } from "../util/VoiceSessions";
+import { daveIdOf } from "../util/DaveIdentity";
 
 export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
     const { server_id, user_id, session_id, token, streams, max_dave_protocol_version, max_secure_frames_version } = validateSchema(
@@ -31,8 +32,8 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
 
     if (this.federation) {
         const shadow = await User.findOne({ where: { id: user_id }, select: { id: true, federated_instance: true } });
-        if (!voiceState?.guild_id || voiceState.guild_id !== server_id || shadow?.federated_instance !== this.federation.sender)
-            return this.close(CLOSECODES.Authentication_failed);
+        const call = voiceState && (voiceState.guild_id ? voiceState.guild_id === server_id : voiceState.channel_id === server_id);
+        if (shadow?.federated_instance !== this.federation.sender || (voiceState && !call)) return this.close(CLOSECODES.Authentication_failed);
     }
 
     if (voiceState) {
@@ -42,7 +43,7 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
         if (mirrored) return this.close(CLOSECODES.Authentication_failed);
         type = voiceState.guild_id === server_id ? "guild-voice" : "dm-voice";
         authenticated = true;
-    } else if (!this.federation) {
+    } else {
         // if its not a guild/dm voice connection, check if it is a go live stream
         const streamSession = await StreamSession.findOne({
             where: {
@@ -81,11 +82,14 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
 
     // if it doesnt match any then not valid token
     if (!authenticated) return this.close(CLOSECODES.Authentication_failed);
+    const daveId = await daveIdOf(user_id);
+    if (!daveId) return this.close(CLOSECODES.Authentication_failed);
 
     if (this.readyState !== 1) return;
     clearTimeout(this.readyTimeout);
 
     this.user_id = user_id;
+    this.daveId = daveId;
     this.session_id = session_id;
 
     this.type = type;
@@ -131,7 +135,7 @@ export async function onIdentify(this: WebRtcWebSocket, data: VoicePayload) {
         this.sessionCleanups = [...(this.sessionCleanups ?? []), unlisten];
     }
 
-    if (this.federation) {
+    if (this.federation && type !== "stream") {
         const key = `${user_id}:${session_id}`;
         FederatedVoice.connected.add(key);
         const leave = async () => {

@@ -9,11 +9,15 @@ const router = Router({ mergeParams: true });
 
 router.get(
     "/",
-    route({ right: "OPERATOR", spacebarOnly: true, description: "Local servers whose owners turned on Show on other instances, with their registry status" }),
+    route({
+        right: "OPERATOR",
+        spacebarOnly: true,
+        description: "Local servers whose owners turned on Show on other instances, with whether this instance verified them and their registry status",
+    }),
     async (req: Request, res: Response) => {
         const guilds = await Guild.find({
             where: { global_discovery: true },
-            select: { id: true, name: true, icon: true, member_count: true, owner_id: true, global_discovery_hidden: true },
+            select: { id: true, name: true, icon: true, member_count: true, owner_id: true, global_discovery_hidden: true, global_discovery_verified: true },
             order: { member_count: "DESC" },
             take: 1000,
         });
@@ -34,6 +38,7 @@ router.get(
                         member_count: guild.member_count ?? 0,
                         owner_id: guild.owner_id,
                         hidden: guild.global_discovery_hidden,
+                        verified: guild.global_discovery_verified,
                         invite_url: invite && url ? `${url}/invite/${invite}` : null,
                         registry_status: !canonical ? "unknown" : guildRegistryStatus(document, canonical, local),
                         verification: mode,

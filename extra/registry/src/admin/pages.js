@@ -1,6 +1,6 @@
-import { blockFor, logEvent, nowIso, removeBlock, setBlock } from "../db.js";
+import { blockFor, hitRateLimit, logEvent, nowIso, removeBlock, setBlock } from "../db.js";
 import { refreshInstance } from "../instances.js";
-import { allowsPrivateHosts, parseInstanceId } from "../net.js";
+import { allowsPrivateHosts, parseInstanceId, rateLimitBucket } from "../net.js";
 import { currentPublication, instanceState, publish } from "../registry.js";
 import { html, page, time } from "./html.js";
 import { currentSession, endSession, finishLogin, oidcConfigured, startLogin } from "./oidc.js";
@@ -83,8 +83,8 @@ function discoveryItem(row, back) {
     const actions = [];
     if (row.blocked) actions.push(["unblock", "Unblock", ""]);
     else {
-        if (row.status !== "verified") actions.push(["verify", "Verify", "primary"]);
-        if (row.status !== "rejected") actions.push(["reject", "Reject", ""]);
+        if (row.status !== "verified") actions.push(["verify", "List again", "primary"]);
+        if (row.status !== "rejected") actions.push(["reject", "Remove from discovery", ""]);
         actions.push(["block", "Block", "danger"]);
     }
     return html`<article class="card item">
@@ -95,7 +95,7 @@ ${row.description ? html`<p class="description">${row.description}</p>` : ""}
 <span>${row.member_count} members</span>
 <a href="${row.invite_url}" rel="noreferrer noopener" target="_blank">Invite page</a>
 <span>Updated ${time(row.updated_at)}</span>
-${row.verified_at ? html`<span>Verified ${time(row.verified_at)}</span>` : ""}
+${row.verified_at ? html`<span>Listed ${time(row.verified_at)}</span>` : ""}
 </div>
 ${row.block_reason || row.reason ? html`<div class="meta"><span>Reason: ${row.block_reason || row.reason}</span></div>` : ""}
 <form class="actions" method="post" action="/admin/discovery">
@@ -121,9 +121,9 @@ async function overview(env, session, url) {
         env.DB.prepare(
             "SELECT SUM(status = 'pending' AND id NOT IN (SELECT id FROM blocks WHERE kind = 'instance')) AS pending, SUM(status = 'approved' AND id NOT IN (SELECT id FROM blocks WHERE kind = 'instance')) AS approved, COUNT(*) AS total FROM instances",
         ),
-        env.DB.prepare("SELECT SUM(status = 'pending' AND present = 1) AS pending, SUM(status = 'verified' AND present = 1) AS verified FROM discovery"),
+        env.DB.prepare("SELECT SUM(status = 'rejected' AND present = 1) AS pending, SUM(status = 'verified' AND present = 1) AS verified FROM discovery"),
         env.DB.prepare(`${instanceSelect} WHERE i.status = 'pending' AND b.id IS NULL ORDER BY i.created_at LIMIT 10`),
-        env.DB.prepare(`${discoverySelect} WHERE d.status = 'pending' AND d.present = 1 AND b.id IS NULL ORDER BY d.created_at LIMIT 10`),
+        env.DB.prepare(`${discoverySelect} WHERE d.status = 'verified' AND d.present = 1 AND b.id IS NULL ORDER BY d.created_at DESC LIMIT 10`),
         env.DB.prepare("SELECT COUNT(*) AS count FROM events WHERE level = 'error' AND at > ?").bind(nowIso(Date.now() - 24 * 60 * 60 * 1000)),
     ]);
     const publication = await currentPublication(env);
@@ -133,8 +133,8 @@ async function overview(env, session, url) {
 <div class="stats">
 <div class="card stat"><span class="muted">Instances waiting</span><strong>${c.pending ?? 0}</strong></div>
 <div class="card stat"><span class="muted">Approved instances</span><strong>${c.approved ?? 0}</strong></div>
-<div class="card stat"><span class="muted">Servers waiting</span><strong>${d.pending ?? 0}</strong></div>
-<div class="card stat"><span class="muted">Verified servers</span><strong>${d.verified ?? 0}</strong></div>
+<div class="card stat"><span class="muted">Servers removed by us</span><strong>${d.pending ?? 0}</strong></div>
+<div class="card stat"><span class="muted">Listed servers</span><strong>${d.verified ?? 0}</strong></div>
 <div class="card stat"><span class="muted">Errors in the last day</span><strong><a href="/admin/activity?level=error">${errors.results[0].count}</a></strong></div>
 </div>
 <h2>Published document</h2>
@@ -148,8 +148,8 @@ ${
 </div>
 <h2>Instances waiting for review</h2>
 ${pendingInstances.results.length ? html`<div class="list">${pendingInstances.results.map((row) => instanceItem(row, "/admin"))}</div>` : html`<div class="card empty">No instance is waiting. New ones show up here when they announce themselves.</div>`}
-<h2>Servers waiting for review</h2>
-${pendingDiscovery.results.length ? html`<div class="list">${pendingDiscovery.results.map((row) => discoveryItem(row, "/admin"))}</div>` : html`<div class="card empty">No server is waiting. Servers show up here when an instance lists them for global discovery.</div>`}`;
+<h2>Servers listed most recently</h2>
+${pendingDiscovery.results.length ? html`<div class="list">${pendingDiscovery.results.map((row) => discoveryItem(row, "/admin"))}</div>` : html`<div class="card empty">No server is listed yet. An approved instance's servers show up here when its admins list them for global discovery.</div>`}`;
     return page({ title: "Overview", body, session, path: "/admin", ...noticeFrom(url) });
 }
 
@@ -295,7 +295,7 @@ async function discoveryAction(env, form, actor) {
         await removeBlock(env, "guild", id);
     } else return { error: "unknown action" };
     await logEvent(env, { kind: "admin", actor, instance: row.instance, message: `${action} server ${id}${reason ? `: ${reason}` : ""}` });
-    return { notice: `${{ verify: "Verified", reject: "Rejected", block: "Blocked", unblock: "Unblocked" }[action]} ${row.name}` };
+    return { notice: `${{ verify: "Listed", reject: "Removed", block: "Blocked", unblock: "Unblocked" }[action]} ${row.name}` };
 }
 
 async function blockAction(env, form, actor) {
@@ -338,6 +338,8 @@ export async function handleAdmin(request, env, ctx) {
     const path = url.pathname.replace(/\/+$/, "") || "/admin";
     if (path === "/admin/login" && request.method === "GET") {
         if (!oidcConfigured(env)) return signInPage(env, null, 503);
+        const limit = await hitRateLimit(env, `login:${rateLimitBucket(request.headers.get("cf-connecting-ip"))}`, 20, 10 * 60 * 1000);
+        if (limit.limited) return signInPage(env, "Too many sign-in attempts. Try again in a few minutes.", 429);
         return startLogin(request, env);
     }
     if (path === "/admin/callback" && request.method === "GET") {

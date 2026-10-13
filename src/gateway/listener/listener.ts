@@ -344,6 +344,8 @@ async function consumeEvent(this: WebSocket, opts: EventOpts): Promise<void> {
         case "GUILD_MEMBER_REMOVE":
             if (guild_id && data.user.id === this.user_id) {
                 delete this.permissions[guild_id];
+                delete this.member_lists?.[guild_id];
+                delete this.presenceSubscriptions?.[guild_id];
                 await reconcileGuild(this, guild_id, false);
             }
             this.member_events[data.user.id]?.();
@@ -373,6 +375,8 @@ async function consumeEvent(this: WebSocket, opts: EventOpts): Promise<void> {
             }
             if (event === "GUILD_DELETE") {
                 delete this.permissions[target];
+                delete this.member_lists?.[target];
+                delete this.presenceSubscriptions?.[target];
                 await reconcileGuild(this, target, false);
                 ownedChannels(this).delete(target);
             }

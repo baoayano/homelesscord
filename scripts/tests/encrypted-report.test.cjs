@@ -108,7 +108,7 @@ const harness = (
         "../handlers/ApplicationWidgets": { snapshotWidget: async () => null },
         "./reportMenus": { getReportingMenu: () => ({ nodes: {} }) },
         "./instanceAutomod": { automodVerifiedReport: async () => undefined },
-        "./federationIds": { canonicalOf: async (id) => canonical[id] },
+        "./federationIds": { canonicalOf: async (id) => canonical[id], localReferences: async (text) => text },
         "./e2ee": load("src/api/util/utility/e2ee.ts", {
             "@spacebar/database": { E2eeDevice: { find: async ({ where }) => (device && where.user_id.includes(device.user_id) ? [device] : []) } },
             "@spacebar/util": { ApiError: class {}, Config: { get: () => ({}) } },

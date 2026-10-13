@@ -4,14 +4,16 @@ import { Rights } from "@spacebar/util";
 import { HTTPError } from "lambert-server/HTTPError";
 import { AuditLogEvents } from "@spacebar/schemas";
 import { EntityManager } from "typeorm";
+import { assertShadowUserEditable } from "../utility/federatedAdmin";
 
 export const ADMIN_USER_CUSTOMIZATION_ACTION = AuditLogEvents.ADMIN_USER_CUSTOMIZATION;
-export async function adminCustomizationTarget(req: Request) {
+export async function adminCustomizationTarget(req: Request, editing?: string) {
     const user = await User.findOneOrFail({
         where: { id: req.params.user_id as string },
-        select: { id: true, rights: true, bot: true },
+        select: { id: true, rights: true, bot: true, federated_instance: true },
     });
     if (new Rights(user.rights).has("OPERATOR") && !req.rights.has("OPERATOR") && user.id !== req.user_id) throw new HTTPError("Only operators can edit other operators", 403);
+    if (editing) assertShadowUserEditable(user, [editing]);
     return user;
 }
 export async function recordAdminCustomization(req: Request, target_id: string, section: string, fields: string[], manager?: EntityManager) {

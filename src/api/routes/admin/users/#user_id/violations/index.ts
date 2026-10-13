@@ -3,6 +3,7 @@ import { In } from "typeorm";
 import { route } from "@spacebar/api/middlewares";
 import { User } from "@spacebar/database";
 import { AdminViolationCreateSchema } from "@spacebar/schemas";
+import { assertShadowUserEditable } from "@spacebar/api/util/utility/federatedAdmin";
 import { accountStanding, automaticAccountStanding, getUserViolations, isActiveViolation, issueViolation, PERMANENT_VIOLATION_EXPIRY } from "@spacebar/api/util";
 
 const router = Router({ mergeParams: true });
@@ -72,7 +73,7 @@ router.post(
     async (req: Request, res: Response) => {
         const body = req.body as AdminViolationCreateSchema;
         const user_id = req.params.user_id as string;
-        await User.findOneOrFail({ where: { id: user_id }, select: { id: true } });
+        assertShadowUserEditable(await User.findOneOrFail({ where: { id: user_id }, select: { id: true, federated_instance: true } }), ["account standing"]);
         await issueViolation(user_id, body, req.user_id);
 
         res.status(201).json(await describeStanding(user_id));

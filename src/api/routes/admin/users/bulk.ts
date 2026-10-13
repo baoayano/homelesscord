@@ -15,11 +15,12 @@ router.get(
     route({
         right: "MANAGE_USERS",
         spacebarOnly: true,
-        description: `The ids of every account matching a user search, newest first, at most ${BULK_SELECTION_LIMIT}. Takes the same q, ip and filter as the user search.`,
+        description: `The ids of every account matching a user search, newest first, at most ${BULK_SELECTION_LIMIT}. Takes the same q, ip, filter and origin as the user search.`,
         query: {
             q: { type: "string", required: false },
             ip: { type: "string", required: false },
             filter: { type: "string", required: false },
+            origin: { type: "string", required: false },
         },
     }),
     async (req: Request, res: Response) => {

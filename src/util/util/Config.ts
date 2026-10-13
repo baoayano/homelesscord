@@ -45,12 +45,12 @@ export class Config {
 
         const identityBlockedTerms = config.user?.identityBlockedTerms;
         const automodWordLists = config.automod?.wordLists;
-        const automodAllowList = config.automod?.allowList;
         const federationPeers = config.federation?.peers;
+        const storedLists = AUTOMOD_STRING_LISTS.map((path) => [path, readPath(config, path)] as const);
         config = OrmUtils.mergeDeep({}, { ...new ConfigValue() }, config);
         if (Array.isArray(identityBlockedTerms)) config.user.identityBlockedTerms = [...identityBlockedTerms];
         if (Array.isArray(automodWordLists)) config.automod.wordLists = automodWordLists.map((list) => ({ ...list, terms: [...(list.terms ?? [])] }));
-        if (Array.isArray(automodAllowList)) config.automod.allowList = [...automodAllowList];
+        for (const [path, stored] of storedLists) if (Array.isArray(stored)) writePath(config, path, [...stored]);
         if (Array.isArray(federationPeers)) config.federation.peers = [...federationPeers];
         replaceStaleDefaults(config);
         delete (config.security?.captcha as { service?: unknown } | undefined)?.service;
@@ -128,7 +128,27 @@ function replaceStaleDefaults(config: ConfigValue) {
     config.defaultsRevision = StaleDefaults.length;
 }
 
-const WHOLE_LIST_KEYS = new Set(["user_identityBlockedTerms", "automod_wordLists", "automod_allowList"]);
+const AUTOMOD_STRING_LISTS = [
+    "automod.allowList",
+    "automod.ipAllowList",
+    "automod.scam.extraDomains",
+    "automod.scam.allowDomains",
+    "automod.signup.deniedEmailDomains",
+    "automod.signup.allowedEmailDomains",
+    "automod.explicitContent.terms",
+    "automod.explicitContent.blockedHashes",
+];
+
+const readPath = (value: unknown, path: string) => path.split(".").reduce<unknown>((obj, key) => (obj as Record<string, unknown> | undefined)?.[key], value);
+
+const writePath = (value: object, path: string, next: unknown) => {
+    const keys = path.split(".");
+    const last = keys.pop()!;
+    const parent = keys.reduce<Record<string, unknown> | undefined>((obj, key) => obj?.[key] as Record<string, unknown> | undefined, value as Record<string, unknown>);
+    if (parent) parent[last] = next;
+};
+
+const WHOLE_LIST_KEYS = new Set(["user_identityBlockedTerms", "automod_wordLists", ...AUTOMOD_STRING_LISTS.map((path) => path.replaceAll(".", "_"))]);
 
 // TODO: better types
 const generatePairs = (obj: object | null, key = ""): ConfigEntity[] => {

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-import { In } from "typeorm";
-import { Channel, FederationDelivery, Guild, Member, Recipient, Relationship, Role, Session, User } from "@spacebar/database";
+import { In, LessThan } from "typeorm";
+import { Channel, FederationDelivery, FederationInboxEvent, FederationOutboxEvent, Guild, Member, Recipient, Relationship, Role, Session, User } from "@spacebar/database";
 import { RelationshipType } from "@spacebar/schemas";
 import { broadcastPresence, Config, emitEvent, Event, EVENT, FederationRequestError, getPermission, parseCanonicalId, SNOWFLAKE } from "@spacebar/util";
 import { ProcessLifecycle } from "../../../util/util/ProcessLifecycle";
@@ -22,14 +22,17 @@ import {
     upsertMirrorStickers,
 } from "./federationMirrors";
 import { invalidateRemoteE2eeKeys } from "./federationE2ee";
+import { addMentions, dispatchMessagePush, getMentionedUsers, PushMessage } from "./notifications";
 import { ownInstance, signedFetch, trustFor } from "./federationNetwork";
+import { quotaAdded, trimInboxEvents } from "./federationQuota";
 import { upsertShadows } from "./federationShadows";
-import { applyRemoteVoiceState, applyVoiceServerUpdate } from "./federationVoice";
+import { applyRemoteCall, applyRemoteStream, applyRemoteVoiceState, applyVoiceServerUpdate, parseStreamKey } from "./federationVoice";
 
 type Raw = Record<string, unknown>;
 type Payload = Omit<Event, "created_at">;
 
 export interface WireEvent {
+    id?: string;
     event: string;
     data: unknown;
     guild_id?: string;
@@ -67,7 +70,11 @@ const CHANNEL_EVENTS = new Set<string>([
     "MESSAGE_POLL_VOTE_ADD",
     "MESSAGE_POLL_VOTE_REMOVE",
     "TYPING_START",
+    "CALL_CREATE",
+    "CALL_UPDATE",
+    "CALL_DELETE",
 ]);
+const STREAM_EVENTS = ["STREAM_CREATE", "STREAM_SERVER_UPDATE", "STREAM_UPDATE", "STREAM_DELETE"];
 const USER_EVENTS = new Set<string>([
     "GUILD_CREATE",
     "GUILD_DELETE",
@@ -81,6 +88,7 @@ const USER_EVENTS = new Set<string>([
     "E2EE_DEVICES_UPDATE",
     "E2EE_IDENTITY_UPDATE",
     "CHANNEL_E2EE_UPDATE",
+    ...STREAM_EVENTS,
 ]);
 const ACCEPTED = new Set<string>([...GUILD_EVENTS, ...CHANNEL_EVENTS, ...USER_EVENTS, "GUILD_CREATE", "VOICE_STATE_UPDATE"]);
 
@@ -89,6 +97,7 @@ const MAX_QUEUE = 10_000;
 const RETRY_FOR = 24 * 60 * 60 * 1000;
 const CACHE_TTL = 30_000;
 const PRESENCE_SESSION_TTL = 30 * 60 * 1000;
+const SEEN_FOR = 48 * 60 * 60 * 1000;
 
 const isObject = (value: unknown): value is Raw => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -147,7 +156,7 @@ export const invalidateFederationCaches = (guild_id?: string) => {
 };
 
 interface Queue {
-    items: { wire: WireEvent; at: number }[];
+    queued: number;
     timer?: NodeJS.Timeout;
     sending: boolean;
     failures: number;
@@ -155,21 +164,28 @@ interface Queue {
 }
 
 const queues = new Map<string, Queue>();
+let lastOutboxId = 0n;
+
+const nextOutboxId = () => {
+    const now = BigInt(Date.now()) * 4096n;
+    lastOutboxId = now > lastOutboxId ? now : lastOutboxId + 1n;
+    return lastOutboxId.toString();
+};
 
 const queueOf = (instance: string) => {
     let queue = queues.get(instance);
-    if (!queue) queues.set(instance, (queue = { items: [], sending: false, failures: 0, failingSince: null }));
+    if (!queue) queues.set(instance, (queue = { queued: 0, sending: false, failures: 0, failingSince: null }));
     return queue;
 };
 
 export const deliveryQueues = () =>
-    Object.fromEntries([...queues].map(([instance, queue]) => [instance, { queued: queue.items.length, failures: queue.failures, failing_since: queue.failingSince }]));
+    Object.fromEntries([...queues].map(([instance, queue]) => [instance, { queued: queue.queued, failures: queue.failures, failing_since: queue.failingSince }]));
 
 async function recordDelivery(instance: string, patch: Partial<FederationDelivery> & { deliveredDelta?: number; droppedDelta?: number }) {
     const row = (await FederationDelivery.findOne({ where: { instance } })) ?? FederationDelivery.create({ instance, delivered: "0", dropped: "0", queued: 0 });
     const { deliveredDelta, droppedDelta, ...rest } = patch;
     Object.assign(row, rest, {
-        queued: queueOf(instance).items.length,
+        queued: queueOf(instance).queued,
         delivered: String(Number(row.delivered ?? 0) + (deliveredDelta ?? 0)),
         dropped: String(Number(row.dropped ?? 0) + (droppedDelta ?? 0)),
     });
@@ -187,24 +203,38 @@ const schedule = (instance: string, delay: number) => {
 
 const backoff = (failures: number) => Math.min(1000 * 2 ** Math.min(failures, 9), 5 * 60 * 1000);
 
+async function dropRows(instance: string, where: { ids?: string[]; before?: Date }, reason: string) {
+    const query = FederationOutboxEvent.createQueryBuilder().delete().where("instance = :instance", { instance });
+    if (where.ids) query.andWhere("id IN (:...ids)", { ids: where.ids });
+    if (where.before) query.andWhere("created_at < :before", { before: where.before });
+    const dropped = (await query.execute()).affected ?? 0;
+    if (!dropped) return 0;
+    const queue = queueOf(instance);
+    queue.queued = Math.max(0, queue.queued - dropped);
+    console.warn(`[Federation] Dropped ${dropped} event${dropped === 1 ? "" : "s"} for ${instance}: ${reason}`);
+    return dropped;
+}
+
 async function flush(instance: string) {
     const queue = queueOf(instance);
-    if (queue.sending || !queue.items.length) return;
+    if (queue.sending || !queue.queued) return;
     queue.sending = true;
     const now = Date.now();
     try {
-        const fresh = queue.items.filter((item) => now - item.at <= RETRY_FOR);
-        const expired = queue.items.length - fresh.length;
-        queue.items = fresh;
+        const expired = await dropRows(instance, { before: new Date(now - RETRY_FOR) }, "not delivered within 24 hours");
         if (expired)
             await recordDelivery(instance, {
                 droppedDelta: expired,
                 ...(queue.failingSince && now - queue.failingSince > RETRY_FOR && { unreachable_at: new Date() }),
             });
-        if (!queue.items.length) return;
+        const rows = await FederationOutboxEvent.find({ where: { instance }, order: { id: "ASC" }, take: BATCH });
+        if (!rows.length) {
+            queue.queued = 0;
+            return;
+        }
         if (!(await trustFor(instance))) {
-            const dropped = queue.items.length;
-            queue.items = [];
+            const dropped = await dropRows(instance, {}, "this instance no longer federates with it");
+            queue.queued = 0;
             await recordDelivery(instance, {
                 droppedDelta: dropped,
                 last_error: "This instance no longer federates with it, so its events were dropped",
@@ -212,14 +242,16 @@ async function flush(instance: string) {
             });
             return;
         }
-        const batch = queue.items.slice(0, BATCH);
-        const response = await signedFetch(instance, "POST", "/federation/v2/inbox", { events: batch.map((item) => item.wire) }, 30_000);
+        const ids = rows.map((row) => row.id);
+        const events = rows.map((row) => ({ ...(JSON.parse(row.wire) as WireEvent), id: row.id }));
+        const response = await signedFetch(instance, "POST", "/federation/v2/inbox", { events }, 30_000);
         if (response.status >= 200 && response.status < 300) {
-            queue.items.splice(0, batch.length);
+            await FederationOutboxEvent.delete({ id: In(ids) });
+            queue.queued = Math.max(0, queue.queued - rows.length);
             queue.failures = 0;
             queue.failingSince = null;
             await recordDelivery(instance, {
-                deliveredDelta: batch.length,
+                deliveredDelta: rows.length,
                 last_attempt_at: new Date(),
                 last_success_at: new Date(),
                 failing_since: null,
@@ -229,9 +261,9 @@ async function flush(instance: string) {
             return;
         }
         if (response.status >= 400 && response.status < 500 && response.status !== 429 && response.status !== 408) {
-            queue.items.splice(0, batch.length);
+            const dropped = await dropRows(instance, { ids }, `refused with ${response.status}`);
             await recordDelivery(instance, {
-                droppedDelta: batch.length,
+                droppedDelta: dropped,
                 last_attempt_at: new Date(),
                 last_error: `Refused with ${response.status}: ${JSON.stringify(response.body).slice(0, 500)}`,
             });
@@ -249,16 +281,18 @@ async function flush(instance: string) {
         });
     } finally {
         queue.sending = false;
-        if (queue.items.length) schedule(instance, queue.failures ? backoff(queue.failures) : 0);
+        if (queue.queued) schedule(instance, queue.failures ? backoff(queue.failures) : 0);
     }
 }
 
-function enqueue(instance: string, wire: WireEvent) {
+async function enqueue(instance: string, wire: WireEvent) {
     const queue = queueOf(instance);
-    queue.items.push({ wire, at: Date.now() });
-    if (queue.items.length > MAX_QUEUE) {
-        queue.items.splice(0, queue.items.length - MAX_QUEUE);
-        void recordDelivery(instance, { droppedDelta: 1 });
+    await FederationOutboxEvent.insert({ id: nextOutboxId(), instance, wire: JSON.stringify(wire), created_at: new Date() });
+    queue.queued++;
+    if (queue.queued > MAX_QUEUE) {
+        const oldest = await FederationOutboxEvent.find({ where: { instance }, order: { id: "ASC" }, take: queue.queued - MAX_QUEUE, select: { id: true } });
+        const dropped = await dropRows(instance, { ids: oldest.map((row) => row.id) }, `more than ${MAX_QUEUE} events were waiting`);
+        if (dropped) void recordDelivery(instance, { droppedDelta: dropped });
     }
     schedule(instance, queue.failures ? backoff(queue.failures) : 25);
 }
@@ -277,7 +311,7 @@ async function send(byInstance: Map<string, string[]>, event: string, data: unkn
     for (const [instance, users] of byInstance) {
         if (!(await trustFor(instance).catch(() => null))) continue;
         const recipients = await Promise.all(users.map((id) => canonicalOf(id)));
-        enqueue(instance, { event, data: wireData, ...(guild_id && { guild_id }), ...(channel_id && { channel_id }), recipients });
+        await enqueue(instance, { event, data: wireData, ...(guild_id && { guild_id }), ...(channel_id && { channel_id }), recipients });
     }
 }
 
@@ -341,7 +375,12 @@ async function routeGuildEvent(payload: Payload, guild_id: string) {
 }
 
 async function routeVoiceState(payload: Payload, guild_id: string | undefined) {
-    if (!guild_id || (await mirrorInstance("guild", guild_id))) return;
+    if (!guild_id) {
+        const data = isObject(payload.data) ? payload.data : {};
+        const channel_id = payload.channel_id ?? (typeof data.channel_id === "string" ? data.channel_id : undefined);
+        return channel_id ? routeChannelEvent(payload, channel_id) : undefined;
+    }
+    if (await mirrorInstance("guild", guild_id)) return;
     const shadows = await guildShadows(guild_id);
     if (!shadows.length) return;
     const data = isObject(payload.data) ? payload.data : {};
@@ -366,7 +405,25 @@ async function routeChannelEvent(payload: Payload, channel_id: string) {
     await send(group(recipients.map((row) => ({ id: String(row.id), instance: String(row.instance) }))), payload.event, payload.data, { channel_id });
 }
 
+async function routeStream(payload: Payload) {
+    const data = isObject(payload.data) ? payload.data : {};
+    const parts = parseStreamKey(data.stream_key);
+    if (!parts) return;
+    const scope = parts.guild_id ? await mirrorInstance("guild", parts.guild_id) : await mirrorInstance("channel", parts.channel_id);
+    if (scope) return;
+    const { stream_key: _, ...rest } = data;
+    const wire = { ...rest, meowcord_stream: { guild_id: parts.guild_id, channel_id: parts.channel_id, user_id: parts.user_id } };
+    if (payload.user_id) return routeUserEvent({ ...payload, guild_id: undefined, channel_id: undefined, data: wire });
+    if (!parts.guild_id) return routeChannelEvent({ ...payload, data: wire }, parts.channel_id);
+    const shadows = await guildShadows(parts.guild_id);
+    const recipients = (await Promise.all(shadows.map(async (shadow) => ((await canView(shadow.id, parts.guild_id as string, parts.channel_id)) ? shadow : null)))).filter(
+        (x) => !!x,
+    );
+    await send(group(recipients), payload.event, wire, {});
+}
+
 async function routeEvent(payload: Payload) {
+    if (payload.event.startsWith("STREAM_")) return routeStream(payload);
     if (payload.user_id && !payload.guild_id && !payload.channel_id) return routeUserEvent(payload);
     const data = isObject(payload.data) ? payload.data : {};
     if (payload.event === "PRESENCE_UPDATE") return;
@@ -395,6 +452,53 @@ async function hasLocalMembers(guild_id: string) {
             .andWhere("user.federated_instance IS NULL")
             .getCount()) > 0
     );
+}
+
+export async function presentIn(recipients: string[], scope: { guild_id?: string | null; channel_id?: string | null }) {
+    if (!recipients.length) return [];
+    let guild_id = scope.guild_id ?? null;
+    if (!guild_id && scope.channel_id) {
+        const channel = await Channel.findOne({ where: { id: scope.channel_id }, select: { id: true, guild_id: true } });
+        if (!channel) return [];
+        guild_id = channel.guild_id ?? null;
+        if (!guild_id)
+            return (await Recipient.find({ where: { channel_id: scope.channel_id, user_id: In(recipients) }, select: { id: true, user_id: true } })).map((row) => row.user_id);
+    }
+    if (!guild_id) return [];
+    return (await Member.find({ where: { guild_id, id: In(recipients) }, select: { index: true, id: true } })).map((row) => row.id);
+}
+
+async function knowing(subject: string, recipients: string[]) {
+    if (!recipients.length) return [];
+    const related = await Relationship.find({ where: [{ from_id: In(recipients), to_id: subject }], select: { id: true, from_id: true, type: true } });
+    const known = new Set(related.filter((row) => row.type !== RelationshipType.BLOCKED).map((row) => row.from_id));
+    const rest = recipients.filter((id) => !known.has(id));
+    if (rest.length) {
+        const theirs = (await Recipient.find({ where: { user_id: subject }, select: { id: true, channel_id: true } })).map((row) => row.channel_id);
+        const shared = theirs.length ? await Recipient.find({ where: { channel_id: In(theirs), user_id: In(rest) }, select: { id: true, user_id: true } }) : [];
+        for (const row of shared) known.add(row.user_id);
+    }
+    return recipients.filter((id) => known.has(id));
+}
+
+async function mayJoinPrivateChannel(local: string, senders: string[]) {
+    const relationships = await Relationship.find({ where: { from_id: local, to_id: In(senders) }, select: { id: true, type: true } });
+    if (relationships.some((row) => row.type === RelationshipType.BLOCKED)) return false;
+    if (relationships.some((row) => [RelationshipType.FRIEND, RelationshipType.INCOMING_REQUEST, RelationshipType.OUTGOING_REQUEST].includes(row.type))) return true;
+    const guilds = (await Member.find({ where: { id: local }, select: { index: true, guild_id: true } })).map((row) => row.guild_id);
+    return guilds.length > 0 && (await Member.exists({ where: { guild_id: In(guilds), id: In(senders) } }));
+}
+
+export async function admissibleRecipients(sender: string, channel_id: string | null, candidates: string[]) {
+    const unique = [...new Set(candidates)];
+    if (!unique.length) return null;
+    const users = await User.find({ where: { id: In(unique) }, select: { id: true, federated_instance: true } });
+    const senders = users.filter((user) => user.federated_instance === sender).map((user) => user.id);
+    if (!senders.length) return null;
+    const existing = new Set(channel_id ? (await Recipient.find({ where: { channel_id }, select: { id: true, user_id: true } })).map((row) => row.user_id) : []);
+    const admitted: string[] = [];
+    for (const user of users) if (user.federated_instance || existing.has(user.id) || (await mayJoinPrivateChannel(user.id, senders))) admitted.push(user.id);
+    return admitted;
 }
 
 async function applyRelationship(event: string, data: Raw, recipients: string[], sender: string) {
@@ -469,7 +573,7 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
             if (!id) return;
             for (const member of Array.isArray(data.members) ? data.members : []) if (isObject(member)) await upsertMirrorMember(member, id);
             if (isObject(data.member)) await upsertMirrorMember(data.member, id);
-            for (const state of Array.isArray(data.voice_states) ? data.voice_states : []) if (isObject(state)) await applyRemoteVoiceState(state, id, false);
+            for (const state of Array.isArray(data.voice_states) ? data.voice_states : []) if (isObject(state)) await applyRemoteVoiceState(state, { guild_id: id }, false);
             for (const user_id of recipients) if (await Member.exists({ where: { id: user_id, guild_id: id } })) await emitGuildCreate(id, user_id);
             return;
         }
@@ -525,9 +629,14 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
                 return emitLocal(event, data, { guild_id });
             }
             const others = (Array.isArray(data.recipients) ? data.recipients : []).flatMap((user) => (isObject(user) && typeof user.id === "string" ? [user.id] : []));
-            const id = await upsertMirrorPrivateChannel(data, sender, [...new Set([...others, ...recipients])]);
+            const channel_id = typeof data.id === "string" ? data.id : null;
+            const existing = channel_id ? await mirrorInstance("channel", channel_id) : null;
+            if (existing && existing !== sender) return;
+            const admitted = await admissibleRecipients(sender, existing ? channel_id : null, [...others, ...recipients]);
+            if (!admitted) return;
+            const id = await upsertMirrorPrivateChannel(data, sender, admitted);
             if (!id) return;
-            for (const user_id of recipients) await emitLocal(event, data, { user_id });
+            for (const user_id of recipients.filter((user) => admitted.includes(user))) await emitLocal(event, data, { user_id });
             return;
         }
         case "CHANNEL_DELETE": {
@@ -538,7 +647,7 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
                 invalidateMirror(`channel:${id}`);
                 return emitLocal(event, data, { guild_id });
             }
-            for (const user_id of recipients) {
+            for (const user_id of await presentIn(recipients, { channel_id: id })) {
                 await Recipient.delete({ channel_id: id, user_id });
                 await emitLocal(event, data, { user_id });
             }
@@ -558,11 +667,17 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
             const id = refs.channel_id ?? (typeof data.channel_id === "string" ? data.channel_id : null);
             const user_id = isObject(data.user) && typeof data.user.id === "string" ? data.user.id : null;
             if (!id || !user_id || (await mirrorInstance("channel", id)) !== sender) return;
+            const before = event === "CHANNEL_RECIPIENT_REMOVE" ? await presentIn(recipients, { channel_id: id }) : [];
             if (event === "CHANNEL_RECIPIENT_ADD") {
-                if (!(await Recipient.exists({ where: { channel_id: id, user_id } })) && (await User.exists({ where: { id: user_id } })))
-                    await Recipient.create({ channel_id: id, user_id, closed: false }).save();
+                const admitted = await admissibleRecipients(sender, id, [
+                    user_id,
+                    ...(await Recipient.find({ where: { channel_id: id }, select: { id: true, user_id: true } })).map((row) => row.user_id),
+                ]);
+                if (!admitted?.includes(user_id)) return;
+                if (!(await Recipient.exists({ where: { channel_id: id, user_id } }))) await Recipient.create({ channel_id: id, user_id, closed: false }).save();
             } else await Recipient.delete({ channel_id: id, user_id });
-            for (const recipient of recipients) await emitLocal(event, data, { user_id: recipient });
+            const present = event === "CHANNEL_RECIPIENT_REMOVE" ? before : await presentIn(recipients, { channel_id: id });
+            for (const recipient of present) await emitLocal(event, data, { user_id: recipient });
             return;
         }
         case "CHANNEL_E2EE_UPDATE": {
@@ -573,7 +688,7 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
                 await Channel.update({ id, federated_instance: sender }, { e2ee_enabled_at: at });
                 invalidateMirror(`channel:${id}`);
             }
-            for (const user_id of recipients) await emitLocal(event, { ...data, channel_id: id }, { user_id });
+            for (const user_id of await presentIn(recipients, { channel_id: id })) await emitLocal(event, { ...data, channel_id: id }, { user_id });
             return;
         }
         case "E2EE_DEVICES_UPDATE":
@@ -581,7 +696,7 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
             const subject = typeof data.user_id === "string" ? await User.findOne({ where: { id: data.user_id }, select: { id: true, federated_instance: true } }) : null;
             if (subject?.federated_instance !== sender) return;
             await invalidateRemoteE2eeKeys(subject.id);
-            for (const user_id of recipients) await emitLocal(event, { user_id: subject.id }, { user_id });
+            for (const user_id of await knowing(subject.id, recipients)) await emitLocal(event, { user_id: subject.id }, { user_id });
             return;
         }
         case "RELATIONSHIP_ADD":
@@ -590,18 +705,60 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
         case "PRESENCE_UPDATE":
             return applyPresence(data, sender);
         case "VOICE_STATE_UPDATE":
-            if (!guild_id) return;
-            return applyRemoteVoiceState(data, guild_id);
-        case "VOICE_SERVER_UPDATE":
-            if (!guild_id) return;
-            return applyVoiceServerUpdate(data, guild_id, recipients);
+        case "VOICE_SERVER_UPDATE": {
+            const channel_id = refs.channel_id ?? (typeof data.channel_id === "string" ? data.channel_id : null);
+            const scope = guild_id ? { guild_id } : channel_id && (await mirrorInstance("channel", channel_id)) === sender ? { dm: channel_id } : null;
+            if (!scope) return;
+            return event === "VOICE_STATE_UPDATE" ? applyRemoteVoiceState(data, scope) : applyVoiceServerUpdate(data, scope, recipients);
+        }
+        case "STREAM_CREATE":
+        case "STREAM_SERVER_UPDATE":
+        case "STREAM_UPDATE":
+        case "STREAM_DELETE": {
+            const stream = isObject(data.meowcord_stream) ? data.meowcord_stream : {};
+            const scope = typeof stream.guild_id === "string" ? { guild_id: stream.guild_id } : { channel_id: typeof stream.channel_id === "string" ? stream.channel_id : null };
+            return applyRemoteStream(sender, event, data, await presentIn(recipients, scope));
+        }
+        case "CALL_CREATE":
+        case "CALL_UPDATE":
+        case "CALL_DELETE": {
+            const channel_id = refs.channel_id ?? (typeof data.channel_id === "string" ? data.channel_id : null);
+            return applyRemoteCall(sender, event, { ...data, channel_id }, channel_id ? await presentIn(recipients, { channel_id }) : []);
+        }
         default: {
             const channel_id = refs.channel_id ?? (typeof data.channel_id === "string" ? data.channel_id : null);
             if (!channel_id || (await mirrorInstance("channel", channel_id)) !== sender) return;
             if (event === "MESSAGE_CREATE" && typeof data.id === "string") await Channel.update({ id: channel_id }, { last_message_id: data.id });
-            for (const user_id of recipients) await emitLocal(event, data, { user_id });
+            const present = await presentIn(recipients, { channel_id });
+            for (const user_id of present) await emitLocal(event, data, { user_id });
+            if (event === "MESSAGE_CREATE") await notifyMentions(channel_id, data, present);
         }
     }
+}
+
+const EPHEMERAL = 1 << 6;
+
+async function notifyMentions(channel_id: string, data: Raw, recipients: string[]) {
+    if (!recipients.length || Number(data.flags ?? 0) & EPHEMERAL) return;
+    const channel = await Channel.findOne({ where: { id: channel_id }, relations: { recipients: true } });
+    if (!channel) return;
+    const content = typeof data.content === "string" ? data.content : "";
+    const broad = data.mention_everyone === true;
+    const here = broad && !content.includes("@everyone") && content.includes("@here");
+    const ids = (list: unknown, pick: (entry: unknown) => unknown) => (Array.isArray(list) ? list.map(pick).filter((id): id is string => typeof id === "string") : []);
+    const mentioned = await getMentionedUsers({
+        channel,
+        author_id: isObject(data.author) && typeof data.author.id === "string" ? data.author.id : undefined,
+        user_ids: ids(data.mentions, (user) => (isObject(user) ? user.id : null)),
+        role_ids: ids(data.mention_roles, (role) => (isObject(role) ? role.id : role)),
+        everyone: broad && !here,
+        here,
+    });
+    const local = recipients.filter((id) => mentioned.has(id));
+    if (local.length) await addMentions(channel_id, local);
+    await dispatchMessagePush(data as unknown as PushMessage, recipients).catch((error) =>
+        console.warn("[Federation] Could not send push notifications:", (error as Error).message),
+    );
 }
 
 export async function handleInbox(sender: string, body: Raw) {
@@ -626,6 +783,20 @@ export async function handleInbox(sender: string, body: Raw) {
                   .map((user) => user.id)
             : [];
         if (wire.recipients.length && !recipients.length) continue;
+        if (typeof wire.id === "string" && wire.id.length <= 64) {
+            await trimInboxEvents(sender);
+            const fresh = await FederationInboxEvent.insert({ sender, event_id: wire.id, received_at: new Date() }).then(
+                () => {
+                    quotaAdded("inboxEvents", sender);
+                    return true;
+                },
+                () => false,
+            );
+            if (!fresh) {
+                applied++;
+                continue;
+            }
+        }
         try {
             const data = (await fromWire(isObject(wire.data) ? wire.data : {}, sender, upsertShadows)) as Raw;
             const refs = (await fromWire({ guild_id: wire.guild_id ?? null, channel_id: wire.channel_id ?? null }, sender)) as {
@@ -644,8 +815,33 @@ export async function handleInbox(sender: string, body: Raw) {
 }
 
 export function startFederationDelivery() {
+    const prune = setInterval(
+        () =>
+            void FederationInboxEvent.delete({ received_at: LessThan(new Date(Date.now() - SEEN_FOR)) }).catch((error) =>
+                console.warn("[Federation] Could not prune received event ids:", (error as Error).message),
+            ),
+        60 * 60 * 1000,
+    );
+    prune.unref?.();
     ProcessLifecycle.eventEmitter.once("stopping", () => {
         stopping = true;
+        clearInterval(prune);
         for (const queue of queues.values()) clearTimeout(queue.timer);
     });
+    void FederationOutboxEvent.createQueryBuilder("event")
+        .select("event.instance", "instance")
+        .addSelect("COUNT(*)", "count")
+        .groupBy("event.instance")
+        .getRawMany<{ instance: string; count: string | number }>()
+        .then((rows) => {
+            for (const row of rows) {
+                const queue = queueOf(row.instance);
+                queue.queued = Math.max(queue.queued, Number(row.count));
+                if (queue.queued) {
+                    console.log(`[Federation] Resuming delivery of ${queue.queued} event${queue.queued === 1 ? "" : "s"} to ${row.instance}`);
+                    schedule(row.instance, 1000);
+                }
+            }
+        })
+        .catch((error) => console.warn("[Federation] Could not read the event queue:", (error as Error).message));
 }

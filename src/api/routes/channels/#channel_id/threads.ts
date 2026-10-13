@@ -5,6 +5,8 @@ import {
     assertGuildVerification,
     assertNoHarmfulLinks,
     checkAutomod,
+    checkSpam,
+    enforceQuarantine,
     createThread,
     handleMessage,
     postHandleMessage,
@@ -14,7 +16,7 @@ import {
 } from "@spacebar/api/util";
 import { route } from "@spacebar/api/middlewares";
 import { Channel, Member, ReadState, ThreadMember } from "@spacebar/database";
-import { ChannelFlags, emitEvent, FieldErrors, MessageCreateEvent, uploadMessageFiles } from "@spacebar/util";
+import { ChannelFlags, emitEvent, FieldErrors, MessageCreateEvent, Snowflake, uploadMessageFiles } from "@spacebar/util";
 import { AttachmentFlags, ChannelType, MessageType, ThreadCreationSchema } from "@spacebar/schemas";
 import { messageUpload } from "./messages";
 
@@ -83,6 +85,20 @@ router.post(
             await assertGuildVerification(channel.guild_id, req.user_id);
             assertNoHarmfulLinks(body.name);
             assertNoHarmfulLinks(body.message?.content);
+            await enforceQuarantine(
+                { user_id: req.user_id, federated: !!req.user?.federated_instance, bot: req.user_bot, system: req.user?.system, rights: req.rights },
+                { content: [body.name, body.message?.content].filter(Boolean).join("\n"), guild_id: channel.guild_id, channel_id: channel.id },
+            );
+            await checkSpam({
+                user_id: req.user_id,
+                channel,
+                content: [body.name, body.message?.content].filter(Boolean).join("\n"),
+                message_id: Snowflake.generate(),
+                permission: req.permission,
+                rights: req.rights,
+                bot: req.user_bot,
+                system: req.user?.system,
+            });
             await checkAutomod({
                 guild_id: channel.guild_id,
                 channel,
@@ -157,7 +173,7 @@ router.post(
         }
         if (message.member?.roles)
             // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
+            // @ts-expect-error
             message.member.roles = message.member.roles.filter((x) => x.id != x.guild_id).map((x) => x.id);
 
         const read_state =
@@ -263,42 +279,41 @@ router.get(
     },
 );
 
-export const listArchivedThreads = (kind: "public" | "private" | "joined") =>
-    async function (req: Request, res: Response) {
-        const { channel_id } = req.params as Record<string, string>;
-        const { before, limit } = req.query as Record<string, string | undefined>;
-        const take = Math.min(Math.max(Number(limit) || 50, 2), 100);
-        if (kind === "private") req.permission!.hasThrow("MANAGE_THREADS");
-        req.permission!.hasThrow("READ_MESSAGE_HISTORY");
+export const listArchivedThreads = (kind: "public" | "private" | "joined") => async (req: Request, res: Response) => {
+    const { channel_id } = req.params as Record<string, string>;
+    const { before, limit } = req.query as Record<string, string | undefined>;
+    const take = Math.min(Math.max(Number(limit) || 50, 2), 100);
+    if (kind === "private") req.permission!.hasThrow("MANAGE_THREADS");
+    req.permission!.hasThrow("READ_MESSAGE_HISTORY");
 
-        const joined = await joinedThreadIds(req.user_id);
-        const types = kind === "public" ? [ChannelType.GUILD_PUBLIC_THREAD, ChannelType.GUILD_NEWS_THREAD] : [ChannelType.GUILD_PRIVATE_THREAD];
-        let threads = (
-            await Channel.find({
-                where: {
-                    parent_id: channel_id,
-                    type: In(types),
-                    ...(kind === "joined" && before ? { id: LessThan(before) } : {}),
-                },
-            })
-        ).filter((t) => !!t.thread_metadata?.archived && (kind !== "joined" || joined.has(t.id)));
-        if (kind === "joined") threads.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
-        else {
-            const beforeTime = before ? new Date(before).getTime() : Infinity;
-            threads = threads
-                .filter((t) => new Date(t.thread_metadata!.archive_timestamp).getTime() < beforeTime)
-                .sort((a, b) => new Date(b.thread_metadata!.archive_timestamp).getTime() - new Date(a.thread_metadata!.archive_timestamp).getTime());
-        }
-        const page = threads.slice(0, take);
-        const members = await ThreadMember.find({
-            where: { user_id: req.user_id, id: In(page.map((t) => t.id)) },
-        });
-        return res.json({
-            threads: page.map((t) => t.toJSON()),
-            members: members.map((m) => m.toJSON()),
-            has_more: threads.length > take,
-        });
-    };
+    const joined = await joinedThreadIds(req.user_id);
+    const types = kind === "public" ? [ChannelType.GUILD_PUBLIC_THREAD, ChannelType.GUILD_NEWS_THREAD] : [ChannelType.GUILD_PRIVATE_THREAD];
+    let threads = (
+        await Channel.find({
+            where: {
+                parent_id: channel_id,
+                type: In(types),
+                ...(kind === "joined" && before ? { id: LessThan(before) } : {}),
+            },
+        })
+    ).filter((t) => !!t.thread_metadata?.archived && (kind !== "joined" || joined.has(t.id)));
+    if (kind === "joined") threads.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
+    else {
+        const beforeTime = before ? new Date(before).getTime() : Infinity;
+        threads = threads
+            .filter((t) => new Date(t.thread_metadata!.archive_timestamp).getTime() < beforeTime)
+            .sort((a, b) => new Date(b.thread_metadata!.archive_timestamp).getTime() - new Date(a.thread_metadata!.archive_timestamp).getTime());
+    }
+    const page = threads.slice(0, take);
+    const members = await ThreadMember.find({
+        where: { user_id: req.user_id, id: In(page.map((t) => t.id)) },
+    });
+    return res.json({
+        threads: page.map((t) => t.toJSON()),
+        members: members.map((m) => m.toJSON()),
+        has_more: threads.length > take,
+    });
+};
 
 router.get("/archived/public", route({ permission: "VIEW_CHANNEL", responses: { 200: {}, 403: {} } }), listArchivedThreads("public"));
 router.get("/archived/private", route({ permission: "VIEW_CHANNEL", responses: { 200: {}, 403: {} } }), listArchivedThreads("private"));

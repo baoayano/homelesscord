@@ -1,13 +1,14 @@
 import { decodeEnvelopePayload, fromBase64Url, verifyEnvelope } from "./crypto.js";
 import { blockFor, hitRateLimit, logEvent, nowIso } from "./db.js";
 import { fetchWellKnown, publicStatus, refreshDiscovery, storeWellKnown } from "./instances.js";
-import { allowsPrivateHosts, parseInstanceId } from "./net.js";
+import { allowsPrivateHosts, parseInstanceId, rateLimitBucket } from "./net.js";
 import { publish } from "./registry.js";
 
 const HOUR = 60 * 60 * 1000;
 const CLOCK_SKEW = 5 * 60 * 1000;
 const NONCE_WINDOW = 10 * 60 * 1000;
 const MAX_BODY = 8192;
+const NEW_INSTANCE_ANNOUNCES_PER_HOUR = 60;
 
 function json(body, status, headers = {}) {
     return Response.json(body, { status, headers: { "cache-control": "no-store", ...headers } });
@@ -57,7 +58,7 @@ export function checkAnnouncePayload(payload, keyId, { now = Date.now(), allowPr
 
 export async function handleAnnounce(request, env, ctx) {
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    const ipLimit = await hitRateLimit(env, `ip:${ip}`, 30, HOUR);
+    const ipLimit = await hitRateLimit(env, `ip:${rateLimitBucket(ip)}`, 30, HOUR);
     if (ipLimit.limited) return json({ error: "rate_limited" }, 429, { "retry-after": String(ipLimit.retryAfter) });
 
     const body = await readBody(request);
@@ -81,6 +82,12 @@ export async function handleAnnounce(request, env, ctx) {
         .bind(nonce, Date.now() - NONCE_WINDOW)
         .first();
     if (seen) return json({ error: "nonce was already used" }, 409);
+
+    const known = await env.DB.prepare("SELECT 1 FROM instances WHERE id = ?").bind(instance.id).first();
+    if (!known) {
+        const newLimit = await hitRateLimit(env, "new-instances", NEW_INSTANCE_ANNOUNCES_PER_HOUR, HOUR);
+        if (newLimit.limited) return json({ error: "rate_limited" }, 429, { "retry-after": String(newLimit.retryAfter) });
+    }
 
     if (await blockFor(env, "instance", instance.id)) {
         await logEvent(env, { kind: "announce", level: "warn", instance: instance.id, ip, message: "announce from a blocked instance" });

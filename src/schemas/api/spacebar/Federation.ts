@@ -37,7 +37,8 @@ export interface AdminFederationBlockSchema {
 }
 
 export interface AdminFederationGuildSchema {
-    hidden: boolean;
+    verified?: boolean;
+    hidden?: boolean;
 }
 
 export interface AdminFederationVerifySchema {

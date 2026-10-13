@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-import { parseCanonicalId } from "./Protocol";
+import { FederationRequestError, parseCanonicalId } from "./Protocol";
 
 export const SNOWFLAKE = /^\d{15,20}$/;
 export const CANONICAL = /^@\d{1,20}@[a-z0-9.\-:[\]]{1,260}$/;
 
-const ID_KEYS = new Set(["id", "roles", "mention_roles", "recipients", "sticker_ids", "exempt_roles", "exempt_channels"]);
-export const ID_MAP_KEYS = new Set(["channel_overrides", "e2ee_context_keys"]);
+const ID_KEYS = new Set(["id", "roles", "mention_roles", "recipients", "sticker_ids", "exempt_roles", "exempt_channels", "ringing", "participants"]);
+export const ID_MAP_KEYS = new Set(["channel_overrides", "e2ee_context_keys", "ongoing_rings"]);
 const SKIPPED_KEYS = new Set(["encrypted", "nonce", "e2ee", "fingerprint"]);
 
 export const isIdKey = (key: string) => ID_KEYS.has(key) || key.endsWith("_id") || key.endsWith("_ids");
@@ -27,9 +27,12 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 export const looksLikeUser = (value: Record<string, unknown>) =>
     typeof value.id === "string" && typeof value.username === "string" && ("discriminator" in value || "global_name" in value || "avatar" in value);
 
+export const MAX_ID_DEPTH = 64;
+
 export function walkIds<T>(value: T, walker: IdWalker): T {
-    const visit = (node: unknown): unknown => {
-        if (Array.isArray(node)) return node.map(visit);
+    const visit = (node: unknown, depth = 0): unknown => {
+        if (depth > MAX_ID_DEPTH) throw new FederationRequestError("bad_request", `The body nests deeper than ${MAX_ID_DEPTH} levels`, 400);
+        if (Array.isArray(node)) return node.map((entry) => visit(entry, depth + 1));
         if (!isPlainObject(node)) return node;
         const encrypted = !!node.encrypted;
         const out: Record<string, unknown> = {};
@@ -54,12 +57,12 @@ export function walkIds<T>(value: T, walker: IdWalker): T {
                 out[key] = Object.fromEntries(
                     Object.entries(child).flatMap(([mapKey, mapValue]) => {
                         const translated = walker.id(mapKey);
-                        return typeof translated === "string" ? [[translated, visit(mapValue)]] : [];
+                        return typeof translated === "string" ? [[translated, visit(mapValue, depth + 1)]] : [];
                     }),
                 );
                 continue;
             }
-            out[key] = visit(child);
+            out[key] = visit(child, depth + 1);
         }
         if (walker.user && looksLikeUser(node)) walker.user(out, node.id as string);
         return out;
@@ -115,10 +118,12 @@ export function rewriteIncoming<T>(value: T, toLocal: Map<string, string>, ownIn
     return walkIds(value, {
         id: map,
         content: (text) =>
-            text.replace(INCOMING_MENTION, (whole, prefix: string, id: string) => {
-                const local = map(id);
-                return typeof local === "string" ? `<${prefix}${local}>` : whole;
-            }),
+            text
+                .replace(OUTGOING_MENTION, (_, prefix: string) => `<${prefix}0>`)
+                .replace(INCOMING_MENTION, (whole, prefix: string, id: string) => {
+                    const local = map(id);
+                    return typeof local === "string" ? `<${prefix}${local}>` : whole;
+                }),
         user,
     });
 }

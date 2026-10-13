@@ -380,6 +380,9 @@ export class Guild extends BaseClass {
     @Column({ default: false })
     global_discovery_hidden: boolean = false;
 
+    @Column({ default: false })
+    global_discovery_verified: boolean = false;
+
     @Column({ type: "varchar", nullable: true })
     federated_instance?: string | null;
 
@@ -674,6 +677,7 @@ export class Guild extends BaseClass {
             discovery_excluded: undefined,
             global_discovery: undefined,
             global_discovery_hidden: undefined,
+            global_discovery_verified: undefined,
             vanity_url_code: this.vanity_url_code ?? null,
             incidents_data: this.incidents_data ?? null,
             safety_alerts_channel_id: this.safety_alerts_channel_id ?? null,

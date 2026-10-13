@@ -40,5 +40,11 @@ export async function pruneExpired(env) {
         env.DB.prepare("DELETE FROM oidc_states WHERE created_at < ?").bind(now - 10 * 60 * 1000),
         env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now),
         env.DB.prepare("DELETE FROM events WHERE at < ?").bind(nowIso(now - 30 * 24 * 60 * 60 * 1000)),
+        env.DB.prepare(
+            "DELETE FROM discovery WHERE instance IN (SELECT id FROM instances WHERE status = 'pending' AND in_github = 0 AND COALESCE(last_announce_at, created_at) < ?)",
+        ).bind(nowIso(now - 30 * 24 * 60 * 60 * 1000)),
+        env.DB.prepare("DELETE FROM instances WHERE status = 'pending' AND in_github = 0 AND COALESCE(last_announce_at, created_at) < ?").bind(
+            nowIso(now - 30 * 24 * 60 * 60 * 1000),
+        ),
     ]);
 }

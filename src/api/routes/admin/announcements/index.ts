@@ -139,7 +139,7 @@ router.post(
         if (body.audience === "selected") {
             const count = await User.createQueryBuilder("u")
                 .where("u.id IN (:...ids)", { ids: selected })
-                .andWhere("u.deleted=false AND u.bot=false AND u.system=false")
+                .andWhere("u.deleted=false AND u.bot=false AND u.system=false AND u.federated_instance IS NULL")
                 .getCount();
             if (count !== selected!.length) throw new HTTPError("One or more selected recipients are unavailable", 400);
         }
@@ -166,7 +166,7 @@ router.post(
                 const args = body.audience === "everyone" ? [id] : [id, body.audience === "staff" ? STAFF_RIGHTS_MASK : selected];
                 const queued = await manager.query(
                     `INSERT INTO announcement_deliveries (announcement_id,user_id)
-                    SELECT $1,u.id FROM users u WHERE u.deleted=false AND u.bot=false AND u.system=false ${filter} RETURNING user_id`,
+                    SELECT $1,u.id FROM users u WHERE u.deleted=false AND u.bot=false AND u.system=false AND u.federated_instance IS NULL ${filter} RETURNING user_id`,
                     args,
                 );
                 entity.recipient_count = queued.length;

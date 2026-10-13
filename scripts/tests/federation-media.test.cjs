@@ -7,6 +7,7 @@ const ts = require("typescript");
 
 const media = require("../../src/util/util/federation/Media.ts");
 const protocol = require("../../src/util/util/federation/Protocol.ts");
+const limits = require("../../src/util/util/federation/Limits.ts");
 
 const PNG = Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex"), Buffer.alloc(64)]);
 const origins = new Map([["https://meow.example", "meow.example"]]);
@@ -80,6 +81,7 @@ const makeHarness = async (reply, overrides = {}) => {
         "node:https": require("node:https"),
         "../Config": { Config },
         "./SocksTransport": { outboundProxy: () => "direct", socksExchange: () => assert.fail("no proxy expected") },
+        "./PublicFetchError": require("../../src/util/util/networking/PublicFetchError.ts"),
     });
     const peers = overrides.peers ?? [{ id: peerId, well_known: JSON.stringify({ url: peerUrl, protocol: protocol.FEDERATION_PROTOCOL }) }];
     const blocks = overrides.blocks ? overrides.blocks(peerId) : { instances: [], guilds: [], users: [] };
@@ -88,7 +90,7 @@ const makeHarness = async (reply, overrides = {}) => {
         typeorm: { In: (values) => values },
         "file-type": require("file-type"),
         "@spacebar/database": { FederationPeer: { find: async ({ where }) => peers.filter((row) => where.id.includes(row.id)) } },
-        "@spacebar/util": { ...protocol, ...media, Config, fetchPublicUrl: network.fetchPublicUrl },
+        "@spacebar/util": { ...protocol, ...media, ...limits, Config, fetchPublicUrl: network.fetchPublicUrl },
         "./federation": {
             currentDocument: async () => overrides.document ?? null,
             instanceId: () => "home.example",
@@ -406,5 +408,11 @@ test("upload URLs point at the home instance, are signed and forward the body to
             assert.equal((await failure(federationMedia.forwardUpload(peerId, `${peerUrl}/avatars/1/x`, []))).status, 400);
             assert.equal((await failure(federationMedia.forwardUpload("127.0.0.2:9", remote, []))).status, 403);
             assert.equal(hits.length, 1);
+            assert.equal(federationMedia.uploadForwards.used, 0, "failed forwards give their bytes back");
+            const held = federationMedia.uploadForwards.reserve(federationMedia.UPLOAD_FORWARD_BUDGET - 100);
+            assert.equal((await failure(federationMedia.forwardUpload(peerId, remote, [Buffer.from("meow")]))).status, 503);
+            held();
+            assert.equal((await federationMedia.forwardUpload(peerId, remote, [Buffer.from("meow")], { contentLength: 4 })).status, 200);
+            assert.equal(federationMedia.uploadForwards.used, 0);
         },
     ));

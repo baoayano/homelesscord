@@ -11,14 +11,18 @@ import {
     generateFederationToken,
     GuildDeleteEvent,
     parseCanonicalId,
+    RELAY_METHODS,
+    relayPathProblem,
+    relayRouteAllowed,
     SNOWFLAKE,
     translatePath,
 } from "@spacebar/util";
 import { enforceMessageAutomod } from "./instanceAutomod";
+import { enforceQuarantine } from "./quarantine";
 import { canonicalIds, fromWire, localIds, toWire } from "./federationIds";
 import { deleteMirrorGuild, mirrorInstance, syncMirrorChannels, upsertMirrorChannel, upsertMirrorGuild } from "./federationMirrors";
 import { rewriteUploadUrl } from "./federationMedia";
-import { ownInstance, signedFetch } from "./federationNetwork";
+import { hostAnswerError, hostTransportError, ownInstance, signedFetch } from "./federationNetwork";
 import { actorBlocked, ensureShadow, lookupRemoteHandle, profileOf, upsertShadows } from "./federationShadows";
 
 type Raw = Record<string, unknown>;
@@ -46,7 +50,7 @@ export interface RelayResponse {
     headers: Record<string, string>;
 }
 
-const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+const LOOPBACK_TIMEOUT = 15_000;
 const MAX_FILES_BYTES = 25 * 1024 * 1024;
 const PASSED_HEADERS = ["retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-ratelimit-reset-after", "x-ratelimit-bucket", "x-ratelimit-scope"];
 
@@ -170,7 +174,16 @@ export async function loopback(port: number, user_id: string, method: string, pa
         payload = JSON.stringify(body);
         headers["content-type"] = "application/json";
     }
-    const response = await fetch(`http://127.0.0.1:${port}/api/v9${path}`, { method, headers, body: payload, redirect: "manual" });
+    const response = await fetch(`http://127.0.0.1:${port}/api/v9${path}`, {
+        method,
+        headers,
+        body: payload,
+        redirect: "manual",
+        signal: AbortSignal.timeout(LOOPBACK_TIMEOUT),
+    }).catch((error) => {
+        if ((error as Error)?.name !== "TimeoutError") throw error;
+        throw new FederationRequestError("host_timeout", `This instance took longer than ${LOOPBACK_TIMEOUT / 1000} seconds to run ${method} ${path.split("?")[0]}`, 504);
+    });
     const text = await response.text();
     let parsed: unknown = null;
     if (text) {
@@ -198,9 +211,9 @@ export async function executeRelay(req: Request, sender: string, raw: Raw) {
     if (!actor || actor.instance !== sender) throw new FederationRequestError("bad_actor", "The actor must be a user of the sending instance", 403);
     if (await actorBlocked(request.actor)) throw new FederationRequestError("blocked", "The actor is blocked on this instance", 403);
     const method = String(request.method ?? "").toUpperCase();
-    if (!METHODS.includes(method)) throw new FederationRequestError("bad_request", "Unsupported method", 400);
-    if (typeof request.path !== "string" || !request.path.startsWith("/") || request.path.includes("..") || request.path.includes("?") || request.path.length > 2000)
-        throw new FederationRequestError("bad_request", "The path is not valid", 400);
+    if (!(RELAY_METHODS as readonly string[]).includes(method)) throw new FederationRequestError("bad_request", "Unsupported method", 400);
+    const pathProblem = relayPathProblem(request.path);
+    if (pathProblem) throw new FederationRequestError("bad_request", pathProblem, 400);
     const files = Array.isArray(request.files) ? request.files.filter((file) => file && typeof file.data === "string") : [];
     if (files.reduce((total, file) => total + Math.floor((file.data.length * 3) / 4), 0) > MAX_FILES_BYTES)
         throw new FederationRequestError("too_large", "Files are limited to 25 MiB", 413);
@@ -208,6 +221,7 @@ export async function executeRelay(req: Request, sender: string, raw: Raw) {
     const shadowUser = await User.findOne({ where: { id: shadow }, select: { id: true, suspended_until: true, disabled: true } });
     if (!shadowUser || shadowUser.disabled) throw new FederationRequestError("blocked", "The actor can't act on this instance", 403);
     const path = await localPath(`${request.path}${queryString(request.query)}`);
+    if (!relayRouteAllowed(method, path.split("?")[0])) throw notFederated();
     const body = request.body === undefined ? undefined : await fromWire(request.body, sender, upsertShadows);
     await assertRelayAllowed(method, path, shadow, body);
     const response = await loopback(loopbackPort(req), shadow, method, path, body, files);
@@ -271,6 +285,15 @@ async function homeAutomod(req: Request, plan: RelayPlan, body: unknown) {
     const isEdit = req.method === "PATCH" && segments.length === 4;
     if (!isCreate && !isEdit) return;
     const message = (body && typeof body === "object" ? body : {}) as Raw;
+    await enforceQuarantine(
+        { user_id: req.user_id, federated: !!req.user?.federated_instance, bot: req.user_bot, rights: req.rights },
+        {
+            content: typeof message.content === "string" && !message.encrypted ? message.content : "",
+            attachments: Array.isArray(message.attachments) ? message.attachments.length : 0,
+            embeds: Array.isArray(message.embeds) ? message.embeds.length : 0,
+            channel_id: plan.id,
+        },
+    );
     if (message.encrypted) return;
     const poll = (message.poll && typeof message.poll === "object" ? message.poll : {}) as { question?: { text?: string }; answers?: { poll_media?: { text?: string } }[] };
     const text = [message.content, poll.question?.text, ...(poll.answers ?? []).map((answer) => answer.poll_media?.text)].filter((entry) => typeof entry === "string").join("\n");
@@ -294,12 +317,25 @@ async function afterRelay(req: Request, plan: RelayPlan, status: number, body: u
         return;
     }
     if (req.method !== "GET" || !body || typeof body !== "object") return;
-    if (plan.kind === "guild" && segments.length === 2) await upsertMirrorGuild({ ...(body as Raw), channels: undefined, members: undefined }, plan.instance);
+    if (plan.kind === "guild" && segments.length === 2) await upsertMirrorGuild({ ...(body as Raw), id: plan.id, channels: undefined, members: undefined }, plan.instance);
     else if (plan.kind === "guild" && segments.length === 3 && segments[2] === "channels" && Array.isArray(body)) await syncMirrorChannels(plan.id, plan.instance, body as Raw[]);
     else if (plan.kind === "channel" && segments.length === 2) {
         const channel = body as Raw;
-        if (typeof channel.guild_id === "string") await upsertMirrorChannel(channel, plan.instance, channel.guild_id);
+        if (typeof channel.guild_id === "string" && (await mirrorInstance("guild", channel.guild_id)) === plan.instance)
+            await upsertMirrorChannel({ ...channel, id: plan.id }, plan.instance, channel.guild_id);
     }
+}
+
+export async function plaintextToPrivateMirror(method: string, segments: string[], plan: RelayPlan, body: unknown) {
+    if (plan.kind !== "channel" || segments[2] !== "messages") return false;
+    const raw = body && typeof body === "object" ? (body as Raw) : {};
+    const sending = method === "POST" && segments.length === 3;
+    const editing =
+        method === "PATCH" && segments.length === 4 && ["content", "embeds", "attachments", "sticker_ids", "poll"].some((key) => raw[key] !== undefined && raw[key] !== null);
+    if (!sending && !editing) return false;
+    if (raw.encrypted && typeof raw.encrypted === "object") return false;
+    const channel = await Channel.findOne({ where: { id: plan.id }, select: { id: true, guild_id: true } });
+    return !!channel && !channel.guild_id;
 }
 
 export async function homeRelay(req: Request, res: Response, next: NextFunction) {
@@ -321,6 +357,8 @@ export async function homeRelay(req: Request, res: Response, next: NextFunction)
         if (!plan) return next();
         const multipart = req.is("multipart/form-data");
         const { body, files } = multipart ? await parseMultipart(req, res) : { body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body, files: [] as RelayFile[] };
+        if (await plaintextToPrivateMirror(req.method, segmentsOf(req.path), plan, body))
+            return res.status(400).json({ message: "Messages in a conversation with another instance must be end-to-end encrypted", code: 90002 });
         await homeAutomod(req, plan, body);
         const own = ownInstance();
         const user = await User.findOneOrFail({
@@ -384,7 +422,10 @@ export const relayToHost = async (instance: string, actor: User, method: string,
         path: await wirePath(path),
         body: body === undefined ? undefined : await toWire(body),
         profile: profileOf(actor),
+    }).catch((error) => {
+        throw hostTransportError(instance, error);
     });
-    if (response.status !== 200 || !response.body) throw new FederationRequestError("remote_error", `${instance} answered ${response.status}`, 502);
+    if (response.status !== 200 || !response.body || typeof response.body !== "object" || typeof response.body.status !== "number")
+        throw hostAnswerError(instance, response.status, response.body);
     return { ...response.body, body: response.body.body == null ? null : await fromWire(response.body.body, instance, upsertShadows) };
 };

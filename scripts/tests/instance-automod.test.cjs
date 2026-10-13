@@ -179,7 +179,16 @@ test("join reasons get low-effort signals and thoughtful answers get none", () =
 
 test("automod config keeps word lists and the allow list as whole lists", () => {
     const source = fs.readFileSync(path.join(__dirname, "../../src/util/util/Config.ts"), "utf8");
-    for (const key of ["automod_wordLists", "automod_allowList", "user_identityBlockedTerms"]) assert.ok(source.includes(`"${key}"`), key);
+    for (const key of [
+        "automod_wordLists",
+        "user_identityBlockedTerms",
+        "automod.allowList",
+        "automod.ipAllowList",
+        "automod.scam.extraDomains",
+        "automod.signup.deniedEmailDomains",
+    ])
+        assert.ok(source.includes(`"${key}"`), key);
+    assert.match(source, /AUTOMOD_STRING_LISTS\.map\(\(path\) => path\.replaceAll\("\.", "_"\)\)/);
     const defaults = require("../../src/util/config/types/AutomodConfiguration.ts").AutomodConfiguration;
     const config = new defaults();
     assert.equal(config.slurs.enabled, true);

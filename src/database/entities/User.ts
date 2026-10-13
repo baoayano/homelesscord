@@ -608,7 +608,7 @@ export class User extends BaseClass {
     async getDmChannelWith(user_id: string) {
         const qry = await Channel.getRepository()
             .createQueryBuilder()
-            .leftJoinAndSelect("Channel.recipients", "rcp")
+            .innerJoin("Channel.recipients", "rcp")
             .where("Channel.type = :type", { type: ChannelType.DM })
             .andWhere("rcp.user_id IN (:...user_ids)", { user_ids: [this.id, user_id] })
             .groupBy("Channel.id")

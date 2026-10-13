@@ -461,7 +461,7 @@ export class Message extends BaseClass {
             channel_id: this.channel_id!,
             type: this.type,
             content: this.content!,
-            author: { ...this.author!, avatar: this.author?.avatar ?? null },
+            author: this.author?.toPartialUser() as PartialUser,
             flags: this.flags,
             application_id: this.application_id,
             //channel: this.channel, // TODO: ephemeral DM channels

@@ -2,7 +2,9 @@
 import { BaseEntity, In, IsNull, Not } from "typeorm";
 import { Channel, Emoji, Guild, Member, PublicGuildRelations, Recipient, Role, Sticker, User, VoiceState, getDatabase } from "@spacebar/database";
 import { ChannelType } from "@spacebar/schemas";
-import { Config, emitEvent, GuildCreateEvent, ReadyGuildDTO } from "@spacebar/util";
+import { Config, emitEvent, GuildCreateEvent, parseCanonicalId, ReadyGuildDTO } from "@spacebar/util";
+import { canonicalIds } from "./federationIds";
+import { assertQuota, quotaAdded } from "./federationQuota";
 
 type Raw = Record<string, unknown>;
 
@@ -52,11 +54,31 @@ const pick = (entity: typeof BaseEntity, data: Raw, skip: string[] = []) => {
     return Object.fromEntries(Object.entries(data).filter(([key, value]) => columns.has(key) && !skip.includes(key) && value !== undefined));
 };
 
+export async function ownedBy(instance: string | null | undefined, ids: string[]) {
+    if (!instance || !ids.length) return new Set<string>();
+    const map = await canonicalIds(ids);
+    return new Set(ids.filter((id) => parseCanonicalId(map.get(id))?.instance === instance));
+}
+
+const JOIN_INTENT_TTL = 7 * 24 * 60 * 60 * 1000;
+const joinIntents = new Map<string, number>();
+
+export const recordJoinIntent = (instance: string, user_id: string, now = Date.now()) => {
+    if (joinIntents.size >= 10_000) for (const [key, at] of joinIntents) if (now - at > JOIN_INTENT_TTL || joinIntents.size >= 10_000) joinIntents.delete(key);
+    joinIntents.set(`${instance}:${user_id}`, now);
+};
+
+export const hasJoinIntent = (instance: string | null | undefined, user_id: string, now = Date.now()) => {
+    const at = instance ? joinIntents.get(`${instance}:${user_id}`) : undefined;
+    return at !== undefined && now - at <= JOIN_INTENT_TTL;
+};
+
 const LOCAL_ONLY = ["federated_instance", "global_discovery", "global_discovery_hidden", "discovery_weight", "discovery_excluded", "channel_ordering"];
 
 export async function upsertMirrorRole(raw: Raw, guild_id: string) {
     const id = localId(raw.id);
     if (!id) return;
+    if (id !== guild_id && !(await ownedBy(await mirrorInstance("guild", guild_id), [id])).has(id)) return;
     const values = pick(Role, raw, ["guild_id", "version"]);
     const existing = await Role.findOne({ where: { id } });
     if (existing && existing.guild_id !== guild_id) return;
@@ -78,14 +100,17 @@ export async function upsertMirrorRole(raw: Raw, guild_id: string) {
 
 export async function upsertMirrorChannel(raw: Raw, instance: string, guild_id: string | null) {
     const id = localId(raw.id);
-    if (!id) return null;
-    const existing = await Channel.findOne({ where: { id }, select: { id: true, federated_instance: true, guild_id: true } });
+    if (!id || !(await ownedBy(instance, [id])).has(id)) return null;
+    const existing = await Channel.findOne({ where: { id }, select: { id: true, federated_instance: true, guild_id: true, type: true, e2ee_enabled_at: true } });
     if (existing && existing.federated_instance !== instance) return null;
-    const values = pick(Channel, raw, ["guild_id", "owner_id", "last_message_id", "version", ...LOCAL_ONLY]);
+    const values = pick(Channel, raw, ["guild_id", "owner_id", "last_message_id", "version", "e2ee_enabled_at", ...LOCAL_ONLY]);
+    const enabledAt = typeof raw.e2ee_enabled_at === "string" && !Number.isNaN(Date.parse(raw.e2ee_enabled_at)) ? new Date(raw.e2ee_enabled_at) : null;
+    const privateMirror = existing ? !existing.guild_id : !guild_id;
     const channel = Channel.create({
         ...values,
         id,
-        type: Number(raw.type ?? 0),
+        type: existing && privateMirror ? existing.type : Number(raw.type ?? 0),
+        e2ee_enabled_at: existing?.e2ee_enabled_at ?? enabledAt ?? (privateMirror ? new Date() : undefined),
         guild_id: guild_id ?? undefined,
         owner_id: localId(raw.owner_id) ?? undefined,
         last_message_id: localId(raw.last_message_id) ?? undefined,
@@ -102,12 +127,24 @@ export async function upsertMirrorChannel(raw: Raw, instance: string, guild_id: 
     return id;
 }
 
+async function ownDefinitions(guild_id: string, raw: Raw[], entity: typeof Emoji | typeof Sticker) {
+    const owned = await ownedBy(
+        await mirrorInstance("guild", guild_id),
+        raw.flatMap((entry) => localId(entry.id) ?? []),
+    );
+    if (!owned.size) return owned;
+    const elsewhere = await (entity as typeof Emoji).find({ where: { id: In([...owned]) }, select: { id: true, guild_id: true } });
+    for (const row of elsewhere) if (row.guild_id !== guild_id) owned.delete(row.id);
+    return owned;
+}
+
 export async function upsertMirrorEmojis(guild_id: string, emojis: Raw[]) {
-    const ids = emojis.flatMap((emoji) => localId(emoji.id) ?? []);
+    const owned = await ownDefinitions(guild_id, emojis, Emoji);
+    const ids = [...owned];
     await Emoji.delete(ids.length ? { guild_id, id: Not(In(ids)) } : { guild_id });
     for (const emoji of emojis) {
         const id = localId(emoji.id);
-        if (!id) continue;
+        if (!id || !owned.has(id)) continue;
         await Emoji.create({
             id,
             guild_id,
@@ -122,11 +159,12 @@ export async function upsertMirrorEmojis(guild_id: string, emojis: Raw[]) {
 }
 
 export async function upsertMirrorStickers(guild_id: string, stickers: Raw[]) {
-    const ids = stickers.flatMap((sticker) => localId(sticker.id) ?? []);
+    const owned = await ownDefinitions(guild_id, stickers, Sticker);
+    const ids = [...owned];
     await Sticker.delete(ids.length ? { guild_id, id: Not(In(ids)) } : { guild_id });
     for (const sticker of stickers) {
         const id = localId(sticker.id);
-        if (!id) continue;
+        if (!id || !owned.has(id)) continue;
         await Sticker.create({
             id,
             guild_id,
@@ -140,13 +178,15 @@ export async function upsertMirrorStickers(guild_id: string, stickers: Raw[]) {
     }
 }
 
-export async function upsertMirrorMember(raw: Raw, guild_id: string) {
+export async function upsertMirrorMember(raw: Raw, guild_id: string, options: { joining?: string } = {}) {
     const user = isObject(raw.user) ? raw.user : null;
     const user_id = localId(user?.id ?? raw.user_id ?? raw.id);
-    if (!user_id || !(await User.exists({ where: { id: user_id } }))) return null;
+    const row = user_id ? await User.findOne({ where: { id: user_id }, select: { id: true, federated_instance: true } }) : null;
+    if (!user_id || !row) return null;
+    const existing = await Member.findOne({ where: { id: user_id, guild_id }, relations: { roles: true } });
+    if (!existing && !row.federated_instance && options.joining !== user_id && !hasJoinIntent(await mirrorInstance("guild", guild_id), user_id)) return null;
     const roleIds = (Array.isArray(raw.roles) ? (raw.roles as unknown[]) : []).flatMap((role) => localId(role) ?? []);
     const roles = roleIds.length ? await Role.find({ where: { id: In(roleIds), guild_id }, select: { id: true } }) : [];
-    const existing = await Member.findOne({ where: { id: user_id, guild_id }, relations: { roles: true } });
     const values = {
         nick: typeof raw.nick === "string" ? raw.nick : undefined,
         avatar: typeof raw.avatar === "string" ? raw.avatar : undefined,
@@ -200,9 +240,10 @@ export async function removeMirrorMember(user_id: string, guild_id: string) {
 
 export async function upsertMirrorGuild(raw: Raw, instance: string) {
     const id = localId(raw.id);
-    if (!id) return null;
+    if (!id || !(await ownedBy(instance, [id])).has(id)) return null;
     const existing = await Guild.findOne({ where: { id }, select: { id: true, federated_instance: true } });
     if (existing && existing.federated_instance !== instance) return null;
+    if (!existing) await assertQuota("guilds", instance);
     const properties = isObject(raw.properties) ? { ...raw.properties, ...raw, properties: undefined } : raw;
     const values = pick(Guild, properties, [
         "owner_id",
@@ -243,6 +284,7 @@ export async function upsertMirrorGuild(raw: Raw, instance: string) {
         global_discovery_hidden: false,
     } as Partial<Guild>);
     await guild.save();
+    if (!existing) quotaAdded("guilds", instance);
     invalidateMirror(`guild:${id}`);
     for (const role of list(raw.roles)) await upsertMirrorRole(role, id);
     if (!(await Role.exists({ where: { id } })))

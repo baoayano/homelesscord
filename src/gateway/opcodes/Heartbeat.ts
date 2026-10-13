@@ -15,6 +15,8 @@ export interface QoSPayload {
     reasons: string[];
 }
 
+const LastSeenInterval = 60_000;
+
 export async function onHeartbeat(this: WebSocket, data: Payload) {
     // TODO: validate payload
 
@@ -25,8 +27,11 @@ export async function onHeartbeat(this: WebSocket, data: Payload) {
     }
 
     await Send(this, { op: 11, d: {} });
-    if (this.session)
+    const now = Date.now();
+    if (this.session && now - (this.lastSeenWrite ?? 0) >= LastSeenInterval) {
+        this.lastSeenWrite = now;
         Session.update({ session_id: this.session.session_id, user_id: this.user_id } as FindOptionsWhere<Session>, { last_seen: new Date() }).catch((e) =>
             console.error(`[Gateway/${this.user_id}] failed to record heartbeat`, e),
         );
+    }
 }

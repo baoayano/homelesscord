@@ -13,7 +13,7 @@ router.get("/", route({ right: "MANAGE_USERS", spacebarOnly: true }), async (req
     res.json(settings.toLegacy(proto.userSettings));
 });
 router.patch("/", route({ right: "MANAGE_USERS", spacebarOnly: true, requestBody: "UserSettingsUpdateSchema" }), async (req: Request, res: Response) => {
-    const target = await adminCustomizationTarget(req);
+    const target = await adminCustomizationTarget(req, "client preferences");
     if (target.bot) throw new HTTPError("Bot accounts do not have client preferences", 400);
     const result = await updateUserPreferenceSettings(target.id, req.body as UserSettingsUpdateSchema);
     await recordAdminCustomization(req, target.id, "client_preferences", Object.keys(req.body));

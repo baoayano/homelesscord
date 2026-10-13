@@ -178,13 +178,17 @@ const launch = async (user, target, { login = false, profile = user.name, strict
         { token: user.token, login, nonce: randomBytes(8).toString("hex"), strictSafety },
     );
     const page = context.pages()[0] ?? (await context.newPage());
-    const s = { context, page, user, sent: [], errors: [], failed: [], askedToUnlock: false };
+    const s = { context, page, user, sent: [], errors: [], pageErrors: [], failed: [], askedToUnlock: false };
     sessions.add(s);
     page.on("response", async (response) => {
         if (response.status() < 400 || !response.url().includes("/api/")) return;
         s.failed.push(`${response.request().method()} ${new URL(response.url()).pathname} ${response.status()} ${(await response.text().catch(() => "")).slice(0, 200)}`);
     });
-    page.on("console", (m) => m.text().startsWith("[e2ee]") && s.errors.push(m.text()));
+    page.on("console", (m) => {
+        if (m.text().startsWith("[e2ee]")) s.errors.push(m.text());
+        else if (m.type() === "error") s.pageErrors.push(m.text().slice(0, 300));
+    });
+    page.on("pageerror", (error) => s.pageErrors.push(String(error).slice(0, 300)));
     page.on("request", (r) => {
         const match = new URL(r.url()).pathname.match(/\/channels\/(\d+)\/messages(?:\/(\d+))?$/);
         if (match && ((r.method() === "POST" && !match[2]) || (r.method() === "PATCH" && match[2]))) s.sent.push({ channel: match[1], body: r.postDataJSON() });
@@ -292,7 +296,7 @@ const diagnose = async (s) => {
         })
         .catch((error) => ({ error: String(error) }));
     if (process.env.FED_SHOTS) await s.page.screenshot({ path: path.join(process.env.FED_SHOTS, `${s.user.name}-${Date.now()}.png`) }).catch(() => {});
-    console.error(`${s.user.name} on ${s.user.instance.name}:`, JSON.stringify(state), s.errors.slice(-5), s.failed.slice(-20));
+    console.error(`${s.user.name} on ${s.user.instance.name}:`, JSON.stringify(state), s.errors.slice(-5), s.failed.slice(-20), s.pageErrors.slice(-10));
 };
 const phase = async (name, list, fn) => {
     log(`phase: ${name}`);
@@ -451,6 +455,85 @@ try {
             assert.match(stored.attachments[0].filename, /^[a-z0-9]+\.bin$/, "bob's instance only knows a random .bin name");
             assert.equal(psql(A.db, `SELECT count(*) FROM attachments WHERE filename LIKE '%${suffix}%'`), "0", "the file name never reached alice's instance");
             log("bob saw alice's encrypted image");
+        },
+    );
+
+    await phase(
+        "bob sends an encrypted image and a file through his own instance",
+        () => [a, b].filter(Boolean),
+        async () => {
+            const imageName = `dog-${suffix}.png`;
+            const fileName = `notes-${suffix}.txt`;
+            const caption = `files for alice ${suffix}`;
+            const imageBytes = png(64, 48);
+            const fileBytes = Buffer.from(`notes for alice ${suffix}\n`.repeat(40));
+            await b.page
+                .locator('input[type="file"]')
+                .first()
+                .setInputFiles([
+                    { name: imageName, mimeType: "image/png", buffer: imageBytes },
+                    { name: fileName, mimeType: "text/plain", buffer: fileBytes },
+                ]);
+            await send(b, caption);
+            await waitDecrypted(a, caption, 30000);
+            await waitDecrypted(b, caption, 30000);
+            const sent = b.sent.find(({ body }) => body.encrypted && body.attachments?.length)?.body;
+            assert.ok(v2(sent) && sent.attachments.length === 2, "bob's browser sends a version 2 envelope with two opaque attachments");
+            const message = a.page.locator('[id^="chat-messages-"]', { has: a.page.locator('[id^="message-content-"]', { hasText: caption }) }).last();
+            const image = message.locator(`img[src*="/e2ee/attachments/${dm.id}/"]`).first();
+            await image.waitFor({ timeout: 20000 });
+            await a.page.waitForFunction((el) => el.complete && el.naturalWidth > 0, await image.elementHandle(), { timeout: 20000 });
+            assert.deepEqual(await image.evaluate((el) => [el.naturalWidth, el.naturalHeight]), [64, 48], "alice's browser renders bob's decrypted image");
+            const shown = await a.page.evaluate(async (src) => [...new Uint8Array(await (await fetch(src)).arrayBuffer())], await image.getAttribute("src"));
+            assert.ok(Buffer.from(shown).equals(imageBytes), "the image bytes alice sees match bob's original");
+            const file = message.locator(`a[href*="/e2ee/attachments/${dm.id}/"][href*="${encodeURIComponent(fileName)}"]`).first();
+            await file.waitFor({ state: "attached", timeout: 20000 });
+            const fetched = await a.page.evaluate(async (href) => [...new Uint8Array(await (await fetch(href)).arrayBuffer())], await file.getAttribute("href"));
+            assert.ok(Buffer.from(fetched).equals(fileBytes), "the file alice downloads matches bob's original");
+            const ownImage = b.page
+                .locator('[id^="chat-messages-"]', { has: b.page.locator('[id^="message-content-"]', { hasText: caption }) })
+                .last()
+                .locator(`img[src*="/e2ee/attachments/${dmOnB.id}/"]`)
+                .first();
+            await ownImage.waitFor({ state: "attached", timeout: 20000 });
+            await b.page.waitForFunction((el) => el.complete && el.naturalWidth > 0, await ownImage.elementHandle(), { timeout: 20000 });
+            const stored = (await call(A, "GET", `/channels/${dm.id}/messages?limit=5`, alice.token)).body.find((m) => m.attachments?.length === 2);
+            assert.ok(
+                stored?.attachments.every((attachment) => /^[a-z0-9]+\.bin$/.test(attachment.filename)),
+                "alice's instance stores only random .bin names for bob's files",
+            );
+            for (const db of [A.db, B.db])
+                assert.equal(
+                    psql(db, `SELECT count(*) FROM attachments WHERE filename LIKE '%${suffix}%'`),
+                    "0",
+                    `the file names never reached ${db === A.db ? "alice's" : "bob's"} instance`,
+                );
+            log("alice saw bob's encrypted image and file");
+        },
+    );
+
+    await phase(
+        "mentions inside encrypted text name the right person on both instances",
+        () => [a, b].filter(Boolean),
+        async () => {
+            const toBob = `hey <@${bobOnA}> look ${suffix}`;
+            await send(a, toBob);
+            const mentionOf = (s, text, name) =>
+                s.page.waitForFunction(
+                    ({ text, name }) =>
+                        [...document.querySelectorAll('[id^="message-content-"]')].some(
+                            (el) => el.textContent.includes(text) && [...el.querySelectorAll('[class*="mention"]')].some((mention) => mention.textContent.includes(name)),
+                        ),
+                    { text, name },
+                    { timeout: 20000 },
+                );
+            await mentionOf(b, `look ${suffix}`, `bob${suffix}`);
+            await mentionOf(a, `look ${suffix}`, `bob${suffix}`);
+            const aliceOnB = dmOnB.recipients.find((r) => r.username === alice.handle).id;
+            await send(b, `and you <@${aliceOnB}> too ${suffix}`);
+            await mentionOf(a, `too ${suffix}`, `alice${suffix}`);
+            await mentionOf(b, `too ${suffix}`, `alice${suffix}`);
+            log("mentions inside encrypted messages point at the right user on both instances");
         },
     );
 

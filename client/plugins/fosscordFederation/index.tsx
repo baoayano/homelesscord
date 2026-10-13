@@ -3,15 +3,15 @@ import type { NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { Button } from "@components/Button";
 import { FormSwitch } from "@components/FormSwitch";
 import definePlugin from "@utils/types";
-import { findStoreLazy } from "@webpack";
+import { findByPropsLazy, findLazy, findStoreLazy } from "@webpack";
 import { GuildStore, Menu, NavigationRouter, RestAPI, showToast, Text, UserStore, useEffect, useState } from "@webpack/common";
 import type { UIEvent } from "react";
 
 import { FosscordAuthor } from "../fosscordCore/shared";
+import { ensureGuild, joinRemote, UNLOADED_MESSAGE } from "./join";
 import {
     addRemoteFriend,
     chatInviteKey,
-    errorText,
     guildInstance,
     instanceName,
     inviteEndpoint,
@@ -33,15 +33,45 @@ import managedStyle from "./style.css?managed";
 const TAB = "fosscord-other-instances";
 const SECTION = "FOSSCORD_OTHER_INSTANCES";
 const GuildSettingsStore = findStoreLazy("GuildSettingsStore") as { getGuildId(): string | null };
+const GatewayConnectionStore = findStoreLazy("GatewayConnectionStore") as {
+    getSocket(): { dispatcher?: { receiveDispatch(data: unknown, type: string, compression?: unknown): void } } | null;
+};
+const SERVERS = "servers";
+
+type FieldStore<T> = { getState(): T; setState(state: Partial<T>): void; resetState(): void; useField<K extends keyof T>(key: K): T[K] };
+type ServersState = { selectedTab: string | null };
+const stateHas = (store: { getState?: unknown } | null | undefined, keys: string[]) => {
+    if (typeof store?.getState !== "function") return false;
+    try {
+        const state = (store.getState as () => unknown)();
+        return !!state && typeof state === "object" && keys.every((key) => key in state);
+    } catch {
+        return false;
+    }
+};
+const ServersTabStore = findLazy(
+    (m) => typeof m?.useField === "function" && stateHas(m, ["selectedTab", "isSearchVisible", "searchBarState", "entrypoint"]),
+) as FieldStore<ServersState>;
+const ServersQueryStore = findLazy((m) => typeof m?.useField === "function" && stateHas(m, ["fetchedQuery", "resultsQuery", "categoryId"])) as FieldStore<object>;
+const GlobalDiscovery = findByPropsLazy("transitionToGlobalDiscovery") as { transitionToGlobalDiscovery(options: { tab: string; selectedServersTab?: string }): void };
 
 type Registration = "open" | "invite" | "approval" | "closed";
 type RemoteInstance = { id: string; name: string; description: string; icon_url: string | null; url: string; registration: Registration; state: string };
 type RemoteGuild = { id: string; instance: string; instance_name: string; name: string; description: string; icon_url: string | null; member_count: number; invite_url: string };
 type Directory = { available: false; reason: string } | { available: true; verification: "registry" | "instance"; instances: RemoteInstance[]; guilds: RemoteGuild[] };
+type FederatedVoiceIds = { daveId(userId: string): string; localId(daveId: string): string; daveGroup(channelId: bigint): bigint };
+type DaveSession = {
+    Init(version: number, groupId: bigint, userId: string, key: unknown): unknown;
+    ProcessProposals(proposals: unknown, userIds: string[]): unknown;
+    ProcessWelcome(welcome: unknown, userIds: string[]): unknown;
+    ProcessCommit(commit: unknown): unknown;
+    GetKeyRatchet(userId: string): unknown;
+    GetPairwiseFingerprint(version: number, userId: string, ...rest: unknown[]): unknown;
+};
 type OwnerState = {
     enabled: boolean;
     hidden: boolean;
-    status: "off" | "hidden" | "no_invite" | "pending" | "verified" | "blocked" | "unknown";
+    status: "off" | "hidden" | "no_invite" | "unverified" | "pending" | "verified" | "blocked" | "unknown";
     canonical_id: string | null;
     invite_url: string | null;
     federation_enabled: boolean;
@@ -59,8 +89,9 @@ const STATUS: Record<OwnerState["status"], string> = {
     off: "Only people on this instance can find this server in Discovery.",
     hidden: "This instance's admins hid this server from other instances. Ask them if you think that's a mistake.",
     no_invite: "This server needs a text channel before it can show on other instances.",
-    pending: "Waiting for verification. Once it's verified, people on other instances can find it in Discovery.",
-    verified: "Verified. People on other instances can find this server in Discovery.",
+    unverified: "Waiting for this instance's admins to verify it. Once they do, people on other instances can find it in Discovery.",
+    pending: "Verified by this instance's admins. Other instances show it once the registry picks it up, within an hour.",
+    verified: "Listed. People on other instances can find this server in Discovery.",
     blocked: "The registry blocked this server, so other instances don't show it.",
     unknown: "This instance hasn't reached the federation registry yet, so other instances can't see this server for now.",
 };
@@ -107,31 +138,35 @@ function inviteCode(inviteUrl: string) {
     }
 }
 
-async function openGuild(guildId: string, channelId?: string | null) {
-    for (let i = 0; i < 50 && !GuildStore.getGuild(guildId); i++) await new Promise((resolve) => setTimeout(resolve, 100));
-    NavigationRouter.transitionTo(`/channels/${guildId}${channelId ? `/${channelId}` : ""}`);
+function receiveGuild(guild: Record<string, unknown>) {
+    const dispatcher = GatewayConnectionStore.getSocket()?.dispatcher;
+    if (!dispatcher) throw new Error("The gateway isn't connected");
+    dispatcher.receiveDispatch(structuredClone(guild), "GUILD_CREATE");
 }
+
+const hasGuild = (guildId: string) => !!GuildStore.getGuild(guildId);
 
 function GuildCard({ guild }: { guild: RemoteGuild }) {
     const [joining, setJoining] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const errorId = `fosscord-federation-join-error-${guild.id}`;
+    const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null);
+    const noticeId = `fosscord-federation-join-error-${guild.id}`;
 
     const join = async () => {
         const code = inviteCode(guild.invite_url);
-        if (!code) return setError("This server's invite link is broken. Open it on its instance instead.");
+        if (!code) return setNotice({ text: "This server's invite link is broken. Open it on its instance instead.", failed: true });
         setJoining(true);
-        setError(null);
-        try {
-            const { body } = await RestAPI.post({ url: inviteEndpoint(remoteKey(guild.instance, code)), body: {} });
-            const guildId: string | undefined = body?.guild?.id ?? body?.guild_id;
-            if (!guildId) throw { body: { error: "The instance answered without a server. Try again in a minute." } };
-            rememberGuild(guildId, guild.instance.toLowerCase());
-            await openGuild(guildId, body?.channel?.id ?? body?.channel_id);
-        } catch (err) {
-            setError(errorText(err) ?? "Couldn't join this server. Try again.");
-            setJoining(false);
-        }
+        setNotice(null);
+        const result = await joinRemote({
+            post: (timeout) => RestAPI.post({ url: inviteEndpoint(remoteKey(guild.instance, code)), body: {}, timeout }),
+            hasGuild,
+            receiveGuild,
+            navigate: (guildId, channelId) => {
+                rememberGuild(guildId, guild.instance.toLowerCase());
+                NavigationRouter.transitionTo(`/channels/${guildId}${channelId ? `/${channelId}` : ""}`);
+            },
+        });
+        setJoining(false);
+        if (result.kind !== "opened") setNotice({ text: result.message, failed: result.kind !== "pending" });
     };
 
     return (
@@ -157,7 +192,7 @@ function GuildCard({ guild }: { guild: RemoteGuild }) {
                 </Text>
             </div>
             <div className="fosscord-federation-actions">
-                <Button size="small" variant="primary" onClick={join} disabled={joining} aria-describedby={error ? errorId : undefined}>
+                <Button size="small" variant="primary" onClick={join} disabled={joining} aria-describedby={notice ? noticeId : undefined}>
                     {joining ? "Joining…" : "Join"}
                 </Button>
                 <a
@@ -170,13 +205,45 @@ function GuildCard({ guild }: { guild: RemoteGuild }) {
                     Open on its instance
                 </a>
             </div>
-            {error && (
-                <Text variant="text-sm/normal" color="text-feedback-critical" role="alert" id={errorId}>
-                    {error}
+            {notice && (
+                <Text variant="text-sm/normal" color={notice.failed ? "text-feedback-critical" : "text-default"} role={notice.failed ? "alert" : "status"} id={noticeId}>
+                    {notice.text}
                 </Text>
             )}
         </div>
     );
+}
+
+function GlobeIcon() {
+    return (
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z" />
+        </svg>
+    );
+}
+
+function openOtherInstances() {
+    ServersQueryStore.resetState();
+    ServersTabStore.resetState();
+    GlobalDiscovery.transitionToGlobalDiscovery({ tab: SERVERS, selectedServersTab: TAB });
+}
+
+function useSidebarTab(tab: string, selectedTab: string | null) {
+    const serversTab = ServersTabStore.useField("selectedTab");
+    const onOtherInstances = selectedTab === SERVERS && serversTab === TAB;
+    if (tab === TAB) return { selected: onOtherInstances, onClick: () => openOtherInstances };
+    const leaving = tab === SERVERS && onOtherInstances;
+    return {
+        selected: selectedTab === tab && !leaving,
+        onClick: (original: () => void) =>
+            leaving
+                ? () => {
+                      ServersTabStore.setState({ selectedTab: null });
+                      original();
+                  }
+                : original,
+    };
 }
 
 function InstanceTag({ instance }: { instance: string }) {
@@ -427,6 +494,13 @@ export default definePlugin({
             loadInstances();
             loadGuildInstances(Object.keys(GuildStore.getGuilds()));
         },
+        INVITE_ACCEPT_SUCCESS({ invite }: { invite?: { guild_id?: string; meowcord_guild?: { id?: unknown } & Record<string, unknown> } }) {
+            const guildId = invite?.guild_id;
+            if (!guildId || !invite?.meowcord_guild) return;
+            ensureGuild(guildId, invite.meowcord_guild, { hasGuild, receiveGuild }).then((loaded) => {
+                if (!loaded) showToast(UNLOADED_MESSAGE, "failure");
+            });
+        },
         GUILD_CREATE({ guild }: { guild?: { id?: string; federated_instance?: string | null } }) {
             if (!guild?.id) return;
             if (guild.federated_instance) rememberGuild(guild.id, guild.federated_instance.toLowerCase());
@@ -459,9 +533,38 @@ export default definePlugin({
         return instance && user?.globalName ? <InstanceTag instance={instance} /> : null;
     },
 
-    sharedCall: () => !!(window as Window & { FosscordFederatedVoice?: { sharedCall(): boolean } }).FosscordFederatedVoice?.sharedCall(),
+    daveSession<T extends object>(session: T): T {
+        const voice = (window as Window & { FosscordFederatedVoice?: FederatedVoiceIds }).FosscordFederatedVoice;
+        if (!voice) return session;
+        const target = session as unknown as DaveSession;
+        const ids = (userIds: string[]) => userIds.map((id) => voice.daveId(id));
+        const roster = (value: unknown) =>
+            value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([daveId, key]) => [voice.localId(daveId), key])) : value;
+        const mapped: Partial<DaveSession> = {
+            Init: (version, groupId, userId, key) => target.Init(version, voice.daveGroup(groupId), userId, key),
+            ProcessProposals: (proposals, userIds) => target.ProcessProposals(proposals, ids(userIds)),
+            ProcessWelcome: (welcome, userIds) => roster(target.ProcessWelcome(welcome, ids(userIds))),
+            ProcessCommit: (commit) => {
+                const result = target.ProcessCommit(commit) as { rosterUpdate?: unknown } | null | undefined;
+                return result?.rosterUpdate ? { ...result, rosterUpdate: roster(result.rosterUpdate) } : result;
+            },
+            GetKeyRatchet: (userId) => target.GetKeyRatchet(voice.daveId(userId)),
+            GetPairwiseFingerprint: (version, userId, ...rest) => target.GetPairwiseFingerprint(version, voice.daveId(userId), ...rest),
+        };
+        return new Proxy(session, {
+            get(object, key) {
+                if (key in mapped) return mapped[key as keyof DaveSession];
+                const value = Reflect.get(object, key);
+                return typeof value === "function" ? value.bind(object) : value;
+            },
+        });
+    },
 
     tabs: () => [{ id: TAB, label: "Other instances" }],
+    sidebarTab: TAB,
+    useSidebarTab,
+    sidebarLabel: (tab: string) => (tab === TAB ? "Other instances" : null),
+    renderSidebarIcon: () => <GlobeIcon />,
     renderOtherInstances: (props: { onScroll?: (event: UIEvent<HTMLDivElement>) => void }) => <OtherInstances {...props} />,
     settingsSection: (props: { isOwner?: boolean }) => ({
         section: SECTION,
@@ -491,6 +594,34 @@ export default definePlugin({
                     replace: `$1case"${TAB}":return $self.renderOtherInstances({onScroll:$2});$3`,
                 },
             ],
+        },
+        {
+            find: ".DISCOVERY_QUEST_TAB_CLICKED,{",
+            replacement: [
+                {
+                    match: /(case \i\.GlobalDiscoveryTab\.QUESTS:return\(0,\i\.jsx\)\(\i\.\i,\{color:"currentColor"\}\))(\}\}\)\(\i\),\[\i\]\))/,
+                    replace: "$1;case $self.sidebarTab:return $self.renderSidebarIcon()$2",
+                },
+                {
+                    match: /(\i\.useMemo\(\(\)=>)(\(0,\i\.\i\)\((\i)\),\[\3\]\),)(\i)=(\i)===\3(?=,\i=\i\.useCallback\(\(\)=>\{switch\(\3\)\{case \i\.GlobalDiscoveryTab\.)/,
+                    replace: "$1$self.sidebarLabel($3)??$2fosscordTab=$self.useSidebarTab($3,$5),$4=fosscordTab.selected",
+                },
+                {
+                    match: /(role:"tab","aria-selected":\i,tabIndex:\i\?0:-1,onClick:)(\i)/,
+                    replace: "$1fosscordTab.onClick($2)",
+                },
+                {
+                    match: /(?<=role:"tablist","aria-orientation":"vertical",children:)(\i\.GLOBAL_DISCOVERY_TABS.{0,60}?\.map\((\i)=>\(0,(\i)\.jsx\)\((\i),\{tab:\2\},\2\)\))/,
+                    replace: "[$1,(0,$3.jsx)($4,{tab:$self.sidebarTab},$self.sidebarTab)]",
+                },
+            ],
+        },
+        {
+            find: "itemGapPx:20,maxLines:1",
+            replacement: {
+                match: /if\(null==(\i)\|\|(\i)\.current===\1\)return;/,
+                replace: "if(null==$1||$2.current===$1&&0!==$1)return;",
+            },
         },
         {
             find: ".GUILD_SETTINGS_DISCOVERY_LANDING_PAGE,label",
@@ -549,10 +680,10 @@ export default definePlugin({
             },
         },
         {
-            find: "Refusing DAVE protocol downgrade to version",
+            find: "Refusing to create a decryptor for the local user ID",
             replacement: {
-                match: /_maybeRefuseDaveDowngrade\((\i),(\i),\i\)\{if\(0!==\2\)return!1;/,
-                replace: "$&if($self.sharedCall())return!1;",
+                match: /(this\.mlsSession=)(new \i\.Session\("","",\(\i,\i\)=>\{this\.emit\([^)]*\)\}\))/,
+                replace: "$1$self.daveSession($2)",
             },
         },
     ],

@@ -124,17 +124,26 @@ export async function refreshDiscovery(env, instance, discoveryUrl, publicKey) {
         if (!row) {
             statements.push(
                 env.DB.prepare(
-                    "INSERT INTO discovery (id, instance, status, name, description, icon_url, member_count, invite_url, present, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 1, ?, ?)",
-                ).bind(guild.id, instance.id, guild.name, guild.description, guild.icon_url, guild.member_count, guild.invite_url, now, now),
+                    "INSERT INTO discovery (id, instance, status, name, description, icon_url, member_count, invite_url, present, verified_at, created_at, updated_at) VALUES (?, ?, 'verified', ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                ).bind(guild.id, instance.id, guild.name, guild.description, guild.icon_url, guild.member_count, guild.invite_url, now, now, now),
             );
             continue;
         }
-        const changed = row.name !== guild.name || row.description !== guild.description || (row.icon_url ?? null) !== guild.icon_url;
-        const status = changed && (row.status === "verified" || row.status === "rejected") ? "pending" : row.status;
+        const status = row.status === "pending" ? "verified" : row.status;
         statements.push(
             env.DB.prepare(
                 "UPDATE discovery SET status = ?, verified_at = ?, name = ?, description = ?, icon_url = ?, member_count = ?, invite_url = ?, present = 1, updated_at = ? WHERE id = ?",
-            ).bind(status, status === "verified" ? row.verified_at : null, guild.name, guild.description, guild.icon_url, guild.member_count, guild.invite_url, now, guild.id),
+            ).bind(
+                status,
+                status === "verified" ? (row.verified_at ?? now) : null,
+                guild.name,
+                guild.description,
+                guild.icon_url,
+                guild.member_count,
+                guild.invite_url,
+                now,
+                guild.id,
+            ),
         );
     }
     const listed = new Set(guilds.map((guild) => guild.id));

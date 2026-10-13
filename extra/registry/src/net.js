@@ -82,17 +82,57 @@ function ipv4IsPrivate(address) {
     );
 }
 
+export function expandIpv6(address) {
+    let text = address.toLowerCase();
+    const dotted = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+    if (dotted) {
+        const [a, b, c, d] = dotted.slice(1).map(Number);
+        text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    }
+    const halves = text.split("::");
+    if (halves.length > 2) return null;
+    const head = halves[0] ? halves[0].split(":") : [];
+    const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0 || (halves.length === 1 && missing !== 0)) return null;
+    const groups = [...head, ...Array(missing).fill("0"), ...tail].map((group) => Number.parseInt(group, 16));
+    return groups.length === 8 && groups.every((group) => Number.isInteger(group) && group >= 0 && group <= 0xffff) ? groups : null;
+}
+
 export function isPrivateAddress(address) {
     if (!address.includes(":")) return ipv4IsPrivate(address);
-    const lower = address.toLowerCase();
-    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower);
-    if (mapped) return ipv4IsPrivate(mapped[1]);
-    if (lower === "::" || lower === "::1") return true;
-    const first = Number.parseInt(lower.split(":")[0] || "0", 16);
-    return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00 || lower.startsWith("64:ff9b:") || lower.startsWith("2001:db8:");
+    const groups = expandIpv6(address);
+    if (!groups) return true;
+    const embedded = (high, low) => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+    const zeroes = (count) => groups.slice(0, count).every((group) => group === 0);
+    if (zeroes(5) && (groups[5] === 0 || groups[5] === 0xffff)) return groups[5] === 0 || ipv4IsPrivate(embedded(groups[6], groups[7]));
+    if (zeroes(4) && groups[4] === 0xffff && groups[5] === 0) return true;
+    const [first, second] = groups;
+    if (first === 0x2002) return ipv4IsPrivate(embedded(groups[1], groups[2]));
+    return (
+        (first & 0xfe00) === 0xfc00 ||
+        (first & 0xffc0) === 0xfe80 ||
+        (first & 0xffc0) === 0xfec0 ||
+        (first & 0xff00) === 0xff00 ||
+        (first === 0x64 && second === 0xff9b) ||
+        (first === 0x100 && second === 0 && groups[2] === 0 && groups[3] === 0) ||
+        (first === 0x2001 && (second === 0xdb8 || second < 0x200))
+    );
+}
+
+export function rateLimitBucket(ip) {
+    if (!ip?.includes(":")) return ip ?? "unknown";
+    const groups = expandIpv6(ip);
+    return groups
+        ? `${groups
+              .slice(0, 4)
+              .map((group) => group.toString(16))
+              .join(":")}::/64`
+        : ip;
 }
 
 const resolved = new Map();
+const RESOLVED_LIMIT = 2000;
 
 async function resolvesPublicly(host) {
     const cached = resolved.get(host);
@@ -112,6 +152,7 @@ async function resolvesPublicly(host) {
     if (addresses.length === 0) throw new Error(`${host} has no A or AAAA record`);
     const blocked = addresses.find(isPrivateAddress);
     if (blocked) throw new Error(`${host} resolves to a private address`);
+    if (resolved.size >= RESOLVED_LIMIT) resolved.clear();
     resolved.set(host, Date.now() + 5 * 60 * 1000);
 }
 

@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { GuildStore, RestAPI } from "@webpack/common";
 
-type ApiError = { body?: { error?: unknown; message?: unknown }; fields?: { error?: unknown }; message?: unknown };
+import { errorText } from "./join";
+
+export { errorText };
 
 const REMOTE_KEY = /^([^/\s?#]+)\/([\w-]+)$/;
 const INVITE_PATH = /^\/invite\/([\w-]+)\/?$/;
@@ -23,12 +25,6 @@ const ownHosts = () => new Set([location.host.toLowerCase(), (env().INVITE_HOST 
 export const isOwnHost = (host: string) => ownHosts().has(host.toLowerCase());
 
 export const nameOf = (instance: string) => knownInstances.get(instance) || instance;
-
-export function errorText(error: unknown) {
-    const { body, fields, message } = (error ?? {}) as ApiError;
-    const text = body?.error ?? fields?.error ?? body?.message ?? message;
-    return typeof text === "string" && text.trim() ? text : null;
-}
 
 export const remoteKey = (instance: string, code: string) => `${instance.toLowerCase()}/${code}`;
 

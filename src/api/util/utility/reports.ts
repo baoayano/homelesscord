@@ -6,7 +6,7 @@ import { ChannelType, CreateReportSchema, ReportMenuType } from "@spacebar/schem
 import { DiscordApiErrors, getPermission, getUrlSignature, NewUrlSignatureData } from "@spacebar/util";
 import { snapshotWidget } from "../handlers/ApplicationWidgets";
 import { e2eeDevicesOf, verifyEd25519 } from "./e2ee";
-import { canonicalOf } from "./federationIds";
+import { canonicalOf, localReferences } from "./federationIds";
 import { automodVerifiedReport } from "./instanceAutomod";
 
 import { getReportingMenu } from "./reportMenus";
@@ -81,9 +81,10 @@ const openEnvelope = async (message: Message, encodedKey: unknown): Promise<Open
         decipher.setAAD(Buffer.from(`fosscord-e2ee/v1/msg\n${ids.channel}\n${ids.author}\n${envelope.sender_device}\n${bind}`));
         decipher.setAuthTag(sealed.subarray(-16));
         const payload = JSON.parse(Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]).toString("utf8"));
+        const text = typeof payload?.content === "string" ? payload.content : "";
         return {
             verified: true,
-            content: typeof payload?.content === "string" ? payload.content.slice(0, 4000) : "",
+            content: (envelope.v === 2 ? await localReferences(text) : text).slice(0, 4000),
             files: Array.isArray(payload?.attachments)
                 ? payload.attachments.flatMap((file: { filename?: unknown }) => (typeof file?.filename === "string" ? [file.filename.slice(0, 200)] : [])).slice(0, 10)
                 : [],

@@ -5,14 +5,23 @@ import { route } from "@spacebar/api/middlewares";
 import { Guild } from "@spacebar/database";
 import { canonicalId, Config, isDocumentLive } from "@spacebar/util";
 import { GuildGlobalDiscoverySchema } from "@spacebar/schemas";
-import { currentDocument, ensurePermanentInvite, guildRegistryStatus, instanceId, instanceUrl, localBlocks, permanentInvite } from "@spacebar/api/util/utility/federation";
+import {
+    announceSoon,
+    currentDocument,
+    ensurePermanentInvite,
+    guildRegistryStatus,
+    instanceId,
+    instanceUrl,
+    localBlocks,
+    permanentInvite,
+} from "@spacebar/api/util/utility/federation";
 
 const router = Router({ mergeParams: true });
 
 const ownedGuild = async (req: Request) => {
     const guild = await Guild.findOne({
         where: { id: req.params.guild_id as string },
-        select: { id: true, owner_id: true, system_channel_id: true, global_discovery: true, global_discovery_hidden: true },
+        select: { id: true, owner_id: true, system_channel_id: true, global_discovery: true, global_discovery_hidden: true, global_discovery_verified: true },
     });
     if (!guild) throw new HTTPError("Unknown Guild", 404);
     if (guild.owner_id !== req.user_id) throw new HTTPError("Only the server owner can change this", 403);
@@ -30,12 +39,15 @@ const describe = async (guild: Guild, invite: string | null) => {
           ? "hidden"
           : !invite
             ? "no_invite"
-            : canonical && Config.get().federation.discovery.verification === "registry"
-              ? guildRegistryStatus(document, canonical, await localBlocks())
-              : "pending";
+            : !guild.global_discovery_verified
+              ? "unverified"
+              : canonical && Config.get().federation.discovery.verification === "registry"
+                ? guildRegistryStatus(document, canonical, await localBlocks())
+                : "pending";
     return {
         enabled: guild.global_discovery,
         hidden: guild.global_discovery_hidden,
+        verified: guild.global_discovery_verified,
         status,
         canonical_id: canonical,
         invite_url: invite && url ? `${url}/invite/${invite}` : null,
@@ -60,6 +72,7 @@ router.patch(
         if (enabled && !invite) throw new HTTPError("Add a text channel first, so people from other instances have somewhere to land", 400);
         guild.global_discovery = enabled;
         await Guild.update({ id: guild.id }, { global_discovery: enabled });
+        if (guild.global_discovery_verified && !guild.global_discovery_hidden) announceSoon();
         res.json(await describe(guild, invite));
     },
 );

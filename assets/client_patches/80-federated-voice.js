@@ -3,8 +3,10 @@
   const NativeConnection = window.RTCPeerConnection;
   if (!NativeSocket || !NativeConnection) return;
   const sockets = new Map();
-  const shared = new Set();
   const relayed = new WeakMap();
+  const daveIds = new Map();
+  const localIds = new Map();
+  const groups = new Map();
   const pathOf = (url) => {
     try {
       const parsed = new URL(String(url), location.href);
@@ -26,18 +28,24 @@
         try {
           const message = JSON.parse(event.data);
           if (federated && message.op === 2 && message.d?.meowcord_relay) sockets.set(socket, message.d.meowcord_relay);
-          if (message.op === 4 && message.d?.meowcord_shared_call === true) shared.add(socket);
+          const dave = message.d?.meowcord_dave;
+          if (message.op === 4 && typeof dave?.channel_id === "string" && /^\d+$/.test(dave.group ?? "")) groups.set(dave.channel_id, dave.group);
+          if (message.op === 11 && Array.isArray(dave))
+            for (const entry of dave) {
+              if (typeof entry?.user_id !== "string" || !/^\d+$/.test(entry.dave ?? "")) continue;
+              daveIds.set(entry.user_id, entry.dave);
+              localIds.set(entry.dave, entry.user_id);
+            }
         } catch {}
       });
-      socket.addEventListener("close", () => {
-        sockets.delete(socket);
-        shared.delete(socket);
-      });
+      socket.addEventListener("close", () => sockets.delete(socket));
       return socket;
     },
   });
   window.FosscordFederatedVoice = {
-    sharedCall: () => [...sockets.keys(), ...shared].some(open),
+    daveId: (userId) => daveIds.get(String(userId)) ?? String(userId),
+    localId: (daveId) => localIds.get(String(daveId)) ?? String(daveId),
+    daveGroup: (channelId) => BigInt(groups.get(String(channelId)) ?? channelId),
   };
   const relayFor = () => {
     const live = [...sockets].filter(([socket]) => open(socket));

@@ -71,7 +71,7 @@ export class Snowflake {
     static FEDERATED_INCREMENT = 0n;
 
     static generateAt(timestamp: number) {
-        const time = BigInt(Math.max(0, Math.floor(timestamp) - Snowflake.EPOCH)) << 22n;
+        const time = BigInt(Math.max(0, Math.floor(Math.min(Number.isFinite(timestamp) ? timestamp : Date.now(), Date.now())) - Snowflake.EPOCH)) << 22n;
         const increment = Snowflake.FEDERATED_INCREMENT++ % 4096n;
         return (time | (Snowflake.FEDERATED_WORKER << 17n) | (Snowflake.processId << 12n) | increment).toString();
     }

@@ -12,6 +12,7 @@ import {
     FEDERATION_UPLOAD_PREFIX,
     federatedMediaKind,
     federatedMediaType,
+    ByteBudget,
     fetchPublicUrl,
     filterMediaQuery,
     instanceIdFromUrl,
@@ -56,6 +57,8 @@ type RemoteLookup = (localId: string) => Promise<RemoteMediaTarget | null>;
 type InstanceResolver = (id: string) => Promise<FederatedInstance | null>;
 
 const FETCH_HARD_LIMIT = 64 * 1024 * 1024;
+export const UPLOAD_FORWARD_BUDGET = 256 * 1024 * 1024;
+export const uploadForwards = new ByteBudget(UPLOAD_FORWARD_BUDGET);
 const MAX_ACTIVE_FETCHES = 16;
 const MISSING_TTL = 60_000;
 const INSTANCE_TTL = 30_000;
@@ -259,16 +262,18 @@ export const forwardUpload = async (
     if (options.contentLength !== undefined && (!Number.isSafeInteger(options.contentLength) || options.contentLength > limit))
         throw new FederationMediaError(413, "The file is too large to forward");
     if (!limiter.take(`upload:${instance.id}`)) throw new FederationMediaError(429, "Too many uploads to that instance", limiter.retryAfter(`upload:${instance.id}`));
-    const parts: Buffer[] = [];
-    let size = 0;
-    for await (const part of stream) {
-        const chunk = Buffer.from(part);
-        size += chunk.length;
-        if (size > limit) throw new FederationMediaError(413, "The file is too large to forward");
-        parts.push(chunk);
-    }
+    const release = uploadForwards.reserve(options.contentLength ?? limit);
+    if (!release) throw new FederationMediaError(503, "Too many uploads are being forwarded right now", 5);
     let response: Response;
     try {
+        const parts: Buffer[] = [];
+        let size = 0;
+        for await (const part of stream) {
+            const chunk = Buffer.from(part);
+            size += chunk.length;
+            if (size > (options.contentLength ?? limit)) throw new FederationMediaError(413, "The file is too large to forward");
+            parts.push(chunk);
+        }
         response = await fetchPublicUrl(
             url.href,
             {
@@ -281,11 +286,17 @@ export const forwardUpload = async (
             { maxBytes: Math.max(limit, 1), timeoutMs: 30_000 },
         );
     } catch (error) {
+        release();
+        if (error instanceof FederationMediaError) throw error;
         const message = String((error as Error)?.message ?? error);
         if (/byte limit/.test(message)) throw new FederationMediaError(413, "The file is too large to forward");
         if (/redirect/i.test(message)) throw new FederationMediaError(502, "The remote instance answered with a redirect");
         throw new FederationMediaError(502, "The remote instance could not be reached");
     }
-    const body = Buffer.from(await response.arrayBuffer()).subarray(0, 64 * 1024);
-    return { status: response.status, body, contentType: response.headers.get("content-type") };
+    try {
+        const body = Buffer.from(await response.arrayBuffer()).subarray(0, 64 * 1024);
+        return { status: response.status, body, contentType: response.headers.get("content-type") };
+    } finally {
+        release();
+    }
 };

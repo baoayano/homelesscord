@@ -3,6 +3,7 @@ const test = require("node:test");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { loadFederatedAdmin } = require("./federated-admin-module.cjs");
 const load = (file, imports) => {
     const module = { exports: {} };
     vm.runInNewContext(
@@ -52,6 +53,7 @@ test("customization target uses explicit user and protects other operators", asy
         "lambert-server/HTTPError": { HTTPError },
         "@spacebar/schemas": { AuditLogEvents: { ADMIN_USER_CUSTOMIZATION: 2000 } },
         typeorm: {},
+        "../utility/federatedAdmin": loadFederatedAdmin(HTTPError),
     });
     await assert.rejects(
         utility.adminCustomizationTarget({
@@ -72,7 +74,7 @@ test("customization target uses explicit user and protects other operators", asy
         "target",
     );
     assert.equal(reads[0].where.id, "target");
-    assert.deepEqual(Object.keys(reads[0].select), ["id", "rights", "bot"]);
+    assert.deepEqual(Object.keys(reads[0].select), ["id", "rights", "bot", "federated_instance"]);
 });
 test("every customization API requires MANAGE_USERS before target loading", () => {
     for (const name of ["pride-badges", "widgets", "settings", "customization-audit"]) {
@@ -144,6 +146,7 @@ test("customization audit records actor, target, section and field names only", 
         "lambert-server/HTTPError": { HTTPError },
         "@spacebar/schemas": { AuditLogEvents: { ADMIN_USER_CUSTOMIZATION: 2000 } },
         typeorm: {},
+        "../utility/federatedAdmin": loadFederatedAdmin(HTTPError),
     });
     await utility.recordAdminCustomization({ user_id: "actor", headers: {} }, "target", "client_preferences", ["theme"], { save: async (entry) => saved.push(entry) });
     assert.equal(input.user_id, "actor");

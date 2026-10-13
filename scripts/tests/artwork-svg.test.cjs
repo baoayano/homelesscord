@@ -84,6 +84,7 @@ for (const name of files) {
                                       cdn: { endpointPublic: "http://owned" },
                                   }),
                               },
+                              isRequestSignature: (value) => value === "owned",
                           }
                         : n === "lambert-server/HTTPError"
                           ? { HTTPError }

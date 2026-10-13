@@ -161,7 +161,7 @@ const sharesRelationship = async (user_id: string, instance: string) =>
 async function confirmedByHost(user_id: string, instance: string, channel: string | undefined) {
     const parsed = parseCanonicalId(channel);
     if (!parsed || parsed.instance === ownInstance()) return false;
-    const local = await localOf(channel as string);
+    const local = await localOf(channel as string, false);
     const user = await User.findOne({
         where: { id: user_id },
         select: {

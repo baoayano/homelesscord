@@ -62,6 +62,22 @@ export class FederationDelivery extends BaseEntity {
     @Column({ type: "timestamptz", nullable: true }) unreachable_at: Date | null;
 }
 
+@Entity({ name: "federation_outbox" })
+@Index("IDX_federation_outbox_instance_id", ["instance", "id"])
+export class FederationOutboxEvent extends BaseEntity {
+    @PrimaryColumn({ type: "int8" }) id: string;
+    @Column({ type: "varchar" }) instance: string;
+    @Column({ type: "text" }) wire: string;
+    @Column({ type: "timestamptz" }) created_at: Date;
+}
+
+@Entity({ name: "federation_inbox_events" })
+export class FederationInboxEvent extends BaseEntity {
+    @PrimaryColumn({ type: "varchar" }) sender: string;
+    @PrimaryColumn({ type: "varchar" }) event_id: string;
+    @Index("IDX_federation_inbox_events_received_at") @Column({ type: "timestamptz" }) received_at: Date;
+}
+
 @Entity({ name: "federation_verified_guilds" })
 export class FederationVerifiedGuild extends BaseEntity {
     @PrimaryColumn({ type: "varchar" }) id: string;

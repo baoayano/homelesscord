@@ -1,11 +1,10 @@
-import { sqlArrayIncludes } from "@spacebar/database/Sql";
 import { HTTPError } from "lambert-server/HTTPError";
 import { In, Raw } from "typeorm";
 // noinspection ES6PreferShortImport -- Causes a circular reference...
 import { fillComponentMedia, fillMessageUrlEmbeds } from "../utility/EmbedHandlers";
 import { resolveSoundmoji } from "../utility/Soundboard";
 import { enforceMessageAutomod } from "../utility/instanceAutomod";
-import { getDatabase, Application, Attachment, Channel, CloudAttachment, Guild, Member, Message, ReadState, Role, Sticker, User, Webhook } from "@spacebar/database";
+import { getDatabase, Application, Attachment, Channel, CloudAttachment, Guild, Member, Message, Role, Sticker, User, Webhook } from "@spacebar/database";
 import { Stopwatch, Random, normalizeLineEndings } from "@spacebar/extensions";
 import {
     Config,
@@ -26,10 +25,8 @@ import {
     Permissions,
     Rights,
     ROLE_MENTION,
-    Snowflake,
     TraceNode,
     TraceRoot,
-    TraceSubTree,
     USER_MENTION,
 } from "@spacebar/util";
 import {
@@ -44,7 +41,6 @@ import {
     MessageCreateCloudAttachment,
     MessageReferenceType,
     MessageType,
-    ReadStateType,
     UnfurledMediaItem,
     v1CompTypes,
 } from "@spacebar/schemas";
@@ -52,7 +48,7 @@ import { scheduleSavedPoll } from "../utility/polls";
 import { assertMessageSlowmode } from "./Slowmode";
 import { downloadRemoteMedia } from "../utility/remoteMedia";
 import { applyE2eeToMessage } from "../utility/e2ee";
-import { getMentionedUsers } from "../utility/notifications";
+import { addMentions, getMentionedUsers } from "../utility/notifications";
 import { MessageOptionAttachment, MessageOptions } from "@spacebar/util/dtos/MessageOptions";
 
 import { COMPONENTS_V2, componentMessageErrors, messageComponentErrors, messageComponentText } from "./ComponentValidation";
@@ -1114,52 +1110,6 @@ async function handleMessageMentionsAsync(message: Message, allowed?: AllowedMen
         micros: sw.getElapsedAndReset().totalMicroseconds,
     });
 
-    const fillInMissingIDs = async (ids: string[], trace?: TraceSubTree) => {
-        const fillMessageSw = Stopwatch.startNew(),
-            subSw = Stopwatch.startNew();
-        const subTrace: TraceSubTree = { micros: 0, calls: [] };
-        try {
-            const uniqueIds = [...new Set(ids)];
-            for (let offset = 0; offset < uniqueIds.length; offset += 1000) {
-                const chunk = uniqueIds.slice(offset, offset + 1000);
-                const states = await ReadState.find({
-                    where: {
-                        user_id: In(chunk),
-                        channel_id: channel.id,
-                        read_state_type: ReadStateType.CHANNEL,
-                    },
-                    select: { user_id: true },
-                });
-                subTrace.calls.push("findReadStates", {
-                    micros: subSw.getElapsedAndReset().totalMicroseconds,
-                });
-
-                const existingIds = new Set(states.map((state) => state.user_id));
-                const missingIds = chunk.filter((id) => !existingIds.has(id));
-                subTrace.calls.push("collectMissingIds", {
-                    micros: subSw.getElapsedAndReset().totalMicroseconds,
-                });
-                if (!missingIds.length) continue;
-
-                const newStates = missingIds.map((user_id) => ({
-                    id: Snowflake.generate(),
-                    user_id,
-                    channel_id: channel.id,
-                    read_state_type: ReadStateType.CHANNEL,
-                }));
-                await ReadState.createQueryBuilder().insert().values(newStates).orIgnore().execute();
-                subTrace.calls.push("insertNewReadStatesChunked", {
-                    micros: subSw.getElapsedAndReset().totalMicroseconds,
-                });
-            }
-        } finally {
-            trace?.calls.push(`fillInMissingIDs(${ids.length})`, {
-                micros: fillMessageSw.getElapsedAndReset().totalMicroseconds,
-                calls: subTrace.calls,
-            });
-        }
-    };
-
     if (isEdit) {
         trace.calls.push("skipReadStatesForEdit", {
             micros: sw.getElapsedAndReset().totalMicroseconds,
@@ -1197,11 +1147,7 @@ async function handleMessageMentionsAsync(message: Message, allowed?: AllowedMen
         trace.calls.push("getMentionedUsers", { micros: sw.getElapsedAndReset().totalMicroseconds });
 
         if (users.size) {
-            await fillInMissingIDs([...users], trace);
-            await ReadState.query(
-                `UPDATE read_states SET mention_count = mention_count + 1 WHERE channel_id = $1 AND read_state_type = $2 AND ${sqlArrayIncludes("user_id", "$3")}`,
-                [channel.id, ReadStateType.CHANNEL, [...users]],
-            );
+            await addMentions(channel.id, users);
             trace.calls.push("updateMentionedUserReadStates", {
                 micros: sw.getElapsedAndReset().totalMicroseconds,
             });

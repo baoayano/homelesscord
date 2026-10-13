@@ -3640,6 +3640,8 @@ ${userId}`)));
   var canonicalInstance = (canonical) => canonical.slice(canonical.indexOf("@", 1) + 1);
   var canonicalSnowflake = (canonical) => canonical.slice(1, canonical.indexOf("@", 1));
   var isCanonical = (value) => typeof value === "string" && /^@\d{1,20}@[a-z0-9.:-]+$/.test(value);
+  var LOCAL_REFERENCE = /<(@!?|@&|#)(\d{15,20})>|<(a?):(\w{1,32}):(\d{15,20})>/g;
+  var CANONICAL_REFERENCE = /<(@!?|@&|#)(@\d{1,20}@[a-z0-9.:-]+)>|<(a?):(\w{1,32}):(@\d{1,20}@[a-z0-9.:-]+)>/g;
   var messageAad = (channelId, senderId, senderDevice, bind) => `fosscord-e2ee/v1/msg
 ${channelId}
 ${senderId}
@@ -3737,6 +3739,7 @@ ${sig}`;
     profiles = new Map;
     canonical = new Map;
     resolvedCanonical = new Map;
+    localOf = new Map;
     federation = true;
     plaintext = new Map;
     contentKeys = new Map;
@@ -4606,6 +4609,66 @@ ${digest}`;
         return null;
       return new Map(ids.map((id, i) => [id, values[i]]));
     }
+    async localIds(canonicals) {
+      const wanted = [...new Set(canonicals.filter(isCanonical))];
+      const missing = this.federation ? wanted.filter((id) => !this.localOf.has(id)) : [];
+      for (let i = 0;i < missing.length; i += 100) {
+        const chunk = missing.slice(i, i + 100);
+        const batch = this.api.request("get", `/federation/objects?canonical=${chunk.map(encodeURIComponent).join(",")}`);
+        for (const id of chunk)
+          this.localOf.set(id, batch.then((res) => {
+            const local = res?.[id];
+            if (typeof local !== "string" || !/^\d{1,20}$/.test(local))
+              return null;
+            this.resolvedCanonical.set(local, id);
+            this.canonical.set(local, Promise.resolve(id));
+            return local;
+          }, () => {
+            this.localOf.delete(id);
+            return null;
+          }));
+      }
+      const values = await Promise.all(wanted.map((id) => this.localOf.get(id) ?? Promise.resolve(null)));
+      return new Map(wanted.flatMap((id, i) => values[i] ? [[id, values[i]]] : []));
+    }
+    async canonicalPayload(payload) {
+      const ids = [...payload.content.matchAll(LOCAL_REFERENCE)].map((match) => match[2] ?? match[5]);
+      const stickers = payload.stickers?.map((sticker) => sticker.id) ?? [];
+      if (!ids.length && !stickers.length)
+        return payload;
+      const map = await this.canonicalIds([...ids, ...stickers]);
+      if (!map)
+        return payload;
+      return {
+        ...payload,
+        content: payload.content.replace(LOCAL_REFERENCE, (match, prefix, id, animated, name, emoji) => prefix ? `<${prefix}${map.get(id) ?? id}>` : `<${animated}:${name}:${map.get(emoji) ?? emoji}>`),
+        ...payload.stickers && { stickers: payload.stickers.map((sticker) => ({ ...sticker, id: map.get(sticker.id) ?? sticker.id })) }
+      };
+    }
+    async localPayload(raw) {
+      if (!raw || typeof raw !== "object")
+        return raw;
+      const value = raw;
+      const content = typeof value.content === "string" ? value.content : "";
+      const stickers = Array.isArray(value.stickers) ? value.stickers : [];
+      const wanted = [...content.matchAll(CANONICAL_REFERENCE)].map((match) => match[2] ?? match[5]);
+      for (const sticker of stickers)
+        if (isCanonical(sticker?.id))
+          wanted.push(sticker.id);
+      if (!wanted.length)
+        return raw;
+      const map = await this.localIds(wanted);
+      return {
+        ...value,
+        content: content.replace(CANONICAL_REFERENCE, (match, prefix, id, animated, name, emoji) => {
+          const local = map.get(prefix ? id : emoji);
+          if (local)
+            return prefix ? `<${prefix}${local}>` : `<${animated}:${name}:${local}>`;
+          return prefix ? `${prefix === "#" ? "#" : "@"}${canonicalSnowflake(id)}@${canonicalInstance(id)}` : `:${name}:`;
+        }),
+        ...stickers.length && { stickers: stickers.map((sticker) => isCanonical(sticker?.id) ? { ...sticker, id: map.get(sticker.id) ?? "" } : sticker) }
+      };
+    }
     async signedUserId(userId) {
       if (userId === this.userId || !this.userId)
         return userId;
@@ -4673,7 +4736,7 @@ ${digest}`;
       const aad = messageAad(ids.channel, ids.sender, this.device.deviceId, bind);
       const contentKey = randomBytes(32);
       const iv = randomBytes(12);
-      const ct = await aesEncrypt(contentKey, iv, utf8(JSON.stringify(payload)), aad);
+      const ct = await aesEncrypt(contentKey, iv, utf8(JSON.stringify(ids.v === 2 ? await this.canonicalPayload(payload) : payload)), aad);
       const keys = await Promise.all(targets.map(async ({ userId, device }) => ({
         user_id: ids.user(userId),
         device_id: device.deviceId,
@@ -4780,7 +4843,8 @@ backup:${ownId}`).catch(() => null);
           throw new E2eeError("RESET", t("Sent before encryption was reset"));
         throw new E2eeError("NO_KEY", t("Sent before this browser was set up"));
       }
-      const payload = parsePayload(JSON.parse(fromUtf8(await aesDecrypt(contentKey, fromB64u(env.iv), fromB64u(env.ct), aad))));
+      const opened = JSON.parse(fromUtf8(await aesDecrypt(contentKey, fromB64u(env.iv), fromB64u(env.ct), aad)));
+      const payload = parsePayload(env.v === 2 ? await this.localPayload(opened) : opened);
       this.contentKeys.set(`${message.id}:${sig}`, toB64u(contentKey));
       if (mine && prekey && backupKey) {
         const covered = !!backupEntry && !!await hpkeOpen(backupKey.keyPair, backupEntry.enc, backupEntry.wrapped, BACKUP_INFO, `${aad}

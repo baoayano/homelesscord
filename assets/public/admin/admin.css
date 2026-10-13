@@ -1695,6 +1695,61 @@ td[data-select] input {
   margin: 12px 0 0;
 }
 
+.automod-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#automod-raids h3,
+#automod-spam h3 {
+  margin: 24px 0 8px;
+}
+
+.automod-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.automod-about {
+  margin: 0 0 12px;
+  max-width: 70ch;
+  text-wrap: pretty;
+}
+
+.automod-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 16px;
+  margin: 0;
+}
+
+.automod-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.automod-facts dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.automod-history {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.automod-history li {
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.automod-history .muted {
+  display: block;
+  font-size: 12px;
+}
+
 section.card,
 form.card {
   scroll-margin-top: 16px;

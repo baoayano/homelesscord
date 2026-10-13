@@ -182,11 +182,15 @@ The client plugin derives its settings layout nodes from Equicord's entry builde
 
 A DM or group DM that includes someone from another [federated](federation.md) instance is encrypted from its first message, like any other private chat. The instance where the conversation was created hosts it and stores the ciphertext. Every other member's instance, their home, keeps a mirror and relays their requests to the host.
 
+The host can't turn encryption off. A home keeps `e2ee_enabled_at` and the type of a mirrored DM once it has them, starts a new mirror encrypted when the host leaves the field out, and answers `E2EE_REQUIRED` (90002) itself when a member's client tries to relay a message or an edit without `encrypted`. The plaintext never leaves the home.
+
 ### Version 2 envelopes
 
 Local ids differ on each instance, so a signature over them would not verify on the other side. A version 2 envelope has `"v": 2` and signs canonical ids: the channel, the sender, `mid` on an edit, and `user_id` in `keys[]` and `backup[]` are all `@snowflake@instance`. Device ids are hashes of the device's signing key, the same on every instance, and are never translated. The client asks `GET /federation/objects` for the canonical ids, and the signed payload and the AES-GCM additional data use them in place of the local ids. Conversations with only local members keep version 1, byte for byte.
 
 The server takes version 2 in a federated conversation and version 1 everywhere else, and answers `E2EE_INVALID_ENVELOPE` (90003) to the other one. On a version 2 edit, `mid` must be the canonical id of the edited message. It translates `keys[].user_id` and `backup[].user_id` to local ids for the recipient and device checks, which work as in version 1: every active device of every member needs a key, or the server answers `E2EE_DEVICE_MISMATCH`. The relay copies `encrypted` between instances without touching it, so the bytes the sender signed are the bytes every member receives.
+
+The payload inside a version 2 envelope uses canonical ids too. Before encrypting, the browser rewrites user, role and channel mentions, custom emojis and sticker ids from local ids to `@snowflake@instance`, and after decrypting a version 2 message it asks `GET /federation/objects?canonical=` for the local ids on its own instance. A mention whose canonical id the reader's instance can't map is shown as `@snowflake@instance` text, so it never points at the wrong person. Replies and message references sit outside the envelope, and the relay translates them like any other id. The host translates canonical mentions back to its own ids in the text of a verified report.
 
 Identity statements stay per user. A device statement and a rotation statement sign the user's snowflake on their home instance, so the client checks a remote contact's devices against the snowflake in that contact's canonical id, not against the local shadow id.
 
@@ -243,7 +247,7 @@ PORT=<port> E2EE_TEST_DATABASE_NAME=<db> bun scripts/dev/e2ee-test.mjs
 
 The harness registers disposable accounts and refuses an unexpected database before writing.
 
-`scripts/dev/federation-e2ee-test.mjs` starts two instances on their own new databases and runs the same browser flows across them: a DM both ways with edits, an encrypted image, safety numbers in strict mode, a group DM with members on both instances, history after a password login on a fresh browser and a report the host verifies. It drops its databases and browser profiles at the end.
+`scripts/dev/federation-e2ee-test.mjs` starts two instances on their own new databases and runs the same browser flows across them: a DM both ways with edits, an encrypted image from each side, a text file from the member whose home relays it, mentions inside encrypted text in both directions, safety numbers in strict mode, a group DM with members on both instances, history after a password login on a fresh browser and a report the host verifies. It drops its databases and browser profiles at the end.
 
 ```sh
 CHROME_PATH=<browser> bun scripts/dev/federation-e2ee-test.mjs

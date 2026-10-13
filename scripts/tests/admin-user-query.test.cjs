@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { loadFederatedAdmin } = require("./federated-admin-module.cjs");
 const accountIps = (() => {
     const module = { exports: {} };
     vm.runInNewContext(
@@ -61,6 +62,15 @@ function harness(options = {}) {
                 };
             if (name === "@spacebar/api/middlewares") return { route: (options) => options };
             if (name === "@spacebar/api/util") return accountIps;
+            if (name === "@spacebar/api/util/utility/federatedAdmin")
+                return loadFederatedAdmin(
+                    class extends Error {
+                        constructor(message, status) {
+                            super(message);
+                            this.status = status;
+                        }
+                    },
+                );
             if (name === "@spacebar/database") return { User: { createQueryBuilder: () => query } };
             if (name === "@spacebar/util") return { Rights: class {} };
             if (name === "@spacebar/schemas")
@@ -191,4 +201,24 @@ test("an address in q or ip finds accounts by registration and session address i
         assert.match(clauses[1][1], /SELECT s\.user_id FROM sessions s WHERE s\.last_seen_ip IN \(:\.\.\.ips\)/);
         for (const clause of clauses) assert.deepEqual([...clause[2].ips], ["203.0.113.7", "::ffff:203.0.113.7"]);
     }
+});
+
+test("the user list shows local accounts by default and other instances only when asked", async () => {
+    const clauses = async (parameters) => {
+        const h = harness();
+        await h.run(parameters);
+        return h.calls.filter(([name]) => name === "andWhere").map(([, clause]) => clause);
+    };
+    assert.deepEqual(await clauses({}), ["user.federated_instance IS NULL"]);
+    assert.deepEqual(await clauses({ origin: "remote", filter: "disabled" }), ["user.disabled = true", "user.federated_instance IS NOT NULL"]);
+    assert.deepEqual(await clauses({ origin: "all" }), []);
+    assert.deepEqual(await clauses({ q: "123456789012345678" }), []);
+    for (const origin of ["shadows", ["local", "remote"]]) {
+        const h = harness();
+        await assert.rejects(h.run({ origin }), (error) => error.status === 400);
+        assert.ok(!h.calls.some(([name]) => name === "execute"));
+    }
+    const h = harness();
+    await h.run({});
+    assert.ok(h.calls.find(([name]) => name === "select")[1].includes("user.federated_instance"));
 });

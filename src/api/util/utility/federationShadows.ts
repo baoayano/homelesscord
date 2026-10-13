@@ -6,6 +6,7 @@ import { currentDocument, localBlocks } from "./federation";
 import { localIds, toWire, WireUser } from "./federationIds";
 import { rewriteRemoteMedia } from "./federationMedia";
 import { ownInstance, signedFetch } from "./federationNetwork";
+import { assertQuota, quotaAdded } from "./federationQuota";
 
 export interface RemoteProfile {
     username: string;
@@ -49,9 +50,32 @@ const cleanProfile = (raw: Record<string, unknown>, instance: string) => ({
     public_flags: Number.isSafeInteger(Number(raw.public_flags)) ? Number(raw.public_flags) & ~(1 << 12) : 0,
 });
 
+const placeholderProfile = (canonical: string, instance: string) => cleanProfile({ username: `user${(parseCanonicalId(canonical)?.id ?? "").slice(-6)}` }, instance);
+
+const PROFILE_FETCH_LIMIT = 1000;
+const profileQueue = new Map<string, string>();
+let fetchingProfiles = false;
+
+const queueProfileFetch = (local_id: string, canonical: string) => {
+    if (profileQueue.size >= PROFILE_FETCH_LIMIT) return;
+    profileQueue.set(local_id, canonical);
+    if (fetchingProfiles) return;
+    fetchingProfiles = true;
+    void (async () => {
+        for (const [local, remote] of profileQueue) {
+            profileQueue.delete(local);
+            const profile = await fetchRemoteProfile(remote).catch(() => null);
+            if (profile) await applyProfile(local, remote, profile).catch(() => undefined);
+        }
+    })().finally(() => {
+        fetchingProfiles = false;
+    });
+};
+
 export const isShadow = (user: Pick<User, "federated_instance"> | null | undefined) => !!user?.federated_instance;
 
 async function createShadow(local_id: string, canonical: string, instance: string, profile: ReturnType<typeof cleanProfile>, bot: boolean) {
+    await assertQuota("shadows", instance);
     const parsed = parseCanonicalId(canonical)!;
     const created = SNOWFLAKE.test(parsed.id) ? new Date(Snowflake.timestampOf(parsed.id)) : new Date();
     const settings = UserSettings.create({ locale: "en-US" });
@@ -78,6 +102,7 @@ async function createShadow(local_id: string, canonical: string, instance: strin
     try {
         await settings.save();
         await user.save();
+        quotaAdded("shadows", instance);
     } catch (error) {
         await settings.remove().catch(() => undefined);
         if (!(await User.exists({ where: { id: local_id } }))) throw error;
@@ -105,12 +130,14 @@ export async function upsertShadows(users: WireUser[]) {
     const byId = new Map(existing.map((user) => [user.id, user]));
     for (const user of unique) {
         const row = byId.get(user.local_id);
-        const profile = cleanProfile(user.object, user.instance);
+        const trusted = user.trusted !== false;
+        const profile = trusted ? cleanProfile(user.object, user.instance) : placeholderProfile(user.canonical, user.instance);
         if (!row) {
-            await createShadow(user.local_id, user.canonical, user.instance, profile, user.object.bot === true);
+            await createShadow(user.local_id, user.canonical, user.instance, profile, trusted && user.object.bot === true);
+            if (!trusted) queueProfileFetch(user.local_id, user.canonical);
             continue;
         }
-        if (row.federated_instance !== user.instance) continue;
+        if (!trusted || row.federated_instance !== user.instance) continue;
         if (Date.now() - (refreshed.get(row.id) ?? 0) < REFRESH_INTERVAL) continue;
         const changes = Object.fromEntries(
             (["username", ...PROFILE_KEYS] as const).filter((key) => key in user.object || key === "username").map((key) => [key, profile[key]]),

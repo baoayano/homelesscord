@@ -9,6 +9,10 @@
 
 encryption has not yet been audited, and you will find plenty of bugs and issues. as a future warning, please open an issue or pr rather than trying to dunk on an alpha release on the internet.
 
+## joining an instance
+
+you don't need to host anything to try meowcord. pick an instance from [instances.md](instances.md), open its link and sign up. accounts on one instance can talk to people on the others through federation.
+
 ## getting started
 
 follow [the setup guide](docs/self-hosting/setup.md) for Docker, local development and the source archive. to run without Docker, [the native Linux guide](docs/self-hosting/native.md) sets the server up as a dedicated `meowcord` user with systemd, local PostgreSQL and an HTTPS reverse proxy, and covers voice, operator access, backups and updates. the server supports [PostgreSQL and SQLite](docs/self-hosting/databases.md).
@@ -22,6 +26,8 @@ docker compose up -d --build
 after registering your operator account, grant it access locally using its numeric account ID: `docker compose exec server bun scripts/ops/operator.mjs grant <account-id>`. the first signup is an ordinary account. see the alpha guide for local provisioning and revocation.
 
 profile badges can be arranged in User Settings, Profiles, Your badges. the native editor saves order and visibility, supports pointer and keyboard dragging in Firefox and Chromium, starts with Staff first and Nitro second, and lets both move. Selected Pride flags remain visible. Nitro hiding follows its treatment. see [badge management](docs/features/badge-management.md).
+
+to get your instance listed in [instances.md](instances.md) and in global discovery, read [the verification guide](docs/self-hosting/verification.md).
 
 ## contributing
 

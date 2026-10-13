@@ -1,4 +1,15 @@
-import { assertCanSendDirectMessage, assertGuildVerification, assertNoHarmfulLinks, checkAutomod, publishUserMessage, recordGuildMemberDm } from "@spacebar/api/util";
+import {
+    assertCanSendDirectMessage,
+    assertGuildVerification,
+    assertNoHarmfulLinks,
+    checkAutomod,
+    checkSpam,
+    enforceQuarantine,
+    messageAttachmentFacts,
+    publishUserMessage,
+    recordGuildMemberDm,
+    spamAttachmentHashes,
+} from "@spacebar/api/util";
 import { route } from "@spacebar/api/middlewares";
 import { Application, Attachment, Channel, GuildInsights, Member, Message, ReadState, Recipient, User, Webhook } from "@spacebar/database";
 import {
@@ -379,6 +390,29 @@ router.post(
         }
 
         assertNoHarmfulLinks(body.content);
+        const files = (req.files as Express.Multer.File[]) ?? [];
+        await enforceQuarantine(
+            { user_id: req.user_id, federated: !!req.user?.federated_instance, bot: req.user_bot, system: req.user?.system, rights: req.rights },
+            {
+                content: body.content,
+                attachments: files.length + (body.attachments?.length ?? 0),
+                embeds: (body.embeds?.length ?? 0) + (body.embed ? 1 : 0),
+                guild_id: channel.guild_id,
+                channel_id: channel.id,
+            },
+        );
+        const attachmentFacts = files.length || body.attachments?.length ? await messageAttachmentFacts(files, body.attachments ?? [], req.user_id, channel.id) : [];
+        await checkSpam({
+            user_id: req.user_id,
+            channel,
+            content: body.content,
+            message_id: messageId,
+            permission: req.permission,
+            rights: req.rights,
+            bot: req.user_bot,
+            system: req.user?.system,
+            attachments: spamAttachmentHashes(attachmentFacts),
+        });
         if (channel.guild_id)
             await checkAutomod({
                 guild_id: channel.guild_id,
@@ -389,7 +423,6 @@ router.post(
                 message_id: messageId,
             });
 
-        const files = (req.files as Express.Multer.File[]) ?? [];
         let attachments: MessageOptionAttachment[];
         try {
             attachments = await uploadMessageFiles(`/attachments/${channel.id}/${messageId}`, files, body.attachments ?? []);
@@ -404,6 +437,7 @@ router.post(
             message_id: messageId,
             attachments,
             permission: req.permission,
+            attachmentHashes: attachmentFacts.map((fact) => fact.hash),
         });
         if (dmViaGuilds.length) {
             const recipient = channel.recipients?.find((r) => r.user_id !== req.user_id)?.user_id;

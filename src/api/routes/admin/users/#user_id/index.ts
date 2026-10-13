@@ -2,7 +2,7 @@ import { assertIdentityNameAllowed } from "@spacebar/util/util/IdentityModeratio
 import { Request, Response, Router } from "express";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
-import { Badge, Guild, InstanceBan, Member, Session, User } from "@spacebar/database";
+import { Badge, FederatedObject, Guild, InstanceBan, Member, Session, User } from "@spacebar/database";
 import { broadcastUserUpdate, Collectibles, CollectibleItemType, emitEvent, emitRequiredAction, handleFile, Rights, UserUpdateEvent } from "@spacebar/util";
 import { AccountStandingState, AdminUserUpdateSchema, PrivateUserProjection } from "@spacebar/schemas";
 import { In, Not } from "typeorm";
@@ -16,8 +16,10 @@ import {
     normalizeIp,
     notifyStandingDrop,
     syncStaffBadge,
+    withStaffDisabled,
 } from "@spacebar/api/util";
-import { ADMIN_USER_COLUMNS, applyUserTag, pickAdminUser } from "../index";
+import { assertShadowUserEditable, SHADOW_USER_LOCAL_FIELDS } from "@spacebar/api/util/utility/federatedAdmin";
+import { ADMIN_USER_COLUMNS, applyUserTag, assertCanManage, pickAdminUser } from "../index";
 
 const router = Router({ mergeParams: true });
 
@@ -61,10 +63,11 @@ router.get(
                   select: { id: true, name: true, icon: true, owner_id: true },
               })
             : [];
-        const [sessions, bans, registration] = await Promise.all([
+        const [sessions, bans, registration, federated] = await Promise.all([
             Session.find({ where: { user_id: user.id }, select: { session_id: true, last_seen_ip: true, last_seen: true, created_at: true } }),
             InstanceBan.find({ where: { user_id: user.id } }),
             User.findOne({ where: { id: user.id }, select: { id: true, registration_ip: true } }),
+            user.federated_instance ? FederatedObject.findOne({ where: { local_id: user.id }, select: { local_id: true, canonical: true } }) : null,
         ]);
         const registrationIp = normalizeIp(registration?.registration_ip);
         const seen = new Map<string, { ip: string; sessions: number; last_seen: Date | null; registration: boolean }>();
@@ -109,6 +112,7 @@ router.get(
                     ban_id: byIp.get(entry.ip)?.ban_id ?? null,
                 })),
             instance_bans: bans.map((b) => ({ id: b.id, reason: b.reason, created_at: b.created_at })),
+            canonical: federated?.canonical ?? null,
         });
     },
 );
@@ -130,6 +134,12 @@ router.patch(
         const hadAdminAccess = hasAdminPanelAccess(user.rights);
 
         if (targetIsOperator && !callerIsOperator && !isSelf) throw new HTTPError("Only operators can edit other operators", 403);
+        assertCanManage(req, user);
+        assertShadowUserEditable(
+            user,
+            Object.keys(body).filter((key) => body[key as keyof AdminUserUpdateSchema] !== undefined),
+            SHADOW_USER_LOCAL_FIELDS,
+        );
         if (isSelf && (body.disabled || body.account_standing === AccountStandingState.SUSPENDED)) throw new HTTPError("You can't disable or suspend your own account", 400);
 
         // only some columns are loaded, and the entity has class-level defaults (system, mfa_enabled, ...) for the rest,
@@ -234,7 +244,10 @@ router.patch(
             set("global_name", body.global_name?.trim() || null);
         }
         if (body.bio !== undefined) set("bio", body.bio);
-        if (body.disabled !== undefined) set("disabled", body.disabled);
+        if (body.disabled !== undefined) {
+            set("disabled", body.disabled);
+            set("flags", withStaffDisabled(user.flags, body.disabled));
+        }
         if (body.suspended_until !== undefined) {
             const until = body.suspended_until === null ? null : new Date(body.suspended_until);
             if (until && (Number.isNaN(until.getTime()) || isSelf)) throw new HTTPError("Choose a valid suspension end, and don't suspend yourself", 400);

@@ -1,5 +1,6 @@
 import { Config, listenEvent, RabbitMQ } from "@spacebar/util";
 import { RateLimit as StoredRateLimit } from "@spacebar/database";
+import { isIPv4, isIPv6 } from "node:net";
 import { NextFunction, Request, Response, Router } from "express";
 import { LessThanOrEqual } from "typeorm";
 import { ProcessLifecycle } from "@spacebar/util/util/ProcessLifecycle";
@@ -58,8 +59,34 @@ const startRateLimitPruning = () => {
     pruningTimer = setInterval(pruneRateLimits, 60_000).unref();
 };
 
+export function addressBucket(address: string | undefined) {
+    if (!address) return "127.0.0.1";
+    const mapped = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
+    if (mapped && isIPv4(mapped)) return mapped;
+    if (!isIPv6(address)) return address;
+    const [head, tail = ""] = address.toLowerCase().split("%")[0].split("::");
+    const left = head ? head.split(":") : [];
+    const right = address.includes("::") && tail ? tail.split(":") : [];
+    const groups = address.includes("::") ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+    return `${groups
+        .slice(0, 4)
+        .map((group) => group.replace(/^0+(?=.)/, ""))
+        .join(":")}::/64`;
+}
+
 export function routeBucket(req: Request) {
-    const segments = req.originalUrl.split("?")[0].replace(API_PREFIX_TRAILING_SLASH, "").split("/");
+    const raw = req.originalUrl.split("?")[0];
+    const segments = (() => {
+        try {
+            return decodeURIComponent(raw);
+        } catch {
+            return raw;
+        }
+    })()
+        .toLowerCase()
+        .replace(API_PREFIX_TRAILING_SLASH, "")
+        .split("/")
+        .filter(Boolean);
     const path = segments
         .map((segment, i) => {
             const previous = segments[i - 1];
@@ -100,7 +127,7 @@ export default function rateLimit(opts: {
         if (opts.onlyIp && req.federationRelay) return next();
 
         const bucket_id = opts.bucket || routeBucket(req);
-        const executor_id = !opts.onlyIp && req.user_id ? req.user_id : req.ip || "127.0.0.1";
+        const executor_id = !opts.onlyIp && req.user_id ? req.user_id : addressBucket(req.ip);
         const key = `${executor_id}:${limiterId}:${bucket_id}`;
 
         let max_hits = opts.count;

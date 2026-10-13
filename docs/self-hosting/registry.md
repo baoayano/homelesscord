@@ -21,7 +21,7 @@ The Worker builds the document from D1, signs it and stores the signed copy. It 
 
 - approved and suspended instances. An approved instance is `active` once it serves a key at `/.well-known/meowcord` with federation turned on, and `listed` until then.
 - blocked instances, servers and users, each with a reason and a date.
-- discovery servers we verified, on approved instances, that their instance still lists.
+- discovery servers that an approved instance lists, minus the ones we removed or blocked. The instance's own admins verify a server before the instance lists it, so we review instances, not servers.
 
 ### Announcing
 
@@ -30,9 +30,9 @@ An instance announces itself on start, once a day and when an admin presses "Sen
 1. checks that `sent_at` is within 5 minutes and that the nonce wasn't used in the last 10 minutes,
 2. fetches `https://<id>/.well-known/meowcord` and checks the announce signature against the key in it,
 3. stores the instance as pending review, or updates it if it's already known,
-4. fetches the instance's signed discovery list and stores new servers as pending.
+4. fetches the instance's signed discovery list and stores its servers, which are published once the instance is approved.
 
-It answers `202` with the instance's status. Announces are limited to 10 per instance id and 30 per IP address per hour.
+It answers `202` with the instance's status. Announces are limited to 10 per instance id and 30 per IP address per hour, and IPv6 clients share one limit per /64. Announces from instances the registry has never seen share a limit of 60 per hour, checked before the registry fetches anything, so random ids can't fill the database. Pending instances that aren't in `instances.json` and haven't announced for 30 days are deleted with their discovery servers. The admin sign-in page allows 20 attempts per client every 10 minutes.
 
 The registry only fetches public hosts over HTTPS. It refuses `localhost`, IP addresses and private names, resolves the host through DNS over HTTPS and refuses private addresses, doesn't follow redirects, stops after 8 seconds and reads at most 64 KiB of a well-known document and 1 MiB of a discovery list.
 
@@ -51,15 +51,17 @@ The admin pages need an hrtID account in the `admins` group. They have five page
 
 - **Overview**: what waits for review, errors in the last day, the published document and a button that signs and publishes a new one right away.
 - **Instances**: approve, suspend or block an instance with a reason, move it back to pending, check it now, or accept a new key.
-- **Discovery**: verify, reject or block a server.
+- **Discovery**: remove a server from discovery, list it again, or block it.
 - **Blocks**: block or unblock an instance id, or a server or user by canonical id such as `@123@meow.example.com`.
 - **Activity**: announces, checks, imports, errors and admin actions.
 
-We approve an instance when it has a moderation contact, captcha on registration, and a recent Meowcord version. We verify a discovery server when its name, description and icon are fine to show on every instance. A verified server goes back to pending when its name, description or icon changes.
+We approve an instance when it has a moderation contact, captcha on registration, and a recent Meowcord version. We don't review servers one by one. A server an approved instance lists goes into the document at the next publish, and stays there through renames. Removing one keeps it out until we list it again, and a block also stops joins and federation for it.
 
 When an approved instance starts serving a different key, the registry keeps publishing the old key and marks the instance "new key waiting". An operator checks with the instance admin that they changed it, then presses "Accept the new key". Until then the registry ignores that instance's discovery list. This stops someone who takes over a domain from speaking for the instance.
 
 ## Getting your instance listed
+
+[verification.md](verification.md) has the full guide for instance admins and server owners.
 
 There are two ways, and you can do both:
 

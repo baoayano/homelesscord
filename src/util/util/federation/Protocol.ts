@@ -425,14 +425,25 @@ export const signRequest = (options: {
 export class NonceCache {
     #seen = new Map<string, number>();
 
-    constructor(private lifetime = NONCE_LIFETIME) {}
+    constructor(
+        private lifetime = NONCE_LIFETIME,
+        private capacity = 200_000,
+    ) {}
 
     claim(key: string, now = Date.now()) {
-        if (this.#seen.size > 10_000) for (const [entry, at] of this.#seen) if (now - at > this.lifetime) this.#seen.delete(entry);
+        for (const [entry, at] of this.#seen) {
+            if (now - at <= this.lifetime && this.#seen.size < this.capacity) break;
+            this.#seen.delete(entry);
+        }
         const at = this.#seen.get(key);
         if (at !== undefined && now - at <= this.lifetime) return false;
+        this.#seen.delete(key);
         this.#seen.set(key, now);
         return true;
+    }
+
+    get size() {
+        return this.#seen.size;
     }
 }
 
@@ -481,7 +492,7 @@ export const verifyRequest = (options: {
     return { sender, timestamp: Number(timestamp), nonce };
 };
 
-export const federationTrust = (options: {
+type TrustOptions = {
     id: string;
     ownId: string | null;
     enabled: boolean;
@@ -490,15 +501,42 @@ export const federationTrust = (options: {
     allowUnlistedPeers: boolean;
     peers: string[];
     peerProtocol?: number | null;
-}) => {
-    if (!options.enabled || !options.document || !isInstanceId(options.id) || options.id === options.ownId) return null;
-    if (blockSets(options.document, options.local).instance(options.id)) return null;
-    const minimum = Math.max(2, options.document.min_protocol);
-    const listed = options.document.instances.find((instance) => instance.id === options.id);
-    if (listed) return listed.state === "active" && listed.public_key && listed.protocol >= minimum ? { source: "registry" as const, public_key: listed.public_key } : null;
-    if (!options.allowUnlistedPeers || !options.peers.includes(options.id)) return null;
-    return (options.peerProtocol ?? 0) >= minimum ? { source: "peer" as const, public_key: null } : null;
 };
+
+export type DistrustReason = "disabled" | "no_registry" | "invalid" | "own" | "blocked" | "inactive" | "no_key" | "old_protocol" | "unlisted" | "peer_unreadable";
+
+export type TrustDecision =
+    | { trust: { source: "registry"; public_key: string } | { source: "peer"; public_key: null }; reason: null; detail: null }
+    | { trust: null; reason: DistrustReason; detail: string };
+
+export const federationTrustDecision = (options: TrustOptions): TrustDecision => {
+    const { id, ownId } = options;
+    const self = ownId ?? "this instance";
+    const refuse = (reason: DistrustReason, detail: string): TrustDecision => ({ trust: null, reason, detail });
+    if (!options.enabled) return refuse("disabled", `Federation is turned off on ${self}.`);
+    if (!options.document) return refuse("no_registry", `${self} has no current copy of the registry list.`);
+    if (!isInstanceId(id)) return refuse("invalid", `${id} isn't a valid instance id.`);
+    if (id === ownId) return refuse("own", `${id} is this instance.`);
+    if (blockSets(options.document, options.local).instance(id)) return refuse("blocked", `${id} is blocked on ${self}.`);
+    const minimum = Math.max(2, options.document.min_protocol);
+    const listed = options.document.instances.find((instance) => instance.id === id);
+    if (listed) {
+        if (listed.state !== "active") return refuse("inactive", `The registry lists ${id} as ${listed.state}, and only active instances federate.`);
+        if (!listed.public_key) return refuse("no_key", `The registry has no federation key for ${id}.`);
+        if (!(listed.protocol >= minimum)) return refuse("old_protocol", `${id} runs federation protocol ${listed.protocol ?? "unknown"}, and ${minimum} or newer is needed.`);
+        return { trust: { source: "registry", public_key: listed.public_key }, reason: null, detail: null };
+    }
+    if (!options.allowUnlistedPeers || !options.peers.includes(id))
+        return refuse(
+            "unlisted",
+            `${id} isn't in ${self}'s copy of the registry list. Instances fetch the list every 5 minutes, so a newly approved instance can take that long to show up.`,
+        );
+    if (options.peerProtocol == null) return refuse("peer_unreadable", `${self} couldn't read the well-known document of ${id}.`);
+    if (options.peerProtocol < minimum) return refuse("old_protocol", `${id} runs federation protocol ${options.peerProtocol}, and ${minimum} or newer is needed.`);
+    return { trust: { source: "peer", public_key: null }, reason: null, detail: null };
+};
+
+export const federationTrust = (options: TrustOptions) => federationTrustDecision(options).trust;
 
 export const instancesJsonEntry = (wellKnown: Pick<WellKnownDocument, "id" | "name" | "description" | "url" | "icon_url" | "registration">, sourceUrl: string | null) => ({
     id: wellKnown.id,

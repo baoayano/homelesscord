@@ -156,6 +156,7 @@ function messageHarness() {
     class HTTPError extends Error {}
     const { Message } = load("src/gateway/events/Message.ts", {
         "@spacebar/gateway": { CLOSECODES, OPCODES },
+        "../util/Constants": { CLOSECODES, OPCODES },
         "harmony-erlpack": {
             unpack() {
                 throw new Error("Invalid ETF");

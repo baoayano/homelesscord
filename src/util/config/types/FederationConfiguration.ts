@@ -16,6 +16,14 @@ export class FederationMediaConfiguration {
     requestsPerMinute: number = 600;
 }
 
+export class FederationLimitsConfiguration {
+    objectsPerInstance: number = 200_000;
+    shadowsPerInstance: number = 50_000;
+    guildsPerInstance: number = 500;
+    inboxEventsPerInstance: number = 200_000;
+    newObjectsPerRequest: number = 10_000;
+}
+
 export class FederationConfiguration {
     enabled: boolean = true;
     registry: FederationRegistryConfiguration = new FederationRegistryConfiguration();
@@ -24,4 +32,5 @@ export class FederationConfiguration {
     peers: string[] = [];
     discovery: FederationDiscoveryConfiguration = new FederationDiscoveryConfiguration();
     media: FederationMediaConfiguration = new FederationMediaConfiguration();
+    limits: FederationLimitsConfiguration = new FederationLimitsConfiguration();
 }

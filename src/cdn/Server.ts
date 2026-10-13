@@ -8,7 +8,8 @@ import { ProcessLifecycle, SystemdLifecycle } from "../util/util/ProcessLifecycl
 import { Monitoring } from "../util/monitoring/Monitoring";
 import guildProfilesRoute from "./routes/guild-profiles";
 import { storageOwnership } from "./util/storageOwnership";
-import { storage } from "./util";
+import { cdnResponseSafety, storage } from "./util";
+import { readdirSync } from "node:fs";
 import { ErrorHandler } from "@spacebar/cdn/util/ErrorHandler";
 
 export type CDNServerOptions = ServerOptions;
@@ -62,6 +63,14 @@ export class CDNServer extends Server {
         });
         this.app.use(ErrorHandler);
         this.app.use(BodyParser({ inflate: true, limit: "10mb" }));
+
+        const routesFolder = path.join(__dirname, "routes");
+        const publicPrefixes = readdirSync(routesFolder, { withFileTypes: true })
+            .map((entry) => entry.name.replace(/\.(js|ts)$/, ""))
+            .filter((name) => !name.endsWith(".map") && !name.endsWith(".d") && !name.startsWith("_") && !name.startsWith("federation-") && name !== "ping")
+            .sort()
+            .map((name) => `/${name}`);
+        this.app.use([...new Set(publicPrefixes), "/guilds/:guild_id/users/:user_id/avatars", "/guilds/:guild_id/users/:user_id/banners"], cdnResponseSafety);
 
         await registerRoutes(this, path.join(__dirname, "routes/"));
 

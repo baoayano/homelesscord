@@ -13,6 +13,7 @@ export interface WebRtcWebSocket extends WebSocket {
     token?: string;
     voiceSequence: number;
     maxDaveVersion: number;
+    daveId?: string;
     daveVersion: number;
     clientPlatform?: number;
     sentMessages?: { seq: number; data: string | Buffer }[];

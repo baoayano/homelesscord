@@ -84,6 +84,11 @@ test("incoming bare snowflakes are dropped so a remote can't point at local obje
     assert.equal(out.name, guild, "only id keys are touched");
 });
 
+test("bare snowflake mentions in incoming content can't point at local users, roles or channels", () => {
+    const out = rewriteIncoming({ content: `<@${user}> <@&${guild}> <#${guild}> <@@${user}@${own}>` }, new Map(), own);
+    assert.equal(out.content, `<@0> <@&0> <#0> <@${user}>`);
+});
+
 test("encrypted message content is never rewritten", () => {
     const content = `<@${user}>`;
     const out = rewriteOutgoing({ id: user, content, encrypted: { v: 1, mentions: [user] } }, new Map(), own);

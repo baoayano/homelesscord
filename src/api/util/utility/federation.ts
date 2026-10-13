@@ -282,6 +282,17 @@ export const announce = (manual = false) => {
     return announcing;
 };
 
+let announceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const announceSoon = (delayMs = 30_000) => {
+    if (announceTimer) clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => {
+        announceTimer = null;
+        announce().catch(() => {});
+    }, delayMs);
+    announceTimer.unref?.();
+};
+
 export const proxiedImage = (value: string | null | undefined) => {
     if (!value || !URL.canParse(value)) return null;
     const url = new URL(value);
@@ -379,7 +390,7 @@ export const ownDiscoveryGuilds = async () => {
     const id = instanceId();
     if (!url || !id) return [];
     const guilds = await Guild.find({
-        where: { global_discovery: true, global_discovery_hidden: false },
+        where: { global_discovery: true, global_discovery_hidden: false, global_discovery_verified: true },
         select: { id: true, name: true, description: true, icon: true, member_count: true },
         order: { member_count: "DESC" },
         take: 500,

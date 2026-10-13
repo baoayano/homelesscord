@@ -1,18 +1,8 @@
-import { Guild, Member, User } from "@spacebar/database";
 import { SelectProtocolSchema, validateSchema } from "@spacebar/schemas";
 import { mediaServer, Send, VoiceOPCodes, VoicePayload, WebRtcWebSocket } from "@spacebar/webrtc";
 import type { Codec } from "@spacebarchat/spacebar-webrtc-types";
 import { DAVE_PROTOCOL_VERSION, DaveSession } from "../dave/DaveSession";
-
-const sharedWithOtherInstances = async (socket: WebRtcWebSocket) => {
-    if (socket.federation) return true;
-    if (socket.type !== "guild-voice" || !(await Guild.exists({ where: { id: socket.server_id, global_discovery: true } }))) return false;
-    return Member.createQueryBuilder("member")
-        .innerJoin(User, "user", "user.id = member.id")
-        .where("member.guild_id = :guild_id", { guild_id: socket.server_id })
-        .andWhere("user.federated_instance IS NOT NULL")
-        .getExists();
-};
+import { daveIds } from "../util/DaveIdentity";
 
 export async function onSelectProtocol(this: WebRtcWebSocket, payload: VoicePayload) {
     if (!this.webRtcClient) return;
@@ -26,8 +16,7 @@ export async function onSelectProtocol(this: WebRtcWebSocket, payload: VoicePayl
         data.sdp ?? (typeof data.data === "string" ? data.data : ""),
         (data.codecs ?? []).filter((codec): codec is Codec => ["opus", "VP8", "VP9", "H264"].includes(codec.name)),
     );
-    const shared = await sharedWithOtherInstances(this);
-    this.daveVersion = shared ? 0 : Math.min(this.maxDaveVersion, DAVE_PROTOCOL_VERSION);
+    this.daveVersion = Math.min(this.maxDaveVersion, DAVE_PROTOCOL_VERSION);
 
     await Send(this, {
         op: VoiceOPCodes.SESSION_DESCRIPTION,
@@ -37,7 +26,7 @@ export async function onSelectProtocol(this: WebRtcWebSocket, payload: VoicePayl
             media_session_id: this.session_id,
             audio_codec: "opus",
             dave_protocol_version: this.daveVersion,
-            ...(shared && { meowcord_shared_call: true }),
+            ...(this.federation && this.channel_id && { meowcord_dave: { channel_id: this.channel_id, group: this.channel_id } }),
         },
     });
 
@@ -47,13 +36,19 @@ export async function onSelectProtocol(this: WebRtcWebSocket, payload: VoicePayl
     if (others.length)
         await Send(this, {
             op: VoiceOPCodes.CLIENTS_CONNECT,
-            d: { user_ids: others.map((client) => client.user_id) },
+            d: {
+                user_ids: others.map((client) => client.user_id),
+                ...daveIds(
+                    others.map((client) => client.websocket),
+                    this,
+                ),
+            },
         });
 
     for (const client of others) {
         await Send(client.websocket, {
             op: VoiceOPCodes.CLIENTS_CONNECT,
-            d: { user_ids: [this.user_id] },
+            d: { user_ids: [this.user_id], ...daveIds([this], client.websocket) },
         });
         await Send(client.websocket, {
             op: VoiceOPCodes.CLIENT_FLAGS,

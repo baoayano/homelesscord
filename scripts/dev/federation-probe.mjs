@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createCipheriv, createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { createCipheriv, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
+import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -20,12 +20,57 @@ const runDir = process.env.FED_DIR || path.join(tmpdir(), "meowcord-federation-p
 const reuse = args.has("--reuse");
 const keep = args.has("--keep") || reuse;
 const drop = args.has("--drop");
+const publicMode = args.has("--public");
+const onlyJoin = args.has("--only-join");
+const fetchProxy = process.env.FED_FETCH_PROXY || "direct";
+const fakePort = Number(process.env.FED_PORT_FAKE || registryPort + 10);
+const fake = { id: `localhost:${fakePort}`, origin: `http://localhost:${fakePort}`, port: fakePort };
+let registryUrl = `http://localhost:${registryPort}`;
 for (const instance of instances) {
     instance.id = `localhost:${instance.port}`;
+    instance.origin = `http://localhost:${instance.port}`;
     instance.api = `http://localhost:${instance.port}/api/v9`;
     instance.dir = path.join(runDir, instance.name);
 }
 const [A, B] = instances;
+const tunnels = [];
+process.on("exit", () => {
+    for (const child of tunnels) if (child.exitCode === null) child.kill("SIGTERM");
+});
+
+async function openTunnel(name, port) {
+    mkdirSync(runDir, { recursive: true, mode: 0o700 });
+    const file = path.join(runDir, `tunnel-${name}.log`);
+    writeFileSync(file, "");
+    const child = spawn("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${port}`], { stdio: ["ignore", openSync(file, "a"), openSync(file, "a")] });
+    tunnels.push(child);
+    for (let attempt = 0; attempt < 120; attempt++) {
+        if (child.exitCode !== null) throw new Error(`cloudflared for ${name} exited, see ${file}`);
+        const host = readFileSync(file, "utf8").match(/https:\/\/([a-z0-9-]+\.trycloudflare\.com)/)?.[1];
+        if (host) return host;
+        await sleep(500);
+    }
+    throw new Error(`cloudflared for ${name} printed no address, see ${file}`);
+}
+
+async function waitForEdge(host) {
+    for (let attempt = 0; attempt < 90; attempt++) {
+        const status = await fetch(`https://${host}/`, { redirect: "manual" }).then(
+            (response) => response.status,
+            () => 0,
+        );
+        if (status && status !== 530) return;
+        await sleep(2000);
+    }
+    throw new Error(`${host} never answered through Cloudflare`);
+}
+
+function instanceKey(instance) {
+    mkdirSync(instance.dir, { recursive: true, mode: 0o700 });
+    const file = path.join(instance.dir, "federation.key");
+    if (!existsSync(file)) writeFileSync(file, generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
+    return createPublicKey(createPrivateKey(readFileSync(file))).export({ format: "jwk" }).x;
+}
 
 let passed = 0;
 let failed = 0;
@@ -40,6 +85,14 @@ const check = (name, ok, detail = "") => {
     return ok;
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const until = async (fn, timeout = 8000) => {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+        if (await fn()) return true;
+        if (Date.now() > deadline) return false;
+        await sleep(200);
+    }
+};
 
 const registryKey = generateKeyPairSync("ed25519");
 const registryPublic = registryKey.publicKey.export({ format: "jwk" }).x;
@@ -51,7 +104,21 @@ const registryDocument = () => {
             issued_at: new Date().toISOString(),
             expires_at: new Date(Date.now() + 86_400_000).toISOString(),
             min_protocol: 1,
-            instances: [],
+            instances: publicMode
+                ? instances.map((instance) => ({
+                      id: instance.id,
+                      name: `Probe ${instance.name}`,
+                      description: "",
+                      icon_url: null,
+                      url: instance.origin,
+                      source_url: null,
+                      public_key: instance.publicKey,
+                      protocol: 2,
+                      registration: "open",
+                      state: "active",
+                      listed_at: new Date().toISOString(),
+                  }))
+                : [],
             blocked: { instances: [], guilds: [], users: [] },
             discovery: [],
         }),
@@ -64,9 +131,119 @@ const registry = createServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify(registryDocument()));
     }
-    res.writeHead(202, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "pending" }));
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+        if (req.method === "POST" && req.url === "/v1/announce") {
+            try {
+                announces.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            } catch {}
+        }
+        res.writeHead(202, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "pending" }));
+    });
 });
+const announces = [];
+
+const fakeKey = generateKeyPairSync("ed25519");
+const fakeState = { mode: "ok", joins: 0, actor: null };
+const fakeSockets = new Set();
+const fakeSnowflake = () => String((BigInt(Date.now() - 1420070400000) << 22n) + BigInt(Math.floor(Math.random() * 4194304)));
+const fakeEnvelope = (payload) => {
+    const bytes = Buffer.from(JSON.stringify(payload));
+    return { payload: bytes.toString("base64url"), signature: sign(null, bytes, fakeKey.privateKey).toString("base64url"), key_id: fake.id };
+};
+const fakeSnapshot = (actor, brokenChannel) => {
+    const guild = `@${fakeSnowflake()}@${fake.id}`;
+    const owner = `@${fakeSnowflake()}@${fake.id}`;
+    const channel = { id: `@${fakeSnowflake()}@${fake.id}`, type: 0, name: "general", position: 0, permission_overwrites: [], guild_id: guild };
+    const broken = { id: `@${fakeSnowflake()}@${fake.id}`, type: "not a number", name: "broken", position: 1, permission_overwrites: [], guild_id: guild };
+    const everyone = { id: guild, name: "@everyone", permissions: "1071698660929", position: 0, color: 0, hoist: false, managed: false, mentionable: false };
+    return {
+        invite: { code: "fakecode", guild: { id: guild, name: "Fake host server" }, channel: { id: channel.id, name: "general", type: 0 } },
+        snapshot: {
+            guild: {
+                id: guild,
+                name: "Fake host server",
+                owner_id: owner,
+                member_count: 2,
+                roles: [everyone],
+                channels: brokenChannel ? [channel, broken] : [channel],
+                emojis: [],
+                stickers: [],
+                voice_states: [],
+            },
+            members: [{ user: { id: owner, username: "fakeowner", global_name: null, avatar: null }, roles: [] }],
+            member: { user: { id: actor, username: "joiner" }, roles: [] },
+        },
+    };
+};
+const fakeHost = createServer((req, res) => {
+    const send = (status, body, type = "application/json") => {
+        res.writeHead(status, { "content-type": type });
+        res.end(type === "application/json" ? JSON.stringify(body) : body);
+    };
+    if (req.url === "/.well-known/meowcord")
+        return send(200, {
+            protocol: 2,
+            software: "meowcord",
+            version: "probe",
+            id: fake.id,
+            url: fake.origin,
+            name: "Probe fake host",
+            description: "",
+            icon_url: null,
+            public_key: fakeKey.publicKey.export({ format: "jwk" }).x,
+            registration: "open",
+            federation: { enabled: true, accepts_unlisted: true },
+            discovery_url: `${fake.origin}/.well-known/meowcord/discovery`,
+        });
+    if (req.url === "/.well-known/meowcord/discovery") return send(200, fakeEnvelope({ instance: fake.id, issued_at: new Date().toISOString(), guilds: [] }));
+    if (req.method !== "POST" || req.url !== "/federation/v2/join") return send(404, { code: "not_found", error: "Not found" });
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+        fakeState.joins++;
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+        fakeState.actor = body.actor;
+        switch (fakeState.mode) {
+            case "slow":
+                return;
+            case "reset":
+                return req.socket.destroy();
+            case "html500":
+                return send(502, "<html><body><h1>502 Bad Gateway</h1></body></html>", "text/html");
+            case "html200":
+                return send(200, "<!doctype html><html><body>Welcome</body></html>", "text/html");
+            case "json500":
+                return send(500, { code: "internal", error: "Internal error" });
+            case "old_unknown_sender":
+                return send(403, { code: "not_federated", error: "This instance doesn't federate with the sender" });
+            case "inactive":
+                return send(403, {
+                    code: "not_federated",
+                    error: `${fake.id} doesn't accept requests from ${B.id}. The registry lists ${B.id} as listed, and only active instances federate.`,
+                });
+            case "unknown_then_ok":
+                if (fakeState.joins === 1) return send(403, { code: "unknown_sender", error: `${fake.id} doesn't know ${B.id} yet.` });
+                return send(200, fakeSnapshot(body.actor, false));
+            case "broken_mirror":
+                return send(200, fakeSnapshot(body.actor, true));
+            default:
+                return send(200, fakeSnapshot(body.actor, false));
+        }
+    });
+});
+fakeHost.on("connection", (socket) => {
+    fakeSockets.add(socket);
+    socket.on("close", () => fakeSockets.delete(socket));
+});
+const fakeListen = () => new Promise((resolve) => fakeHost.listen(fake.port, "127.0.0.1", resolve));
+const fakeClose = () =>
+    new Promise((resolve) => {
+        for (const socket of fakeSockets) socket.destroy();
+        fakeHost.close(() => resolve());
+    });
 
 const servers = [];
 
@@ -84,23 +261,23 @@ async function startInstance(instance) {
     }
     if (!exists || args.has("--fresh")) spawnSync("createdb", ["--host=localhost", "--port=5432", `--username=${process.env.USER}`, instance.db], { stdio: "inherit" });
     const other = instances.find((entry) => entry !== instance);
-    const origin = `http://localhost:${instance.port}`;
+    const origin = instance.origin;
     writeFileSync(
         path.join(instance.dir, "config.json"),
         JSON.stringify(
             {
                 general: { serverName: origin },
                 api: { endpointPublic: `${origin}/api/v9` },
-                cdn: { endpointPublic: `${origin}/`, endpointPrivate: `${origin}/` },
-                gateway: { endpointPublic: `ws://localhost:${instance.port}/` },
-                security: { allowPrivateNetworkRequests: true, captcha: { blockAutomatedBrowsers: false } },
+                cdn: { endpointPublic: `${origin}/`, endpointPrivate: `http://localhost:${instance.port}/` },
+                gateway: { endpointPublic: `${origin.replace(/^http/, "ws")}/` },
+                security: { allowPrivateNetworkRequests: !publicMode, captcha: { blockAutomatedBrowsers: false } },
                 register: { requireCaptcha: false },
                 federation: {
                     enabled: true,
-                    announce: false,
-                    allowUnlistedPeers: true,
-                    peers: [other.id],
-                    registry: { url: `http://localhost:${registryPort}`, publicKey: registryPublic },
+                    announce: publicMode,
+                    allowUnlistedPeers: !publicMode,
+                    peers: publicMode ? [] : [other.id, ...(instance === B ? [fake.id] : [])],
+                    registry: { url: registryUrl, publicKey: registryPublic },
                 },
                 limits: { rate: { enabled: false, routes: { auth: { register: { count: 100, window: 60 } } } } },
             },
@@ -108,6 +285,11 @@ async function startInstance(instance) {
             2,
         ),
     );
+    await spawnInstance(instance);
+}
+
+async function spawnInstance(instance) {
+    const origin = `http://localhost:${instance.port}`;
     const log = openSync(path.join(instance.dir, "server.log"), "a");
     const child = spawn("bun", [path.join(root, "dist/bundle/start.js")], {
         cwd: instance.dir,
@@ -116,14 +298,15 @@ async function startInstance(instance) {
             DATABASE: `postgres://${process.env.USER}@localhost:5432/${instance.db}`,
             CONFIG_PATH: path.join(instance.dir, "config.json"),
             PORT: String(instance.port),
-            WRTC_WS_PORT: String(instance.port + 1000),
+            WRTC_WS_PORT: String(instance.port + Number(process.env.FED_VOICE_PORT_OFFSET || 1000)),
             NODE_ENV: "development",
-            PUBLIC_FETCH_PROXY: "direct",
+            PUBLIC_FETCH_PROXY: fetchProxy,
             PION_SFU_BIN: "",
         },
         stdio: ["ignore", log, log],
     });
     servers.push(child);
+    instance.child = child;
     for (let attempt = 0; attempt < 120; attempt++) {
         if (child.exitCode !== null) throw new Error(`instance ${instance.name} exited, see ${path.join(instance.dir, "server.log")}`);
         const ok = await fetch(`${origin}/api/ping`)
@@ -133,6 +316,16 @@ async function startInstance(instance) {
         await sleep(1000);
     }
     throw new Error(`instance ${instance.name} did not start, see ${path.join(instance.dir, "server.log")}`);
+}
+
+async function stopInstance(instance) {
+    const child = instance.child;
+    if (!child || child.exitCode !== null) return;
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGTERM");
+    await Promise.race([exited, sleep(15000)]);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    servers.splice(servers.indexOf(child), 1);
 }
 
 async function call(instance, method, route, token, body) {
@@ -254,6 +447,7 @@ const sendEncrypted = async (account, channelId, text, options) => {
 function gateway(account) {
     const ws = new WebSocket(`ws://localhost:${account.instance.port}/?v=9&encoding=json`, { headers: { origin: `http://localhost:${account.instance.port}` } });
     const events = [];
+    const all = [];
     const waiters = [];
     let seq = null;
     let heartbeat;
@@ -267,6 +461,7 @@ function gateway(account) {
             }
             if (message.op !== 0) return;
             events.push(message);
+            all.push(message);
             if (message.t === "READY") resolve(message.d);
             for (const waiter of [...waiters])
                 if (waiter.predicate(message)) {
@@ -304,11 +499,185 @@ function gateway(account) {
         ws.removeAllListeners("close");
         ws.close();
     };
-    return { ready, waitFor, send, close, events };
+    return { ready, waitFor, send, close, events, all };
+}
+
+async function timedCall(instance, method, route, token, body) {
+    const started = Date.now();
+    const response = await call(instance, method, route, token, body);
+    return { ...response, ms: Date.now() - started };
+}
+
+const describe = (response) => `${response.status} in ${response.ms}ms ${JSON.stringify(response.body).slice(0, 300)}`;
+
+async function fakeHostJoins(bobToken) {
+    const join = () => timedCall(B, "POST", `/federation/invites/${fake.id}/fakecode`, bobToken);
+    const mirrors = () => Number(psql(B.db, `SELECT count(*) FROM guilds WHERE federated_instance = '${fake.id}'`));
+
+    fakeState.mode = "html500";
+    let response = await join();
+    check(
+        "a host that answers an HTML 5xx page fails fast with a clear message",
+        response.status === 502 && response.ms < 5000 && response.body?.meowcord_code === "host_bad_response" && /instead of a Meowcord response/.test(response.body?.message),
+        describe(response),
+    );
+
+    fakeState.mode = "html200";
+    response = await join();
+    check("a host that answers HTML with 200 fails fast with a clear message", response.status === 502 && response.body?.meowcord_code === "host_bad_response", describe(response));
+
+    fakeState.mode = "json500";
+    response = await join();
+    check("a host's own 5xx error comes back as 502 with its text", response.status === 502 && response.body?.message === "Internal error", describe(response));
+
+    fakeState.mode = "old_unknown_sender";
+    fakeState.joins = 0;
+    response = await join();
+    check(
+        "a host on an older build that doesn't know this instance yet explains the registry delay",
+        response.status === 403 &&
+            response.body?.meowcord_code === "unknown_sender" &&
+            /registry list/.test(response.body?.message) &&
+            /every 5 minutes/.test(response.body?.message),
+        describe(response),
+    );
+
+    fakeState.mode = "inactive";
+    response = await join();
+    check(
+        "a host whose registry list says this instance isn't active says why",
+        response.status === 403 && response.body?.meowcord_code === "not_federated" && /lists .* as listed, and only active instances federate/.test(response.body?.message),
+        describe(response),
+    );
+
+    fakeState.mode = "unknown_then_ok";
+    fakeState.joins = 0;
+    response = await join();
+    check(
+        "the home asks again once when the host is fetching the registry list",
+        response.status === 200 && fakeState.joins === 2 && !!response.body?.guild_id && response.ms < 10000,
+        `${describe(response)} joins ${fakeState.joins}`,
+    );
+    check(
+        "the join answer carries the server so the client can open it without the gateway",
+        response.body?.meowcord_guild?.id === response.body?.guild_id && Array.isArray(response.body?.meowcord_guild?.channels) && response.body.meowcord_guild.channels.length > 0,
+        JSON.stringify(response.body?.meowcord_guild ?? null).slice(0, 300),
+    );
+    check("the actor sent to the host is the user on this instance", fakeState.actor?.endsWith(`@${B.id}`), String(fakeState.actor));
+
+    const before = mirrors();
+    fakeState.mode = "broken_mirror";
+    response = await join();
+    check(
+        "a mirror that fails halfway answers mirror_failed and leaves no partial copy",
+        response.status === 502 && response.body?.meowcord_code === "mirror_failed" && mirrors() === before,
+        `${describe(response)} mirrors ${before} -> ${mirrors()}`,
+    );
+
+    fakeState.mode = "reset";
+    response = await join();
+    check(
+        "a host that drops the connection fails fast as unreachable",
+        response.status === 502 && response.body?.meowcord_code === "host_unreachable" && response.ms < 5000,
+        describe(response),
+    );
+
+    await fakeClose();
+    response = await join();
+    check(
+        "a host that refuses the connection fails fast as unreachable",
+        response.status === 502 && response.body?.meowcord_code === "host_unreachable" && response.ms < 5000,
+        describe(response),
+    );
+    await fakeListen();
+
+    fakeState.mode = "slow";
+    response = await join();
+    check(
+        "a host that never answers times out within 25 seconds with host_timeout",
+        response.status === 504 && response.body?.meowcord_code === "host_timeout" && response.ms < 25000,
+        describe(response),
+    );
+    fakeState.mode = "ok";
+
+    response = await timedCall(B, "POST", "/federation/invites/unknown.example/abc", bobToken);
+    check(
+        "an instance this one doesn't federate with is refused at once and says why",
+        response.status === 403 && /doesn't federate with unknown\.example/.test(response.body?.message) && /registry list/.test(response.body?.message),
+        describe(response),
+    );
+}
+
+async function hostJoinCases({ alice, admin, bob, inviteCode, guildId, textId, mirror }) {
+    const join = (account, code) => timedCall(B, "POST", `/federation/invites/${A.id}/${code}`, account.token);
+    const fast = (response) => response.ms < 5000;
+
+    const again = await join(bob, inviteCode);
+    check("joining a server you're already in answers the same mirror", again.status === 200 && again.body?.guild_id === mirror && fast(again), describe(again));
+
+    const features = await call(A, "GET", `/guilds/${guildId}`, alice.token);
+    if (!features.body?.features?.includes("VANITY_URL"))
+        psql(A.db, `UPDATE guilds SET features = CASE WHEN features = '' THEN 'VANITY_URL' ELSE features || ',VANITY_URL' END WHERE id = '${guildId}'`);
+    const vanityCode = `fedcats${randomBytes(2).toString("hex")}`;
+    const vanity = await call(A, "PATCH", `/guilds/${guildId}/vanity-url`, alice.token, { code: vanityCode });
+    const vanityUser = await register(B, "vanity");
+    const vanityJoin = vanity.status === 200 ? await join(vanityUser, vanityCode) : vanity;
+    check("joining through a vanity code works", vanityJoin.status === 200 && !!vanityJoin.body?.guild_id && fast(vanityJoin), `${vanity.status} ${describe(vanityJoin)}`);
+
+    const limited = await call(A, "POST", `/channels/${textId}/invites`, alice.token, { max_age: 0, max_uses: 1, unique: true });
+    const firstUse = await join(await register(B, "limited"), limited.body?.code);
+    const secondUse = await join(await register(B, "toolate"), limited.body?.code);
+    check("an invite with max_uses works once", firstUse.status === 200 && !!firstUse.body?.guild_id, describe(firstUse));
+    check("a used up invite is refused fast as an unknown invite", secondUse.status === 404 && secondUse.body?.code === 10006 && fast(secondUse), describe(secondUse));
+
+    const expiring = await call(A, "POST", `/channels/${textId}/invites`, alice.token, { max_age: 60, unique: true });
+    psql(A.db, `UPDATE invites SET expires_at = now() - interval '1 minute' WHERE code = '${expiring.body?.code}'`);
+    const expired = await join(await register(B, "expired"), expiring.body?.code);
+    check("an expired invite is refused fast as an unknown invite", expired.status === 404 && expired.body?.code === 10006 && fast(expired), describe(expired));
+
+    const unknown = await join(await register(B, "unknown"), "doesnotexist1");
+    check("an unknown invite code is refused fast", unknown.status === 404 && fast(unknown), describe(unknown));
+
+    const paused = await call(A, "PUT", `/guilds/${guildId}/incident-actions`, alice.token, { invites_disabled_until: new Date(Date.now() + 3_600_000).toISOString() });
+    const pausedJoin = await join(await register(B, "paused"), inviteCode);
+    check(
+        "a server with paused invites refuses with its reason",
+        paused.status < 300 && pausedJoin.status === 403 && /paused/i.test(pausedJoin.body?.message ?? "") && fast(pausedJoin),
+        `${paused.status} ${describe(pausedJoin)}`,
+    );
+    await call(A, "PUT", `/guilds/${guildId}/incident-actions`, alice.token, { invites_disabled_until: null });
+
+    const banned = await register(B, "banned");
+    const bannedFirst = await join(banned, inviteCode);
+    const shadow = psql(A.db, `SELECT local_id FROM federated_objects WHERE canonical = '@${banned.id}@${B.id}'`);
+    const ban = await call(A, "PUT", `/guilds/${guildId}/bans/${shadow}`, alice.token, {});
+    await until(() => Number(psql(B.db, `SELECT count(*) FROM members WHERE id = '${banned.id}' AND guild_id = '${mirror}'`)) === 0, 5000);
+    const bannedAgain = await join(banned, inviteCode);
+    check(
+        "a user banned on the host is refused with the ban error",
+        bannedFirst.status === 200 && ban.status < 300 && bannedAgain.status < 500 && bannedAgain.body?.code === 40007 && fast(bannedAgain),
+        `${bannedFirst.status} ${ban.status} ${describe(bannedAgain)}`,
+    );
+
+    const forget = await call(A, "PATCH", "/admin/federation/settings", admin.token, { peers: [] });
+    const early = await join(await register(B, "early"), inviteCode);
+    check(
+        "a host that doesn't know this instance yet says why and asks again once",
+        forget.status === 200 &&
+            early.status === 403 &&
+            early.body?.meowcord_code === "unknown_sender" &&
+            /isn't in .* copy of the registry list/.test(early.body?.message ?? "") &&
+            early.ms >= 3000 &&
+            early.ms < 10000,
+        `${forget.status} ${describe(early)}`,
+    );
+    await call(A, "PATCH", "/admin/federation/settings", admin.token, { peers: [B.id] });
 }
 
 async function cleanup() {
     for (const child of servers) child.kill("SIGTERM");
+    await fakeClose().catch(() => undefined);
+    for (const child of tunnels) child.kill("SIGTERM");
     registry.close();
     if (drop) {
         await sleep(2000);
@@ -320,6 +689,21 @@ async function cleanup() {
 async function main() {
     if (!existsSync(path.join(root, "dist/bundle/start.js"))) throw new Error("Build first with bun run build:src");
     await new Promise((resolve) => registry.listen(registryPort, "127.0.0.1", resolve));
+    if (!publicMode) await fakeListen();
+    if (publicMode) {
+        const [registryHost, hostA, hostB] = await Promise.all([openTunnel("registry", registryPort), openTunnel("a", A.port), openTunnel("b", B.port)]);
+        registryUrl = `https://${registryHost}`;
+        for (const [instance, host] of [
+            [A, hostA],
+            [B, hostB],
+        ]) {
+            instance.id = host;
+            instance.origin = `https://${host}`;
+            instance.publicKey = instanceKey(instance);
+        }
+        console.log(`public addresses: registry ${registryUrl}, a ${A.origin}, b ${B.origin}, fetch proxy ${fetchProxy}`);
+        await Promise.all([registryHost, hostA, hostB].map(waitForEdge));
+    }
     if (!reuse) await Promise.all(instances.map(startInstance));
 
     const alice = await register(A, "alice");
@@ -327,7 +711,9 @@ async function main() {
     const bob = await register(B, "bob");
     const carol = await register(B, "carol");
     const dave = await register(B, "dave");
+    const adminB = await register(B, "adminb");
     psql(A.db, `UPDATE users SET rights = '1' WHERE id = '${admin.id}'`);
+    psql(B.db, `UPDATE users SET rights = '1' WHERE id = '${adminB.id}'`);
 
     for (let attempt = 0; attempt < 40; attempt++) {
         const ready = await Promise.all(
@@ -340,13 +726,32 @@ async function main() {
         await sleep(1000);
     }
     check("both instances accepted the local registry document", (await call(A, "GET", "/federation/discovery", alice.token)).body?.available === true);
+    if (publicMode) {
+        await until(() => instances.every((instance) => announces.some((envelope) => envelope.key_id === instance.id)), 30000);
+        for (const instance of instances) {
+            const envelope = announces.find((entry) => entry.key_id === instance.id);
+            const payload = envelope && Buffer.from(envelope.payload, "base64url");
+            const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: instance.publicKey }, format: "jwk" });
+            const signed = !!payload && verify(null, payload, key, Buffer.from(envelope.signature, "base64url"));
+            const wellKnown = await fetch(`${instance.origin}/.well-known/meowcord`).then(
+                (response) => response.json(),
+                () => null,
+            );
+            check(
+                `instance ${instance.name} announces itself from its public address`,
+                signed && JSON.parse(payload.toString("utf8")).id === instance.id && wellKnown?.id === instance.id && wellKnown?.public_key === instance.publicKey,
+                JSON.stringify({ signed, wellKnown }).slice(0, 300),
+            );
+        }
+    }
 
-    const gA = gateway(alice);
-    const gB = gateway(bob);
-    const gC = gateway(carol);
-    const gD = gateway(dave);
+    let gA = gateway(alice);
+    let gB = gateway(bob);
+    let gC = gateway(carol);
+    let gD = gateway(dave);
     await Promise.all([gA.ready, gB.ready, gC.ready, gD.ready]);
     check("all four gateways are ready", true);
+    if (!publicMode) await fakeHostJoins(bob.token);
 
     const guild = await call(A, "POST", "/guilds", alice.token, { name: "Federated cats" });
     const channels = await call(A, "GET", `/guilds/${guild.body.id}/channels`, alice.token);
@@ -363,6 +768,28 @@ async function main() {
 
     const discovery = await call(A, "PATCH", `/guilds/${guild.body.id}/global-discovery`, alice.token, { enabled: true });
     check("the owner turns on Show on other instances", discovery.status === 200, `${discovery.status} ${JSON.stringify(discovery.body)}`);
+
+    const listed = async () => {
+        const envelope = await fetch(`${A.origin}/.well-known/meowcord/discovery`).then((r) => r.json());
+        return JSON.parse(Buffer.from(envelope.payload, "base64url").toString("utf8")).guilds.map((entry) => entry.id);
+    };
+    const canonicalGuild = `@${guild.body.id}@${A.id}`;
+    check(
+        "the instance doesn't publish a server its admins haven't verified",
+        discovery.body?.status === "unverified" && !(await listed()).includes(canonicalGuild),
+        JSON.stringify(discovery.body),
+    );
+    const verify = await call(A, "PATCH", `/admin/federation/guilds/${guild.body.id}`, admin.token, { verified: true });
+    const owner = await call(A, "GET", `/guilds/${guild.body.id}/global-discovery`, alice.token);
+    check(
+        "an admin verifies the server and the instance publishes it",
+        verify.status === 200 &&
+            verify.body?.verified === true &&
+            owner.body?.verified === true &&
+            owner.body?.status !== "unverified" &&
+            (await listed()).includes(canonicalGuild),
+        `${verify.status} ${JSON.stringify(verify.body)} ${JSON.stringify(owner.body)}`,
+    );
 
     const preview = await call(B, "GET", `/federation/invites/${A.id}/${invite.body.code}`, bob.token);
     check(
@@ -383,6 +810,56 @@ async function main() {
     check("the remote member is listed with a handle", !!created?.members?.some((member) => member.user?.username === `${alice.username}@${A.id}`));
     const aliceAdd = await gA.waitFor("GUILD_MEMBER_ADD", (d) => d.user?.username === `${bob.username}@${B.id}`);
     check("alice sees bob join with his handle", !!aliceAdd);
+    await hostJoinCases({ alice, admin, bob, inviteCode: invite.body.code, guildId: guild.body.id, textId: text.id, mirror });
+    if (onlyJoin) {
+        for (const socket of [gA, gB, gC, gD]) socket.close();
+        return;
+    }
+
+    const bobShadow = aliceAdd?.user?.id;
+    const adminList = async (instance, token, kind, query) =>
+        ((await call(instance, "GET", `/admin/${kind}?${new URLSearchParams({ limit: "100", ...query })}`, token)).body?.[kind] ?? []).map((row) => row.id);
+    check("the admin users list leaves out users of other instances by default", !(await adminList(A, admin.token, "users", {})).includes(bobShadow));
+    check("the admin users list shows them with origin=remote", (await adminList(A, admin.token, "users", { origin: "remote" })).includes(bobShadow));
+    check("the remote users list leaves out local accounts", !(await adminList(A, admin.token, "users", { origin: "remote" })).includes(alice.id));
+    check("an exact id search finds a shadow user from the default list", (await adminList(A, admin.token, "users", { q: bobShadow })).includes(bobShadow));
+    const shadowEdit = await call(A, "PATCH", `/admin/users/${bobShadow}`, admin.token, { bio: "edited on a" });
+    check(
+        "an admin edit of a shadow user's profile is refused and names its home",
+        shadowEdit.status === 400 && String(shadowEdit.body?.message).includes(B.id),
+        `${shadowEdit.status} ${JSON.stringify(shadowEdit.body)}`,
+    );
+    const shadowAfter = await call(A, "GET", `/admin/users/${bobShadow}`, admin.token);
+    check(
+        "the refused edit changes nothing and the drawer data names the home",
+        shadowAfter.body?.bio !== "edited on a" && shadowAfter.body?.federated_instance === B.id && shadowAfter.body?.canonical === `@${bob.id}@${B.id}`,
+        JSON.stringify(shadowAfter.body).slice(0, 300),
+    );
+    const shadowPassword = await call(A, "POST", `/admin/users/${bobShadow}/password-reset`, admin.token, {});
+    check("an admin password reset of a shadow user is refused", shadowPassword.status === 400, `${shadowPassword.status}`);
+    const disableShadow = await call(A, "PATCH", `/admin/users/${bobShadow}`, admin.token, { disabled: true });
+    const enableShadow = await call(A, "PATCH", `/admin/users/${bobShadow}`, admin.token, { disabled: false });
+    check(
+        "an admin can still disable and enable a shadow user here",
+        disableShadow.status === 200 && enableShadow.status === 200,
+        `${disableShadow.status} ${enableShadow.status}`,
+    );
+    const counts = (await call(A, "GET", "/admin", admin.token)).body?.counts;
+    check(
+        "dashboard counts keep users of other instances apart",
+        counts?.remote_users >= 1 && counts?.users === Number(psql(A.db, "SELECT count(*) FROM users WHERE federated_instance IS NULL AND bot = false")),
+        JSON.stringify(counts),
+    );
+    const stats = (await call(A, "GET", "/policies/stats", admin.token)).body?.counts;
+    check("instance stats count only local accounts", stats?.user === Number(psql(A.db, "SELECT count(*) FROM users WHERE federated_instance IS NULL")), JSON.stringify(stats));
+    check("the admin servers list leaves out mirrors by default", !(await adminList(B, adminB.token, "guilds", {})).includes(mirror));
+    check("the admin servers list shows mirrors with origin=remote", (await adminList(B, adminB.token, "guilds", { origin: "remote" })).includes(mirror));
+    const mirrorEdit = await call(B, "PATCH", `/admin/guilds/${mirror}`, adminB.token, { name: "renamed on b" });
+    check(
+        "an admin edit of a mirror server is refused and names its host",
+        mirrorEdit.status === 400 && String(mirrorEdit.body?.message).includes(A.id),
+        `${mirrorEdit.status} ${JSON.stringify(mirrorEdit.body)}`,
+    );
 
     const gB2 = gateway(bob);
     const ready = await gB2.ready;
@@ -405,6 +882,26 @@ async function main() {
     const history = await call(B, "GET", `/channels/${mirrorText?.id}/messages?limit=10`, bob.token);
     check("bob reads the history", history.status === 200 && history.body.some?.((message) => message.content === "hello from a"), `${history.status}`);
 
+    const fileForm = (content, name, bytes) => {
+        const form = new FormData();
+        form.append("payload_json", JSON.stringify({ content }));
+        form.append("files[0]", new Blob([bytes], { type: "text/plain" }), name);
+        return form;
+    };
+    const bytesOf = async (url) => Buffer.from(await (await fetch(url)).arrayBuffer());
+    const fromAliceBytes = Buffer.from(`a file that lives on ${A.id} ${randomBytes(8).toString("hex")}`);
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, fileForm("file from a", "from-a.txt", fromAliceBytes));
+    const fileOnB = await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "file from a");
+    const proxied = fileOnB?.attachments?.[0]?.url ?? "";
+    check("bob's copy of an attachment points at his instance's media proxy", proxied.startsWith(`${B.origin}/federation-media/${A.id}/attachments/`), proxied);
+    check("bob's instance fetches the attachment from alice's instance", proxied && (await bytesOf(proxied)).equals(fromAliceBytes));
+    const fromBobBytes = Buffer.from(`a file bob uploads through ${B.id} ${randomBytes(8).toString("hex")}`);
+    const sentFile = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, fileForm("file from b", "from-b.txt", fromBobBytes));
+    check("bob sends a file into the remote channel", sentFile.status === 200, `${sentFile.status} ${JSON.stringify(sentFile.body).slice(0, 200)}`);
+    const fileOnA = await gA.waitFor("MESSAGE_CREATE", (d) => d.content === "file from b");
+    const hosted = fileOnA?.attachments?.[0]?.url ?? "";
+    check("alice's instance stores bob's file on its own CDN", hosted.startsWith(`${A.origin}/attachments/`) && (await bytesOf(hosted)).equals(fromBobBytes), hosted);
+
     const sent = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, { content: `hello from b <@${aliceOnB}>` });
     check("bob sends a message with a mention", sent.status === 200, `${sent.status} ${JSON.stringify(sent.body).slice(0, 300)}`);
     const fromB = await gA.waitFor("MESSAGE_CREATE", (d) => d.content?.startsWith("hello from b"));
@@ -415,6 +912,18 @@ async function main() {
     const bobOnA = fromB?.author?.id;
     const echo = await gB.waitFor("MESSAGE_CREATE", (d) => d.id === sent.body?.id);
     check("bob's own gateway gets his message back with the same id", !!echo);
+
+    const scam = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, { content: "claim your skins https://steam-gift.xyz/free" });
+    check("alice's instance refuses a scam link from bob", scam.status >= 400 && scam.status < 500, `${scam.status} ${JSON.stringify(scam.body).slice(0, 300)}`);
+    check(
+        "alice's instance logs the scam link against bob's shadow account",
+        await until(() => psql(A.db, `SELECT COUNT(*) FROM automod_actions WHERE rule = 'scam_link' AND user_id = '${bobOnA}'`) === "1"),
+    );
+    check(
+        "bob's home instance gets an automod report in its Reports queue",
+        await until(() => psql(B.db, `SELECT COUNT(*) FROM reports WHERE type = 'federated_automod' AND reported_user_id = '${bob.id}' AND reporter_id IS NULL`) === "1"),
+        psql(B.db, "SELECT type, reason FROM reports"),
+    );
 
     const edited = await call(B, "PATCH", `/channels/${mirrorText?.id}/messages/${sent.body?.id}`, bob.token, { content: "hello from b, edited" });
     check("bob edits his message", edited.status === 200, `${edited.status}`);
@@ -436,13 +945,107 @@ async function main() {
     const chunk = await gB.waitFor("GUILD_MEMBERS_CHUNK", (d) => d.guild_id === mirror);
     check("a guild member request on bob's gateway lists alice", !!chunk?.members?.some((member) => member.user?.id === aliceOnB));
 
+    const mentionCount = (instance, user, channel) =>
+        Number(psql(instance.db, `SELECT COALESCE(MAX(mention_count), 0) FROM read_states WHERE user_id = '${user}' AND channel_id = '${channel}'`) || 0);
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content: `ping <@${bobOnA}>` });
+    const ping = await gB.waitFor("MESSAGE_CREATE", (d) => d.content?.startsWith("ping"));
+    check("bob's copy of the ping names him with his own id", ping?.content === `ping <@${bob.id}>` && !!ping.mentions?.some((user) => user.id === bob.id));
+    check(
+        "a mention from the other instance counts on bob's read state",
+        await until(() => mentionCount(B, bob.id, mirrorText?.id) === 1),
+        String(mentionCount(B, bob.id, mirrorText?.id)),
+    );
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content: "@everyone wake up" });
+    await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "@everyone wake up");
+    check("@everyone from the other instance counts", await until(() => mentionCount(B, bob.id, mirrorText?.id) === 2), String(mentionCount(B, bob.id, mirrorText?.id)));
+    const role = await call(A, "POST", `/guilds/${guild.body.id}/roles`, alice.token, { name: "cats", mentionable: true });
+    await call(A, "PUT", `/guilds/${guild.body.id}/members/${bobOnA}/roles/${role.body?.id}`, alice.token);
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content: `<@&${role.body?.id}> dinner` });
+    await gB.waitFor("MESSAGE_CREATE", (d) => d.content?.endsWith(" dinner"));
+    check("a role mention from the other instance counts", await until(() => mentionCount(B, bob.id, mirrorText?.id) === 3), String(mentionCount(B, bob.id, mirrorText?.id)));
+    const suppress = await call(B, "PATCH", `/users/@me/guilds/${mirror}/settings`, bob.token, { suppress_everyone: true });
+    check("bob suppresses @everyone in the mirror", suppress.status === 200, `${suppress.status} ${JSON.stringify(suppress.body).slice(0, 200)}`);
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content: "@everyone again" });
+    const again = await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "@everyone again");
+    await sleep(1000);
+    check("a suppressed @everyone doesn't count", !!again && mentionCount(B, bob.id, mirrorText?.id) === 3, String(mentionCount(B, bob.id, mirrorText?.id)));
+    const ack = await call(B, "POST", `/channels/${mirrorText?.id}/messages/${again?.id}/ack`, bob.token, {});
+    check("bob's ack clears the count", ack.status === 200 && mentionCount(B, bob.id, mirrorText?.id) === 0, `${ack.status} ${mentionCount(B, bob.id, mirrorText?.id)}`);
+
+    const { signRequest } = require(path.join(root, "dist/util/util/federation/Protocol.js"));
+    const keyA = createPrivateKey(readFileSync(path.join(A.dir, "federation.key")));
+    const duplicateId = String((BigInt(Date.now()) - 1420070400000n) << 22n);
+    const wire = {
+        id: `probe-${randomBytes(6).toString("hex")}`,
+        event: "MESSAGE_CREATE",
+        guild_id: `@${guild.body.id}@${A.id}`,
+        channel_id: `@${text.id}@${A.id}`,
+        recipients: [`@${bob.id}@${B.id}`],
+        data: {
+            id: `@${duplicateId}@${A.id}`,
+            guild_id: `@${guild.body.id}@${A.id}`,
+            channel_id: `@${text.id}@${A.id}`,
+            content: "delivered twice",
+            author: { id: `@${alice.id}@${A.id}`, username: alice.username, discriminator: "0", avatar: null },
+            type: 0,
+            flags: 0,
+            mentions: [],
+            mention_roles: [],
+            attachments: [],
+            embeds: [],
+            timestamp: new Date().toISOString(),
+        },
+    };
+    const postInbox = () => {
+        const body = Buffer.from(JSON.stringify({ events: [wire] }));
+        const headers = signRequest({ method: "POST", path: "/federation/v2/inbox", target: B.id, sender: A.id, body, privateKey: keyA });
+        return fetch(`http://localhost:${B.port}/federation/v2/inbox`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body }).then((r) => r.status);
+    };
+    const posts = [await postInbox(), await postInbox()];
+    await sleep(1500);
+    check(
+        "the inbox applies an event id only once",
+        posts.every((status) => status === 200) && gB.all.filter((m) => m.t === "MESSAGE_CREATE" && m.d.content === "delivered twice").length === 1,
+        `${posts.join(",")} ${gB.all.filter((m) => m.t === "MESSAGE_CREATE" && m.d.content === "delivered twice").length}`,
+    );
+
+    const outbox = () => Number(psql(A.db, `SELECT count(*) FROM federation_outbox WHERE instance = '${B.id}'`));
+    for (const socket of [gB, gC, gD]) socket.close();
+    await stopInstance(B);
+    const queuedTexts = ["queued one", "queued two", "queued three"];
+    for (const content of queuedTexts) await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content });
+    check("events for a stopped instance wait in the outbox", await until(() => outbox() >= 3), String(outbox()));
+    const depth = await call(A, "GET", "/admin/federation/delivery", admin.token);
+    check("the admin page shows the queue depth", (depth.body?.instances?.find((entry) => entry.instance === B.id)?.queued ?? 0) >= 3, JSON.stringify(depth.body).slice(0, 300));
+    gA.close();
+    await stopInstance(A);
+    check("the outbox survives a restart of the sender", outbox() >= 3, String(outbox()));
+    await spawnInstance(B);
+    gB = gateway(bob);
+    gC = gateway(carol);
+    gD = gateway(dave);
+    await Promise.all([gB.ready, gC.ready, gD.ready]);
+    await spawnInstance(A);
+    gA = gateway(alice);
+    await gA.ready;
+    const arrived = [];
+    for (const content of queuedTexts) arrived.push(await gB.waitFor("MESSAGE_CREATE", (d) => d.content === content, 60000));
+    check("the queued events arrive after both instances restarted", arrived.every(Boolean), arrived.map((m) => !!m).join(","));
+    const order = queuedTexts.map((content) => gB.all.findIndex((m) => m.t === "MESSAGE_CREATE" && m.d.content === content));
+    check(
+        "they arrive in the order they were sent",
+        order.every((index, i) => index >= 0 && (i === 0 || index > order[i - 1])),
+        order.join(","),
+    );
+    check("the outbox is empty after delivery", await until(() => outbox() === 0), String(outbox()));
+
     const deleted = await call(B, "DELETE", `/channels/${mirrorText?.id}/messages/${sent.body?.id}`, bob.token);
     check("bob deletes his message", deleted.status === 204, `${deleted.status}`);
     check("alice sees the delete", !!(await gA.waitFor("MESSAGE_DELETE", (d) => d.channel_id === text.id)));
     await call(
         A,
         "DELETE",
-        `/channels/${text.id}/messages/${fromA?.id ? (await call(A, "GET", `/channels/${text.id}/messages?limit=5`, alice.token)).body.find((m) => m.content === "hello from a")?.id : ""}`,
+        `/channels/${text.id}/messages/${fromA?.id ? (await call(A, "GET", `/channels/${text.id}/messages?limit=50`, alice.token)).body.find((m) => m.content === "hello from a")?.id : ""}`,
         alice.token,
     );
     check("bob sees alice's delete", !!(await gB.waitFor("MESSAGE_DELETE", (d) => d.id === fromA?.id)));
@@ -719,6 +1322,24 @@ async function main() {
 
     const objects = await call(B, "GET", `/federation/objects?ids=${aliceOnB}`, bob.token);
     check("canonical ids resolve", objects.body?.[aliceOnB] === `@${alice.id}@${A.id}`, JSON.stringify(objects.body));
+    const reverse = await call(B, "GET", `/federation/objects?canonical=${encodeURIComponent(`@${alice.id}@${A.id}`)},${encodeURIComponent(`@${bob.id}@${B.id}`)}`, bob.token);
+    check(
+        "canonical ids resolve back to local ids",
+        reverse.body?.[`@${alice.id}@${A.id}`] === aliceOnB && reverse.body?.[`@${bob.id}@${B.id}`] === bob.id,
+        JSON.stringify(reverse.body),
+    );
+    const strangerEmoji = `@${String((BigInt(Date.now()) - 1420070400000n) << 22n)}@${A.id}`;
+    const fresh = await call(
+        B,
+        "GET",
+        `/federation/objects?canonical=${encodeURIComponent(strangerEmoji)},${encodeURIComponent("@123456789012345678@unknown.example")}`,
+        bob.token,
+    );
+    check(
+        "an unknown canonical id gets a local id only for an instance this one federates with",
+        /^\d+$/.test(fresh.body?.[strangerEmoji] ?? "") && !fresh.body?.["@123456789012345678@unknown.example"],
+        JSON.stringify(fresh.body),
+    );
 
     const gAdmin = await call(A, "POST", "/admin/federation/blocks", admin.token, { kind: "instance", target: B.id, reason: "probe" });
     check("an admin blocks the other instance", gAdmin.status === 200 || gAdmin.status === 201, `${gAdmin.status} ${JSON.stringify(gAdmin.body)}`);
@@ -741,6 +1362,10 @@ try {
 } finally {
     console.log(`\n${passed} passed, ${failed} failed${failures.length ? `\nfailed: ${failures.join("; ")}` : ""}`);
     if (!keep) await cleanup();
-    else registry.close();
+    else {
+        registry.close();
+        await fakeClose().catch(() => undefined);
+        for (const child of tunnels) child.kill("SIGTERM");
+    }
     process.exit(failed ? 1 : 0);
 }

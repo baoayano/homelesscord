@@ -14,7 +14,7 @@ router.get("/", route({ right: "MANAGE_USERS", spacebarOnly: true }), async (req
     res.json({ widgets: user.profile_widgets || [] });
 });
 router.put("/", route({ right: "MANAGE_USERS", spacebarOnly: true }), async (req: Request, res: Response) => {
-    const target = await adminCustomizationTarget(req);
+    const target = await adminCustomizationTarget(req, "profile widgets");
     const widgets = await validateProfileWidgetSelection(target.id, req.body?.widgets);
     await getDatabase()!.transaction(async (manager) => {
         await manager.update(User, { id: target.id }, { profile_widgets: widgets });

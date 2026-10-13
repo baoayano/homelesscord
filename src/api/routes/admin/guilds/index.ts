@@ -4,6 +4,7 @@ import { In } from "typeorm";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
 import { Guild, Member, User } from "@spacebar/database";
+import { originClause, parseOrigin } from "@spacebar/api/util/utility/federatedAdmin";
 
 const router = Router({ mergeParams: true });
 
@@ -38,6 +39,11 @@ router.get(
         description: "Search servers on this instance. `q` matches an exact id or part of the name.",
         query: {
             q: { type: "string", required: false },
+            origin: {
+                type: "string",
+                required: false,
+                description: "local (default) lists servers hosted here, remote lists mirrors of servers on other instances, all lists both. An exact id search ignores it",
+            },
             limit: { type: "number", required: false },
             offset: { type: "number", required: false },
         },
@@ -47,17 +53,21 @@ router.get(
         if (q.length > 256) throw new HTTPError("q must be no longer than 256 characters", 400);
         const limit = Math.min(Math.max(paginationQuery(req.query.limit, "limit", 50), 1), 100);
         const offset = paginationQuery(req.query.offset, "offset", 0);
+        const origin = parseOrigin(req.query.origin);
         if (/^\d{15,20}$/.test(q) && BigInt(q) > 9223372036854775807n) throw new HTTPError("The server id is outside the supported range", 400);
 
         const query = Guild.createQueryBuilder("guild")
-            .select(["guild.id", "guild.name", "guild.icon", "guild.owner_id", "guild.features", "guild.description", "guild.profile"])
+            .select(["guild.id", "guild.name", "guild.icon", "guild.owner_id", "guild.features", "guild.description", "guild.profile", "guild.federated_instance"])
             .addSelect((sub) => sub.select("COUNT(*)", "count").from(Member, "member").where("member.guild_id = guild.id"), "member_count")
             .orderBy("guild.id", "DESC")
             .limit(limit)
             .offset(offset);
 
-        if (/^\d{15,20}$/.test(q)) query.where("guild.id = :id", { id: q });
+        const exactId = /^\d{15,20}$/.test(q);
+        if (exactId) query.where("guild.id = :id", { id: q });
         else if (q) query.where(`${sqlLike("guild.name", ":q")}`, { q: `%${q.replace(/[\\%_]/g, "\\$&")}%` });
+        const clause = exactId ? null : originClause("guild", origin);
+        if (clause) query.andWhere(clause);
 
         const [{ entities, raw }, total] = await Promise.all([query.getRawAndEntities(), query.getCount()]);
 
@@ -78,6 +88,7 @@ router.get(
                 description: g.description ?? null,
                 features: g.features,
                 member_count: Number(raw[i]?.member_count ?? 0),
+                federated_instance: g.federated_instance ?? null,
                 tag: g.profile?.tag ? { tag: g.profile.tag, badge_hash: g.profile.badge_hash ?? null } : null,
                 owner: g.owner_id
                     ? pickOwner(

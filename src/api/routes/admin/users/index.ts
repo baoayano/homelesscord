@@ -3,10 +3,10 @@ import { Request, Response, Router } from "express";
 import { Brackets } from "typeorm";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
-import { Rights } from "@spacebar/util";
 import { User } from "@spacebar/database";
 import { AdminUserTag, UserFlags } from "@spacebar/schemas";
-import { ipVariants, parseIp } from "@spacebar/api/util";
+import { ipVariants, isProtectedStaffTarget, parseIp } from "@spacebar/api/util";
+import { originClause, parseOrigin } from "@spacebar/api/util/utility/federatedAdmin";
 
 const router = Router({ mergeParams: true });
 
@@ -33,6 +33,7 @@ export const ADMIN_USER_COLUMNS = [
     "suspended_until",
     "join_status",
     "join_reason",
+    "federated_instance",
 ] as const;
 
 // entities carry class-level defaults for every column, so only ever send the columns we selected
@@ -42,8 +43,7 @@ export const pickAdminUser = (user: User) => ({
 });
 
 export const assertCanManage = (req: Request, target: Pick<User, "id" | "rights">) => {
-    if (target.id !== req.user_id && new Rights(target.rights).has("OPERATOR") && !req.rights.has("OPERATOR"))
-        throw new HTTPError("Only operators can manage other operators", 403);
+    if (isProtectedStaffTarget({ id: req.user_id, rights: req.rights.bitfield }, target)) throw new HTTPError("Only operators can manage other staff accounts", 403);
 };
 
 const TAG_FLAGS = {
@@ -97,6 +97,8 @@ export const userSearchQuery = (req: Request) => {
     const ipText = scalarQuery(req.query.ip, "ip", "").trim();
     const ip = ipText ? parseIp(ipText) : parseIp(q);
     if (ipText && !ip) throw new HTTPError("ip must be an IPv4 or IPv6 address", 400);
+    const origin = parseOrigin(req.query.origin);
+    const exactId = !ip && /^\d{15,20}$/.test(q);
     const searchPattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
 
     const query = User.createQueryBuilder("user").orderBy("user.created_at", "DESC").addOrderBy("user.id", "DESC");
@@ -112,7 +114,7 @@ export const userSearchQuery = (req: Request) => {
             query.andWhere(
                 new Brackets((qb) => qb.where(`${sqlLike("user.username", ":q")}`, { q: searchPattern }).orWhere(`${sqlLike("user.global_name", ":q")}`, { q: searchPattern })),
             );
-    } else if (/^\d{15,20}$/.test(q)) {
+    } else if (exactId) {
         if (BigInt(q) > 9223372036854775807n) throw new HTTPError("The user id is outside the supported range", 400);
         query.where("user.id = :id", { id: q });
     } else if (q)
@@ -150,6 +152,8 @@ export const userSearchQuery = (req: Request) => {
         default:
             break;
     }
+    const clause = exactId ? null : originClause("user", origin);
+    if (clause) query.andWhere(clause);
     return query;
 };
 
@@ -167,6 +171,11 @@ router.get(
                 type: "string",
                 required: false,
                 description: "all | disabled | suspended | pending | with_reason | bots | verified | unverified",
+            },
+            origin: {
+                type: "string",
+                required: false,
+                description: "local (default) lists accounts of this instance, remote lists users of other instances stored here, all lists both. An exact id search ignores it",
             },
             limit: { type: "number", required: false },
             offset: { type: "number", required: false },

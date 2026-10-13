@@ -10,11 +10,14 @@ function harness(objects, userId = "100000000000000001") {
     const helpers = source.statements
         .filter(
             (node) =>
-                ts.isVariableStatement(node) && ["canonicalInstance", "canonicalSnowflake", "isCanonical"].includes(node.declarationList.declarations[0].name.getText(source)),
+                ts.isVariableStatement(node) &&
+                ["canonicalInstance", "canonicalSnowflake", "isCanonical", "LOCAL_REFERENCE", "CANONICAL_REFERENCE"].includes(
+                    node.declarationList.declarations[0].name.getText(source),
+                ),
         )
         .map((node) => node.getText(source))
         .join("\n");
-    const methods = ["canonicalIds", "signedUserId", "bindingFor", "safetyNumber"].map((name) =>
+    const methods = ["canonicalIds", "localIds", "canonicalPayload", "localPayload", "signedUserId", "bindingFor", "safetyNumber"].map((name) =>
         engine.members.find((node) => ts.isMethodDeclaration(node) && node.name.getText(source) === name),
     );
     methods.forEach((method) => assert.ok(method));
@@ -44,12 +47,18 @@ function harness(objects, userId = "100000000000000001") {
         userId,
         canonical: new Map(),
         resolvedCanonical: new Map(),
+        localOf: new Map(),
         federation: true,
         api: {
             request: async (method, url) => {
                 calls.push(url);
                 if (objects === 404) throw { ok: false, status: 404 };
-                const ids = new URL(url, "http://x").searchParams.get("ids").split(",");
+                const params = new URL(url, "http://x").searchParams;
+                if (params.has("canonical")) {
+                    const wanted = params.get("canonical").split(",");
+                    return Object.fromEntries(Object.entries(objects).flatMap(([local, canonical]) => (wanted.includes(canonical) ? [[canonical, local]] : [])));
+                }
+                const ids = params.get("ids").split(",");
                 return Object.fromEntries(ids.filter((id) => objects[id]).map((id) => [id, objects[id]]));
             },
         },
@@ -125,4 +134,63 @@ test("both sides of a conversation across instances compute the same safety numb
     const number = await onA.safetyNumber(remote);
     assert.match(number, /^\d{60}$/);
     assert.equal(await onB.safetyNumber(aliceOnB), number);
+});
+
+test("mentions in a version 2 payload travel as canonical ids and come back as the receiver's ids", async () => {
+    const role = "100000000000000030";
+    const emoji = "100000000000000040";
+    const sticker = "100000000000000050";
+    const onA = harness({
+        [me]: `@${me}@a.example`,
+        [remote]: "@555555555555555555@b.example",
+        [role]: `@${role}@a.example`,
+        [emoji]: `@${emoji}@a.example`,
+        [sticker]: `@${sticker}@a.example`,
+        [channel]: `@${channel}@a.example`,
+    }).instance;
+    const sent = await onA.canonicalPayload({
+        content: `hi <@${remote}> and <@!${me}>, <@&${role}> in <#${channel}> <:cat:${emoji}> <a:dance:${emoji}>`,
+        stickers: [{ id: sticker, name: "s", format_type: 1 }],
+    });
+    assert.equal(
+        sent.content,
+        `hi <@@555555555555555555@b.example> and <@!@${me}@a.example>, <@&@${role}@a.example> in <#@${channel}@a.example> <:cat:@${emoji}@a.example> <a:dance:@${emoji}@a.example>`,
+    );
+    assert.equal(sent.stickers[0].id, `@${sticker}@a.example`);
+
+    const bobHome = "555555555555555555";
+    const aliceOnB = "200000000000000001";
+    const roleOnB = "200000000000000030";
+    const emojiOnB = "200000000000000040";
+    const stickerOnB = "200000000000000050";
+    const channelOnB = "200000000000000010";
+    const onB = harness(
+        {
+            [bobHome]: `@${bobHome}@b.example`,
+            [aliceOnB]: `@${me}@a.example`,
+            [roleOnB]: `@${role}@a.example`,
+            [emojiOnB]: `@${emoji}@a.example`,
+            [stickerOnB]: `@${sticker}@a.example`,
+            [channelOnB]: `@${channel}@a.example`,
+        },
+        bobHome,
+    ).instance;
+    const received = await onB.localPayload(JSON.parse(JSON.stringify(sent)));
+    assert.equal(received.content, `hi <@${bobHome}> and <@!${aliceOnB}>, <@&${roleOnB}> in <#${channelOnB}> <:cat:${emojiOnB}> <a:dance:${emojiOnB}>`);
+    assert.equal(received.stickers[0].id, stickerOnB);
+    assert.equal(await onB.canonicalIds([aliceOnB]).then((map) => map.get(aliceOnB)), `@${me}@a.example`);
+});
+
+test("an unknown canonical mention is shown as text instead of pointing at a wrong user", async () => {
+    const { instance } = harness({});
+    const received = await instance.localPayload({ content: "hi <@@123456789012345678@c.example> <:cat:@123456789012345679@c.example>" });
+    assert.equal(received.content, "hi @123456789012345678@c.example :cat:");
+});
+
+test("a payload without references is left as it is", async () => {
+    const { instance, calls } = harness({});
+    const payload = { content: "no mentions here" };
+    assert.equal(await instance.canonicalPayload(payload), payload);
+    assert.equal(await instance.localPayload(payload), payload);
+    assert.equal(calls.length, 0);
 });

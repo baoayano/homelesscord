@@ -1,25 +1,48 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { Request, Response, Router } from "express";
 import { route } from "@spacebar/api/middlewares";
-import { SNOWFLAKE } from "@spacebar/util";
-import { canonicalIds } from "@spacebar/api/util/utility/federationIds";
+import { parseCanonicalId, SNOWFLAKE } from "@spacebar/util";
+import { canonicalIds, localIds } from "@spacebar/api/util/utility/federationIds";
+import { ownInstance, trustFor } from "@spacebar/api/util/utility/federationNetwork";
 
 const router = Router({ mergeParams: true });
+
+const listOf = (value: unknown) =>
+    String(value ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 100);
 
 router.get(
     "/",
     route({
         spacebarOnly: true,
-        description: "Canonical @id@instance ids for local ids, at most 100",
-        query: { ids: { type: "string", required: true, description: "Comma separated local ids" } },
+        description:
+            "Canonical @id@instance ids for local ids, and local ids for canonical ids, at most 100 of each. A canonical id of an instance this one federates with gets a local id even when it wasn't known yet.",
+        query: {
+            ids: { type: "string", required: false, description: "Comma separated local ids" },
+            canonical: { type: "string", required: false, description: "Comma separated canonical ids" },
+        },
     }),
     async (req: Request, res: Response) => {
-        const ids = String(req.query.ids ?? "")
-            .split(",")
-            .map((id) => id.trim())
-            .filter((id) => SNOWFLAKE.test(id))
-            .slice(0, 100);
-        res.json(Object.fromEntries(await canonicalIds(ids)));
+        const ids = listOf(req.query.ids).filter((id) => SNOWFLAKE.test(id));
+        const canonical = listOf(req.query.canonical).filter((id) => parseCanonicalId(id));
+        const known = await localIds(canonical, { create: false });
+        const own = ownInstance();
+        const unknown = canonical.filter((id) => !known.has(id));
+        const allowed = (
+            await Promise.all(
+                [...new Set(unknown.map((id) => parseCanonicalId(id)!.instance))].map(async (instance) =>
+                    instance !== own && (await trustFor(instance).catch(() => null)) ? instance : null,
+                ),
+            )
+        ).filter(Boolean);
+        const created = await localIds(
+            unknown.filter((id) => allowed.includes(parseCanonicalId(id)!.instance)),
+            {},
+        );
+        res.json({ ...Object.fromEntries(await canonicalIds(ids)), ...Object.fromEntries(known), ...Object.fromEntries(created) });
     },
 );
 

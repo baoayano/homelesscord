@@ -114,7 +114,7 @@ describe("registry worker", () => {
         expect(Date.parse(payload.expires_at) - Date.parse(payload.issued_at)).toBe(7 * 24 * 60 * 60 * 1000);
     });
 
-    test("stores an announcing instance and its discovery list as pending", async () => {
+    test("stores an announcing instance as pending and lists its servers", async () => {
         const response = await announce(await signedAnnounce(instanceKey, fake.id));
         expect(response.status).toBe(202);
         expect(await response.json()).toEqual({ status: "pending" });
@@ -125,8 +125,8 @@ describe("registry worker", () => {
         expect(instance.registration).toBe("open");
         const guilds = await sql(`SELECT id, status, name, invite_url FROM discovery WHERE instance = '${fake.id}' ORDER BY id`);
         expect(guilds.map((guild) => [guild.id, guild.status])).toEqual([
-            [`@1001@${fake.id}`, "pending"],
-            [`@1002@${fake.id}`, "pending"],
+            [`@1001@${fake.id}`, "verified"],
+            [`@1002@${fake.id}`, "verified"],
         ]);
         expect(guilds[0].invite_url).toBe(`${fake.origin}/invite/1001`);
         expect((await registryDocument()).instances).toEqual([]);
@@ -162,9 +162,9 @@ describe("registry worker", () => {
         expect(response.status).toBe(422);
     });
 
-    test("publishes an approved instance with its verified servers and blocks", async () => {
+    test("publishes an approved instance with the servers it lists, except ones we removed, and blocks", async () => {
         await sql(
-            `UPDATE instances SET status = 'approved' WHERE id = '${fake.id}'; UPDATE discovery SET status = 'verified', verified_at = '2026-10-12T00:00:00.000Z' WHERE id = '@1001@${fake.id}'; INSERT INTO blocks (kind, id, reason, at) VALUES ('user', '@9@bad.example', 'spam', '2026-10-12T00:00:00.000Z')`,
+            `UPDATE instances SET status = 'approved' WHERE id = '${fake.id}'; UPDATE discovery SET status = 'rejected', verified_at = NULL WHERE id = '@1002@${fake.id}'; INSERT INTO blocks (kind, id, reason, at) VALUES ('user', '@9@bad.example', 'spam', '2026-10-12T00:00:00.000Z')`,
         );
         const before = await registryDocument();
         const response = await announce(await signedAnnounce(instanceKey, fake.id));
@@ -203,12 +203,15 @@ describe("registry worker", () => {
         fake.state.discoveryKey = previous;
     });
 
-    test("sends a changed server name on a verified server back to review", async () => {
+    test("keeps a renamed server listed and a server we removed out", async () => {
         fake.state.guilds[0].name = "Cat pictures, renamed";
         await sql(`UPDATE instances SET pending_public_key = NULL WHERE id = '${fake.id}'`);
         expect((await announce(await signedAnnounce(instanceKey, fake.id))).status).toBe(202);
-        const [guild] = await sql(`SELECT status, name FROM discovery WHERE id = '@1001@${fake.id}'`);
-        expect(guild).toEqual({ status: "pending", name: "Cat pictures, renamed" });
+        const guilds = await sql(`SELECT id, status, name FROM discovery WHERE instance = '${fake.id}' ORDER BY id`);
+        expect(guilds.map((guild) => [guild.id, guild.status, guild.name])).toEqual([
+            [`@1001@${fake.id}`, "verified", "Cat pictures, renamed"],
+            [`@1002@${fake.id}`, "rejected", guilds[1].name],
+        ]);
     });
 
     test("rate limits announces per instance id", async () => {

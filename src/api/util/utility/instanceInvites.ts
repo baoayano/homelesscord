@@ -5,6 +5,7 @@ import { In, IsNull } from "typeorm";
 import { InstanceInvite, InstanceInviteUser, Session, User } from "@spacebar/database";
 import { lockTransaction, sqlNow, sqlReturning } from "@spacebar/database/Sql";
 import { Config, emitEvent, Event, Rights } from "@spacebar/util";
+import { staffDisableColumns } from "./staffDisable";
 
 export const INVITE_CODE = /^[A-Za-z0-9]{6,32}$/;
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -212,7 +213,7 @@ export async function disableAccounts(ids: string[], actorId: string) {
     const targets = users.filter((user) => !protectedIds.includes(user.id)).map((user) => user.id);
     const now = new Date();
     for (const part of chunks(targets)) {
-        await User.update({ id: In(part) }, { disabled: true });
+        await User.update({ id: In(part) }, staffDisableColumns());
         await InstanceInvite.update({ creator_id: In(part), revoked_at: IsNull() }, { revoked_at: now, revoked_by: actorId });
         const sessions = await Session.find({ where: { user_id: In(part) }, select: { session_id: true } });
         await Session.delete({ user_id: In(part) });

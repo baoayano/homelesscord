@@ -64,6 +64,7 @@ const harness = () => {
     let patch;
     const writes = [];
     const user = { id: "target", rights: "0", created_at: new Date("2026-10-12T10:23:45.678Z"), registration_date: new Date("2026-10-12T10:23:45.678Z") };
+    const federatedAdmin = load("src/api/util/utility/federatedAdmin.ts", { "lambert-server/HTTPError": { HTTPError } });
     load("src/api/routes/admin/users/#user_id/index.ts", {
         express: {
             Router: () => ({
@@ -99,7 +100,12 @@ const harness = () => {
         },
         "@spacebar/schemas": { AccountStandingState: { SUSPENDED: 500 }, PrivateUserProjection: ["id"] },
         "@spacebar/api/util": { hasAdminPanelAccess: () => false },
-        "../index": { ADMIN_USER_COLUMNS: ["id", "created_at", "registration_date"], pickAdminUser: (user) => ({ id: user.id, registration_date: user.registration_date }) },
+        "@spacebar/api/util/utility/federatedAdmin": federatedAdmin,
+        "../index": {
+            ADMIN_USER_COLUMNS: ["id", "created_at", "registration_date"],
+            pickAdminUser: (user) => ({ id: user.id, registration_date: user.registration_date }),
+            assertCanManage() {},
+        },
     });
     return {
         user,
@@ -149,5 +155,12 @@ test("registration date changes retain operator target protection", async () => 
     const h = harness();
     h.user.rights = "1";
     await assert.rejects(h.run({ registration_date: "2020-01-01T00:00:00Z" }, false), (error) => error.code === 403);
+    assert.equal(h.writes.length, 0);
+});
+
+test("admins cannot rewrite another instance's Nitro registration date", async () => {
+    const h = harness();
+    h.user.federated_instance = "other.example";
+    await assert.rejects(h.run({ registration_date: "2020-01-01T00:00:00Z" }), (error) => error.code === 400 && error.message.includes("registration_date"));
     assert.equal(h.writes.length, 0);
 });

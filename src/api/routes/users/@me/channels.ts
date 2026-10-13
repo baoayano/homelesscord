@@ -3,6 +3,7 @@ import { Request, Response, Router } from "express";
 import { route } from "@spacebar/api/middlewares";
 import { HTTPError } from "lambert-server/HTTPError";
 import { Channel, Guild, Recipient, Relationship } from "@spacebar/database";
+import { checkContactSpam, enforceQuarantineDm } from "@spacebar/api/util";
 import { Config, DiscordApiErrors, DmChannelDTO, FieldErrors, getPermission } from "@spacebar/util";
 import { ChannelType, DmChannelCreateSchema, RelationshipType } from "@spacebar/schemas";
 
@@ -83,6 +84,14 @@ router.post(
                     if (!permission.has("KICK_MEMBERS") && !permission.has("BAN_MEMBERS") && !permission.has("MODERATE_MEMBERS") && !permission.has("MANAGE_GUILD"))
                         throw new HTTPError("Direct messages between members of this server are paused.", 403);
                 }
+            if (!friends && !existing.length) {
+                await checkContactSpam({ user_id: req.user_id, target_id: other, kind: "dm", rights: req.rights, federated: !!req.user?.federated_instance });
+                await enforceQuarantineDm({ user_id: req.user_id, federated: !!req.user?.federated_instance, rights: req.rights });
+            }
+        } else if (others.length > 1 && !req.user_bot) {
+            for (const target of others)
+                await checkContactSpam({ user_id: req.user_id, target_id: target, kind: "dm", rights: req.rights, federated: !!req.user?.federated_instance });
+            await enforceQuarantineDm({ user_id: req.user_id, federated: !!req.user?.federated_instance, rights: req.rights });
         }
         res.json(await Channel.createDMChannel(body.recipients || (body.recipient_id ? [body.recipient_id] : []), req.user_id, body.name));
     },
