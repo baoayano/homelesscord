@@ -89,14 +89,26 @@ export default definePlugin({
             replacement: [
                 { match: /parentComponent:"BadgeDirectoryModal",/, replace: '$&"data-fosscord-badge-directory":"",' },
                 {
+                    match: /function \i\((\i)\)\{(?=let\{badge:\i,viewerBadge:\i,isViewingOtherUser:\i,targetUsername:\i,isViewerOnUpgradeableNitro:\i\}=\1,)/,
+                    replace: "$&$1=$self.nitroProgressContext($1);",
+                },
+                {
+                    match: /function\((\i)\)\{(?=let\{badge:\i,viewerBadge:\i,isViewingOtherUser:\i\}=\1,\i=\(0,\i\.\i\)\(\[\i\.\i\],\(\)=>\i\.\i\.hasConsented\(\i\.\i\.PERSONALIZATION\)\),\i=\i\?\?\i,\i=null!=\(0,\i\.\i\)\(\i,\i.next_tier\))/,
+                    replace: "$&$1=$self.nitroProgressContext($1);",
+                },
+                {
+                    match: /(children:\[\(0,\i.jsx\)\(\i,\{badge:(\i),viewerBadge:)(\i)(?=\}\),\(0,\i.jsx\)\(\i\.\i,\{\}\))/,
+                    replace: "$1$2.badge_id===1?$2:$3",
+                },
+                {
                     match: /\i\.intl\.string\(\i\.t\["75s2Rq"\]\):\i\.intl\.string\(\i\.t\["62xU4E"\]\)/,
                     replace: '"Badges on this profile.":"Badges you own. Select one to view its details."',
                 },
                 {
-                    match: /(!\i&&)(\i)\?\.owned===!0&&\(\2\.tiers\?\.length\?\?0\)>0&&null==\2\.next_tier/,
+                    match: /(!\i&&)(\i)\?\.owned===!0&&\(\2\.tiers\?\.length\?\?0\)>0&&null==\2\.next_tier/g,
                     replace: "$1$2!=null&&$self.useMaxedDescription($2)&&$2?.owned===!0&&($2.tiers?.length??0)>0&&null==$2.next_tier",
                 },
-                { match: /\(0,\i\.\i\)\((\i).badge_id\)&&!\1.is_earnable&&\1.badge_id!==\i\.\i.STAFF/g, replace: "$self.isLegacy($1)" },
+                { match: /\(0,\i\.\i\)\((\i).badge_id\)&&!\1.is_earnable&&\1.badge_id!==\i\.\i.STAFF/g, replace: " $self.isLegacy($1)" },
                 { match: /(?=!\i\|\|(\i).is_earnable\|\|\i\|\|\1.badge_id===\i\.\i.STAFF\?null:)/, replace: "$1==null||!$self.isLegacy($1)||" },
                 { match: /(return \i&&)!(\i).is_earnable&&/, replace: "$1$self.isLegacy($2)&&" },
                 { match: /(\i=)\i\[(\i)\.badge_id\]/g, replace: "$1undefined" },

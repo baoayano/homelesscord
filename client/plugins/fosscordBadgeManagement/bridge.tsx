@@ -3,7 +3,7 @@ import { findStoreLazy, filters, mapMangledModuleLazy } from "@webpack";
 import { RestAPI, UserStore } from "@webpack/common";
 
 import { Button, SettingsSection } from "../fosscordCore/ui";
-import { applyCatalog, BadgeRegistry, CatalogBadge, previewBadges, reorderHint, splitBadges } from "./model";
+import { BadgeRegistry, CatalogBadge } from "./model";
 
 const registry = new BadgeRegistry();
 const DirectoryStore = findStoreLazy("BadgeDirectoryStore") as { getBadges(id?: string): CatalogBadge[] };
@@ -12,7 +12,7 @@ const Artwork = mapMangledModuleLazy(".PREMIUM_TENURE_72_MONTH]:{standard:", {
     get: filters.byCode(/^function [\w$]+\(([\w$]+)\)\{return [\w$]+\[\1\]\}$/),
 });
 
-export { applyCatalog, previewBadges, reorderHint, splitBadges };
+export { applyCatalog, nitroProgressContext, previewBadges, reorderHint, splitBadges } from "./model";
 export { DraggableBadge } from "./drag";
 export const isLegacy = (badge: CatalogBadge) => badge.is_legacy === true;
 export const useMaxedDescription = (badge: CatalogBadge) => badge.badge_id !== 1;

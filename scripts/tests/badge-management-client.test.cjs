@@ -38,6 +38,23 @@ const catalog = () => [
 ];
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+test("Nitro progress follows the viewed badge rather than the viewer's level", () => {
+    const badge = { ...catalog()[1], current_tier: "3", next_tier: "6", progress: [{ current: 4, floor: 3, threshold: 6 }] };
+    const viewerBadge = { ...badge, current_tier: "72", next_tier: null, progress: [] };
+    const props = { badge, viewerBadge, isViewingOtherUser: true, targetUsername: "friend" };
+    const context = model.nitroProgressContext(props);
+    assert.equal(context.badge, badge);
+    assert.equal(context.viewerBadge, undefined);
+    assert.equal(context.isViewingOtherUser, false);
+    assert.equal(context.targetUsername, "friend");
+    assert.equal(props.viewerBadge, viewerBadge);
+    assert.equal(props.isViewingOtherUser, true);
+    const self = { ...props, isViewingOtherUser: false };
+    assert.equal(model.nitroProgressContext(self), self);
+    const staff = { ...props, badge: catalog()[0] };
+    assert.equal(model.nitroProgressContext(staff), staff);
+});
+
 test("native preview reorders Staff and Nitro while preserving their separate hiding rules", () => {
     const badges = catalog();
     const pending = { pendingBadgeDisplayOrder: ["pride:rainbow", "custom:99", 1, 22], pendingBadgeHiddenBadges: [22, 1, "pride:rainbow"] };
@@ -125,6 +142,7 @@ test("badge details wait for the viewer badge before reading its fields", () => 
     };
     const maxed = details.replacement.find((replacement) => replacement.replace.includes("useMaxedDescription"));
     const legacy = details.replacement.find((replacement) => replacement.replace.includes("!$self.isLegacy"));
+    const legacyPredicate = details.replacement.find((replacement) => replacement.replace === " $self.isLegacy($1)");
     const helpers = {
         useMaxedDescription: (badge) => badge.badge_id !== 1,
         isLegacy: (badge) => badge.is_legacy === true,
@@ -135,6 +153,9 @@ test("badge details wait for the viewer badge before reading its fields", () => 
     assert.notEqual(legacyExpression, '!badge||badge.is_earnable||flag||badge.badge_id===U.$.STAFF?null:"offer"');
     const showMaxed = new Function("badge", "helpers", "viewer", `return ${maxedExpression}`);
     const showLegacyAction = new Function("badge", "helpers", "flag", "U", `return ${legacyExpression}`);
+    const isLegacy = new Function("badge", "helpers", apply("return(0,N.ie)(badge.badge_id)&&!badge.is_earnable&&badge.badge_id!==U.$.STAFF", legacyPredicate));
+    assert.equal(isLegacy({ badge_id: 1, is_legacy: false }, helpers), false);
+    assert.equal(isLegacy({ badge_id: 99, is_legacy: true }, helpers), true);
     assert.equal(showMaxed(undefined, helpers, false), false);
     assert.equal(showMaxed({ badge_id: 1, owned: true, tiers: [{}], next_tier: null }, helpers, false), false);
     assert.equal(showMaxed({ badge_id: 22, owned: true, tiers: [{}], next_tier: null }, helpers, false), true);

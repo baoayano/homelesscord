@@ -18,6 +18,10 @@ export type CatalogBadge = {
 };
 export type Pending = { pendingBadgeDisplayOrder?: BadgeId[]; pendingBadgeHiddenBadges?: BadgeId[] };
 
+export function nitroProgressContext<T extends { badge: CatalogBadge; viewerBadge?: CatalogBadge; isViewingOtherUser?: boolean }>(props: T): T {
+    return props.badge.badge_id === 1 && props.isViewingOtherUser ? { ...props, viewerBadge: undefined, isViewingOtherUser: false } : props;
+}
+
 export function reorderHint(count: number): string {
     if (count === 0) return "Show or select badges to arrange them on your profile.";
     if (count === 1) return "Show or select another badge to change the order.";
