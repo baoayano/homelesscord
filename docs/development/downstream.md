@@ -75,7 +75,7 @@ Local voice sends and receives audio in both directions. The extended federation
 
 The 2026-10-14 update merges 9 upstream commits through `48719bd`. It makes forgot-password responses consistent across accounts, shares short rate limits between workers, limits anonymous and top-level routes, restricts credentialed CORS to instance origins, guards undefined query values and confines lurker guild events to the caller. Cluster events also reach the sending worker. Remote accounts lose official, system and staff flags through equivalent PostgreSQL and SQLite migrations. Downstream Nitro and badge management remain intact.
 
-The rapid update runs the server build, lint, unit suite and API parity probe on a fresh SQLite database at port 3002. Full local and federation encryption browser suites are not repeated within this update's requested 4 minute window. The owner's server on port 3001 remains under the owner's control.
+The rapid update passes the server build, lint, 33 focused security and gateway tests, and 151 API parity checks with 1 provider skip on a fresh SQLite database at port 3002. The request query audit finds 530 values and 0 unsafe queries. The full unit run encounters WebKit host dependency validation failures in this environment; a representative WebKit test passes when validation is bypassed using the already installed local libraries. Full local and federation encryption browser suites are not repeated within this update's requested 4 minute window. OpenAPI is regenerated on main without changing its output. The owner's server on port 3001 remains under the owner's control.
 
 ## Downstream features
 
