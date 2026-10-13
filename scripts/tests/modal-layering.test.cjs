@@ -81,3 +81,53 @@ test("native modal layer hit-testing preserves current backdrop fix at desktop a
         await browser.close();
     }
 });
+
+test("badge directory keeps profile portals and frames below the backdrop while preserving controls and drafts", {
+    skip: !playwright || !fs.existsSync(executablePath) || cachedCss.length === 0,
+}, async () => {
+    const browser = await playwright.chromium.launch({ executablePath, headless: true });
+    const nativeCss = cachedCss.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+    const modalCss = fs.readFileSync("client/plugins/fosscordModals/style.css", "utf8");
+    const badgeCss = fs.readFileSync("client/plugins/fosscordBadgeManagement/style.css", "utf8");
+    try {
+        for (const width of [1440, 390]) {
+            for (const container of ["layerContainer__59d0d", "clickTrapContainer__59d0d"]) {
+                const page = await browser.newPage({ viewport: { width, height: 844 } });
+                try {
+                    const profileHtml = `<div class="layer__59d0d" data-testid="profile-portal" style="left:8px;top:80px">
+<div class="user-profile-popout" style="width:140px;height:200px;background:royalblue"><input value="Unsaved profile draft">
+<div data-testid="frame" style="position:absolute;inset:-15px;z-index:999;pointer-events:none">Profile decoration</div></div></div>`;
+                    await page.setContent(`<main data-testid="background">Chat stays visible</main><div class="layerContainer__59d0d">
+<div class="scrim__40128" data-testid="backdrop"></div>
+<div class="layer__59d0d layer_bc663c"><section data-testid="directory"><div class="user-profile-popout" data-testid="preview">Badge preview</div>
+<button data-testid="badge">Select badge</button></section></div>
+<div class="layer__59d0d layer__529b0" data-testid="customization"><button>Badge customization menu</button></div>
+${container.startsWith("clickTrap") ? `<div class="${container}">${profileHtml}</div>` : profileHtml}</div>`);
+                    await page.addStyleTag({ content: nativeCss + fixtureCss + modalCss + badgeCss });
+                    const profile = page.getByTestId("profile-portal");
+                    const directory = page.getByTestId("directory");
+                    assert.equal(await profile.isVisible(), true);
+                    assert.equal(await page.evaluate(() => document.elementFromPoint(20, 100)?.closest('[data-testid="profile-portal"]') !== null), true);
+                    await directory.evaluate((element) => element.setAttribute("data-fosscord-badge-directory", ""));
+                    assert.equal(await profile.isVisible(), true, "the profile stays rendered underneath the backdrop");
+                    assert.equal(await profile.evaluate((element) => getComputedStyle(element).zIndex), "-2");
+                    assert.equal(await page.evaluate(() => document.elementFromPoint(20, 100)?.getAttribute("data-testid")), "backdrop");
+                    assert.equal(await page.getByTestId("frame").isVisible(), true);
+                    for (const id of ["background", "directory", "preview", "customization", "badge"]) {
+                        assert.equal(await page.getByTestId(id).isVisible(), true, `${id} stays visible at ${width}px in ${container}`);
+                    }
+                    assert.equal(await profile.locator("input").inputValue(), "Unsaved profile draft");
+                    await directory.evaluate((element) => element.remove());
+                    assert.equal(await profile.evaluate((element) => getComputedStyle(element).zIndex), "auto", "closing the directory restores the original layer");
+                    assert.equal(await page.evaluate(() => document.elementFromPoint(20, 100)?.closest('[data-testid="profile-portal"]') !== null), true);
+                    assert.equal(await page.getByTestId("frame").isVisible(), true);
+                    assert.equal(await profile.locator("input").inputValue(), "Unsaved profile draft");
+                } finally {
+                    await page.close();
+                }
+            }
+        }
+    } finally {
+        await browser.close();
+    }
+});

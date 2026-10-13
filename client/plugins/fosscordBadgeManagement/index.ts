@@ -87,6 +87,7 @@ export default definePlugin({
         {
             find: '"badge-details"',
             replacement: [
+                { match: /parentComponent:"BadgeDirectoryModal",/, replace: '$&"data-fosscord-badge-directory":"",' },
                 {
                     match: /\i\.intl\.string\(\i\.t\["75s2Rq"\]\):\i\.intl\.string\(\i\.t\["62xU4E"\]\)/,
                     replace: '"Badges on this profile.":"Badges you own. Select one to view its details."',

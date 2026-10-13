@@ -1,4 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
+body:has([data-fosscord-badge-directory])
+    :is([class*="layerContainer__"], [class*="clickTrapContainer__"])
+    > [class*="layer_"]:has(.user-profile-popout):not(:has([data-fosscord-badge-directory])) {
+    z-index: -2;
+}
+
 [data-fosscord-badge-customization] {
     max-height: min(85vh, 600px);
     overflow-y: auto;
