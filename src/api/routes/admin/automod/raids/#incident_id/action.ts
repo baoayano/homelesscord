@@ -4,9 +4,8 @@ import { In } from "typeorm";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
 import { InstanceBan, RaidIncident, Session, User } from "@spacebar/database";
-import { Rights } from "@spacebar/util";
 import { AdminRaidIncidentActionSchema } from "@spacebar/schemas";
-import { applySpamAction, blockFederatedUser, deleteAuthoredMessages, endUserSessions, ipVariants, normalizeIp, recordAutomodAction } from "@spacebar/api/util";
+import { applySpamAction, blockFederatedUser, canActOn, deleteAuthoredMessages, endUserSessions, ipVariants, normalizeIp, recordAutomodAction } from "@spacebar/api/util";
 import { serializeIncidents } from "../index";
 import { findIncident } from "./index";
 
@@ -17,11 +16,11 @@ const BATCH = 100;
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         requestBody: "AdminRaidIncidentActionSchema",
         description:
-            "Act on every account in an incident, or on `user_ids` from it: delete every message they sent, suspend them, disable them or ban the IP addresses they registered and signed in from. Accounts from other instances are blocked from federating instead of suspended, disabled or IP banned. Your own account and, unless you are an operator, operators are skipped.",
+            "Act on every account in an incident, or on `user_ids` from it: delete every message they sent, suspend them, disable them or ban the IP addresses they registered and signed in from. Accounts from other instances are blocked from federating instead of suspended, disabled or IP banned. Your own account and staff at or above your own role are skipped.",
     }),
     async (req: Request, res: Response) => {
         const body = req.body as AdminRaidIncidentActionSchema;
@@ -39,7 +38,7 @@ router.post(
             const user = users.find((entry) => entry.id === id);
             if (!user) skipped.push({ id, reason: "unknown" });
             else if (id === req.user_id) skipped.push({ id, reason: "self" });
-            else if (!req.rights.has("OPERATOR") && new Rights(user.rights).has("OPERATOR")) skipped.push({ id, reason: "operator" });
+            else if (!canActOn({ id: req.user_id, rights: req.rights.bitfield }, user)) skipped.push({ id, reason: "operator" });
             else targets.push(user);
         }
 

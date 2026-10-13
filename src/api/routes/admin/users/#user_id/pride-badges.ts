@@ -12,7 +12,7 @@ const catalog = () =>
         ...badge,
         icon_url: `${(Config.get().cdn.endpointPublic || "").replace(/\/+$/, "")}/badge-icons/${badge.icon}.png`,
     }));
-router.get("/", route({ right: "MANAGE_USERS", spacebarOnly: true }), async (req: Request, res: Response) => {
+router.get("/", route({ right: "VIEW_USERS", spacebarOnly: true }), async (req: Request, res: Response) => {
     const target = await adminCustomizationTarget(req);
     const user = await User.findOneOrFail({
         where: { id: target.id },

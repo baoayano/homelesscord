@@ -2,11 +2,11 @@
 import { In, type EntityManager } from "typeorm";
 import { Badge, User } from "@spacebar/database";
 import type { BadgeDirectoryEntry, BadgeSettings, BadgeSettingsSchema, ProfileBadge } from "@spacebar/schemas";
-import { Config, FieldErrors, getApexExperiments } from "@spacebar/util";
+import { Config, FieldErrors, getApexExperiments, instanceName, loadStaffRoles, staffBadgeRole } from "@spacebar/util";
 import { completedNitroMonths, nitroAnniversary, nitroBadge } from "./nitroBadges";
 import { prideBadges, PRIDE_BADGES } from "./prideBadges";
 import { isSubscriptionBadge } from "./profile";
-import { STAFF_BADGE_ID } from "./staffBadge";
+import { ensureStaffBadge, STAFF_BADGE_ID } from "./staffBadge";
 
 const MANAGEMENT_HASH = 3093904580;
 const NITRO_MONTHS = [0, 1, 3, 6, 12, 24, 36, 60, 72];
@@ -65,7 +65,9 @@ export function buildBadgeCatalog(user: User, assigned: ProfileBadge[], now = ne
         const badge = byId.get(id);
         return badge ? [badge] : [];
     });
-    const result = ordered.map((badge) => entry(badge, badge.id === STAFF_BADGE_ID ? 22 : `custom:${badge.id}`, true, true));
+    const roleBadge = assigned.find((badge) => /^staff-role-\d{1,20}$/.test(badge.id));
+    if (roleBadge && !ordered.some((badge) => badge.id === STAFF_BADGE_ID)) ordered.unshift(roleBadge);
+    const result = ordered.map((badge) => entry(badge, badge.id === STAFF_BADGE_ID || badge === roleBadge ? 22 : `custom:${badge.id}`, true, true));
     for (const badge of result) {
         if (badge.badge_id !== 22) continue;
         badge.info_label = "Instance staff";
@@ -137,6 +139,11 @@ export async function loadBadgeCatalog(userId: string, manager?: EntityManager) 
     });
     const repository = manager ? manager.getRepository(Badge) : Badge.getRepository();
     const assigned = user.badge_ids?.length ? await repository.find({ where: { id: In(user.badge_ids) } }) : [];
+    const role = user.badge_ids?.includes(STAFF_BADGE_ID) ? null : staffBadgeRole(user.id, await loadStaffRoles());
+    if (role) {
+        const staff = await ensureStaffBadge();
+        assigned.unshift(Badge.create({ id: `staff-role-${role.id}`, description: `${instanceName()} ${role.name}`, icon: staff.icon, link: staff.link }));
+    }
     return { user, catalog: buildBadgeCatalog(user, assigned) };
 }
 

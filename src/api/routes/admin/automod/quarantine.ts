@@ -11,7 +11,7 @@ const router = Router({ mergeParams: true });
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "Accounts still inside the new account quarantine window that no moderator has cleared, newest first",
     }),
@@ -23,7 +23,7 @@ router.get(
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         requestBody: "AdminAutomodUsersSchema",
         description: "Lift the new account quarantine early for these accounts",

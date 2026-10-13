@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { loadStaffModules } = require("./helpers/staff-roles.cjs");
 
 const load = (file, imports) => {
     const module = { exports: {} };
@@ -61,7 +62,11 @@ const removalHarness = ({ users = [], messages = [] } = {}) => {
         "@spacebar/database": database,
         "@spacebar/util": { emitEvent: async (event) => calls.events.push(event), Rights: OperatorRights },
         "@spacebar/schemas": { ChannelType: { GROUP_DM: 3 }, PrivateUserProjection: [] },
-        "./adminTargets": load("src/api/util/utility/adminTargets.ts", { "@spacebar/util": { Rights: OperatorRights } }),
+        "./adminTargets": load("src/api/util/utility/adminTargets.ts", {
+            "@spacebar/util": loadStaffModules().util,
+            "@spacebar/database": {},
+            "lambert-server/HTTPError": { HTTPError },
+        }),
         "./staffDisable": load("src/api/util/utility/staffDisable.ts", { "@spacebar/schemas": { UserFlags: { FLAGS: { DISABLED: 1n << 41n } } } }),
     });
     return { module, calls };

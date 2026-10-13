@@ -31,6 +31,7 @@ The native directory and customization popover use the backend catalog and persi
 - [x] Give owned badge details a title, description and known rarity without inventing acquisition dates or retired status.
 - [x] Show native Nitro progress for self and other profiles in both directory layouts using the badge owner's registration months.
 - [x] Forward Nitro tooltip clicks and keyboard activation to the native badge action so discovery opens the viewed account's Nitro details.
+- [x] Keep generated staff role badges in the Staff family with the same ordering and visibility preferences.
 
 ## Pride flags and profile badges (P1)
 

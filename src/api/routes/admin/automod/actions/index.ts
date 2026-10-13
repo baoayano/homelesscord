@@ -13,7 +13,7 @@ const REVIEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description:
             "The automod log, newest first. Filter by `rule`, `action`, `user_id` or `reversed`. `review=yes` lists the last 24 hours of actions that did something and that nobody has undone or confirmed yet.",

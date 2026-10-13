@@ -283,7 +283,29 @@ const RIGHTS = [
   ["PRESENCE", 35, "Presence routing override"],
   ["SEND_BACKDATED_EVENTS", 42, "Send backdated events"],
   ["USE_MASS_INVITES", 43, "Accept mass invites"],
+  ["VIEW_USERS", 51, "View accounts in this dashboard"],
+  ["MODERATE_USERS", 52, "Warn, suspend, disable and ban users and handle reports"],
+  ["VIEW_MODERATION", 53, "Read reports, violations and moderation logs"],
+  ["SUPPORT_USERS", 54, "Account recovery and verification"],
+  ["MANAGE_STAFF", 55, "Manage staff roles below their own"],
+  ["VIEW_AUDIT_LOG", 56, "Read the staff audit log"],
 ];
+const ACCESS_LABELS = {
+  settings: "Settings",
+  status: "Status page",
+  system: "System",
+  users: "View users",
+  manage_users: "Manage users",
+  moderate: "Moderate users",
+  support: "Account support",
+  guilds: "Servers",
+  reports: "Reports and moderation logs",
+  messages: "Messages",
+  staff: "Staff roles",
+  audit: "Audit log",
+};
+const staffRoleBadge = (role) =>
+  html`<span class="badge"><span class="dot" style="background:${role.color == null ? "currentColor" : hexColor(role.color)}"></span>${role.name}</span>`;
 const hasRight = (rights, bit) => {
   try {
     return (BigInt(rights || 0) & (1n << BigInt(bit))) !== 0n;
@@ -821,9 +843,17 @@ async function renderOverview(view) {
                             ><span class="badges"
                                 >${Object.entries(o.access)
                                   .filter(([k, v]) => v && k !== "operator")
-                                  .map(([k]) => html`<span class="badge accent">${k}</span>`)}</span
+                                  .map(([k]) => html`<span class="badge accent">${ACCESS_LABELS[k] ?? k}</span>`)}</span
                             >
                         </div>
+                        ${
+                          o.access.operator || o.staff_roles?.length
+                            ? html`<div class="list-item">
+                                  <span class="grow muted">Your staff roles</span
+                                  ><span class="badges">${o.access.operator ? html`<span class="badge accent">Operator</span>` : ""}${(o.staff_roles ?? []).map(staffRoleBadge)}</span>
+                              </div>`
+                            : ""
+                        }
                     </div>
                 </div>
             </div>
@@ -1437,16 +1467,16 @@ const removalSummary = (action, totals) =>
     .filter(Boolean)
     .join(", ");
 
+const removalActions = () =>
+  [
+    state.overview.access.moderate ? ["disable", "Disable accounts"] : null,
+    state.overview.access.manage_users ? ["delete", "Delete accounts"] : null,
+  ].filter(Boolean);
+
 const removalOptions = (prefix) => html`
   <label
     >Action<select name="action" id="${prefix}-action">
-      ${options(
-        [
-          ["disable", "Disable accounts"],
-          ["delete", "Delete accounts"],
-        ],
-        "disable",
-      )}
+      ${options(removalActions(), removalActions()[0]?.[0])}
     </select></label
   >
   ${
@@ -1540,6 +1570,7 @@ async function renderUsers(view) {
 
   const results = $("#user-results", view);
   const bulk = $("#user-bulk", view);
+  const canBulk = removalActions().length > 0;
   const requests = latestList(view, results, $("#user-status", view));
   let lastTotal = 0;
   const query = () => ({ q: usersState.q, filter: usersState.filter, origin: usersState.origin });
@@ -1582,7 +1613,7 @@ async function renderUsers(view) {
                                   <table>
                                       <thead>
                                           <tr>
-                                              <th style="width:1%"><input type="checkbox" id="user-select-page" aria-label="Select every user on this page" /></th>
+                                              ${canBulk ? html`<th style="width:1%"><input type="checkbox" id="user-select-page" aria-label="Select every user on this page" /></th>` : ""}
                                               <th>User</th>
                                               <th class="hide-sm">${remote ? "Instance" : "Email"}</th>
                                               <th class="hide-sm">Joined</th>
@@ -1593,7 +1624,7 @@ async function renderUsers(view) {
                                           ${users.map(
                                             (u) => html`
                                                   <tr data-id="${u.id}">
-                                                      <td data-select><input type="checkbox" data-select-user="${u.id}" aria-label="Select ${userName(u)}" /></td>
+                                                      ${canBulk ? html`<td data-select><input type="checkbox" data-select-user="${u.id}" aria-label="Select ${userName(u)}" /></td>` : ""}
                                                       <td>
                                                           <div class="ident">
                                                               ${avatar(u)}
@@ -1721,7 +1752,7 @@ async function renderIps(view, tabs) {
       </div>
       <div class="list-status muted" id="ip-status" role="status" aria-live="polite" hidden></div>
       <div id="ip-results"><div class="spinner">Loading…</div></div>
-      <section class="card stack" id="ip-bans" style="margin-top:24px"></section>
+      ${state.overview.access.reports ? html`<section class="card stack" id="ip-bans" style="margin-top:24px"></section>` : ""}
     `,
   );
   const results = $("#ip-results", view);
@@ -1799,11 +1830,15 @@ async function renderIpBans(card, reload) {
       <p class="muted" style="margin:0">
         Registration and sign-in from a banned address are refused, and tokens used from it stop working. An account that uses a token from a banned address gets banned too, and lifting the address ban lifts those bans as well.
       </p>
-      <form class="row" id="ip-ban-form" style="align-items:flex-end">
-        <label class="grow">Address<input name="ip" required maxlength="64" inputmode="text" autocomplete="off" placeholder="203.0.113.7" /></label>
-        <label class="grow">Reason<input name="reason" maxlength="512" placeholder="Optional" /></label>
-        <button class="btn danger" type="submit">Ban address</button>
-      </form>
+      ${
+        state.overview.access.moderate
+          ? html`<form class="row" id="ip-ban-form" style="align-items:flex-end">
+              <label class="grow">Address<input name="ip" required maxlength="64" inputmode="text" autocomplete="off" placeholder="203.0.113.7" /></label>
+              <label class="grow">Reason<input name="reason" maxlength="512" placeholder="Optional" /></label>
+              <button class="btn danger" type="submit">Ban address</button>
+            </form>`
+          : ""
+      }
       ${
         data.bans.length
           ? html`<div class="list">
@@ -1813,7 +1848,7 @@ async function renderIpBans(card, reload) {
                     <code>${ban.ip}</code>
                     <div class="muted">${ban.reason} · ${fmtDate(ban.created_at)}</div>
                   </div>
-                  <button class="btn small" type="button" data-lift="${ban.id}" data-ip="${ban.ip}">Lift ban</button>
+                  ${state.overview.access.moderate ? html`<button class="btn small" type="button" data-lift="${ban.id}" data-ip="${ban.ip}">Lift ban</button>` : ""}
                 </div>`,
               )}
             </div>
@@ -1822,7 +1857,7 @@ async function renderIpBans(card, reload) {
       }
     `,
   );
-  $("#ip-ban-form", card).addEventListener("submit", async (event) => {
+  $("#ip-ban-form", card)?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const ip = form.ip.value.trim();
@@ -1878,20 +1913,22 @@ async function openIp(ip, reload) {
         </div>
       </div>
       ${
-        total
+        total && removalActions().length
           ? html`<form class="card stack" id="ip-remove" data-action-form>
               <h3>Remove every account on this address</h3>
               ${removalOptions("ip-remove")}
-              ${row?.ban_id ? "" : html`<label class="toggle"><input type="checkbox" name="ban_ip" checked /><span>Ban this address<span class="hint">Nobody can register or sign in from it afterwards.</span></span></label>`}
+              ${row?.ban_id || !state.overview.access.moderate ? "" : html`<label class="toggle"><input type="checkbox" name="ban_ip" checked /><span>Ban this address<span class="hint">Nobody can register or sign in from it afterwards.</span></span></label>`}
               <div class="form-actions"><button class="btn danger" type="submit">Remove ${plural(total, "account")}</button></div>
             </form>`
           : ""
       }
       <div class="row">
         ${
-          row?.ban_id
-            ? html`<button class="btn" type="button" id="ip-lift">Lift the ban on this address</button>`
-            : html`<button class="btn danger" type="button" id="ip-ban">Ban this address</button>`
+          !state.overview.access.moderate
+            ? ""
+            : row?.ban_id
+              ? html`<button class="btn" type="button" id="ip-lift">Lift the ban on this address</button>`
+              : html`<button class="btn danger" type="button" id="ip-ban">Ban this address</button>`
         }
         <a class="btn ghost" href="#/users" id="ip-accounts">Show these accounts in Users</a>
       </div>
@@ -1985,7 +2022,7 @@ function userBadges(u) {
         <span class="badge accent">Operator</span>
       `,
     );
-  else if (hasRight(u.rights, 7) || hasRight(u.rights, 2))
+  else if ([2, 7, 51, 52, 53, 54, 55, 56].some((bit) => hasRight(u.rights, bit)))
     badges.push(
       html`
         <span class="badge accent">Staff</span>
@@ -2093,7 +2130,7 @@ async function openUser(id, reload) {
     [u, badges, standing, catalog] = await Promise.all([
       api(`/admin/users/${id}`),
       api("/admin/badges"),
-      api(`/admin/users/${id}/violations`),
+      state.overview.access.reports ? api(`/admin/users/${id}/violations`) : null,
       getProfileCatalog(),
     ]);
   } catch (e) {
@@ -2125,12 +2162,14 @@ async function openUser(id, reload) {
                 </select></label
             ><span class="hint">Showing up to 100 matching items.</span>
         </div>`;
-  const isOperator = state.overview.access.operator;
+  const access = state.overview.access;
+  const isOperator = access.operator;
   const isSelf = u.id === state.me.id;
   const home = u.federated_instance;
   const federationLink = isOperator
     ? html`<a href="#/federation">Federation page</a>`
     : "Federation page, which needs the operator right";
+  const editsAccount = !home && (access.manage_users || access.support || (access.moderate && !isSelf) || isOperator);
 
   mount(
     body,
@@ -2216,7 +2255,7 @@ async function openUser(id, reload) {
                       <h3>Why they want to join</h3>
                       ${u.join_reason ? html`<p class="automod-reason" style="margin:0;white-space:pre-wrap">${u.join_reason}</p>` : html`<p class="muted" style="margin:0">No reason given.</p>`}
                       ${
-                        u.join_status === "pending" || u.join_status === "rejected"
+                        access.moderate && (u.join_status === "pending" || u.join_status === "rejected")
                           ? html`<div class="row">
                                 <button class="btn small primary" type="button" data-join="approved">Approve account</button>
                                 ${u.join_status === "pending" ? html`<button class="btn small danger" type="button" data-join="rejected">Reject account</button>` : ""}
@@ -2231,17 +2270,30 @@ async function openUser(id, reload) {
                 ? html`<div class="card stack" id="user-suspension">
                       <h3>Suspended</h3>
                       <p class="muted" style="margin:0">${home ? "Can't act on this instance" : "Can't sign in"} until ${fmtDate(u.suspended_until)}. The suspension lifts by itself then.</p>
-                      <div class="row"><button class="btn small" type="button" data-lift ${isSelf ? raw("disabled") : ""}>Lift suspension now</button></div>
+                      ${access.moderate ? html`<div class="row"><button class="btn small" type="button" data-lift ${isSelf ? raw("disabled") : ""}>Lift suspension now</button></div>` : ""}
                   </div>`
                 : ""
             }
 
             ${
-              home
+              home || access.manage_users
                 ? ""
-                : html`<form id="user-form" class="card stack">
-                <h3>Profile & account</h3>
-                <label>Nitro registration date<input name="registration_date" type="datetime-local" step="0.001" value="${toLocalInput(u.registration_date ?? u.created_at, 23)}" /></label>
+                : html`<div class="card">
+                      <h3>Profile</h3>
+                      <div class="list">
+                          <div class="list-item"><span class="grow muted">Display name</span><span>${u.global_name || html`<span class="muted">Not set</span>`}</span></div>
+                          <div class="list-item"><span class="grow muted">Pronouns</span><span>${u.pronouns || html`<span class="muted">Not set</span>`}</span></div>
+                          <div class="list-item"><span class="grow muted">Bio</span><span style="white-space:pre-wrap;text-align:right">${u.bio || html`<span class="muted">Not set</span>`}</span></div>
+                      </div>
+                  </div>`
+            }
+            ${
+              editsAccount
+                ? html`<form id="user-form" class="card stack">
+                <h3>${access.manage_users ? "Profile & account" : "Account"}</h3>
+                ${
+                  access.manage_users
+                    ? html`<label>Nitro registration date<input name="registration_date" type="datetime-local" step="0.001" value="${toLocalInput(u.registration_date ?? u.created_at, 23)}" /></label>
                 <span class="hint">Controls Nitro badge progression. Times use your local timezone. Clear to use the account creation date.</span>
                 <label>Username<input name="username" value="${u.username}" minlength="2" maxlength="32" required /></label>
                 <label>Pronouns<input name="pronouns" value="${u.pronouns ?? ""}" maxlength="40" /></label>
@@ -2305,13 +2357,19 @@ async function openUser(id, reload) {
                               : ""
                           }</p>`
                     }
-                </div>
-                <label class="toggle"><input type="checkbox" name="verified" ${u.verified ? raw("checked") : ""} /><span>Email verified</span></label>
-                <label class="toggle"
+                </div>`
+                    : ""
+                }
+                ${access.support ? html`<label class="toggle"><input type="checkbox" name="verified" ${u.verified ? raw("checked") : ""} /><span>Email verified</span></label>` : ""}
+                ${
+                  access.moderate
+                    ? html`<label class="toggle"
                     ><input type="checkbox" name="disabled" ${u.disabled ? raw("checked") : ""} ${isSelf ? raw("disabled") : ""} /><span
                         >Account disabled<span class="hint">Blocks sign-in and API access and ends their sessions. Reversible.</span></span
                     ></label
-                >
+                >`
+                    : ""
+                }
                 ${
                   isOperator
                     ? html`
@@ -2335,12 +2393,18 @@ async function openUser(id, reload) {
                     : ""
                 }
                 <div class="form-actions"><button class="btn primary" type="submit">Save user</button></div>
-            </form>
+            </form>`
+                : ""
+            }
 
-            <div class="card stack" id="standing-card"></div>
-            <div class="card stack" id="security-card"></div>
-            <div class="card stack" id="sessions-card"></div>
-            <div class="card stack" id="invites-card"></div>`
+            ${
+              home
+                ? ""
+                : html`<div class="card stack" id="staff-roles-card"></div>
+                      ${access.reports ? html`<div class="card stack" id="standing-card"></div>` : ""}
+                      <div class="card stack" id="security-card"></div>
+                      <div class="card stack" id="sessions-card"></div>
+                      <div class="card stack" id="invites-card"></div>`
             }
 
             ${
@@ -2376,7 +2440,7 @@ async function openUser(id, reload) {
                 : ""
             }
             ${
-              home
+              home && access.manage_users
                 ? html`<div class="card danger-zone stack">
                       <h3>Danger zone</h3>
                       <p class="muted" style="margin:0">
@@ -2385,7 +2449,7 @@ async function openUser(id, reload) {
                       </p>
                       <div><button class="btn danger" id="ban-user" type="button">Delete this copy</button></div>
                   </div>`
-                : !isSelf
+                : !home && !isSelf && access.manage_users
                 ? html`
                     <div class="card danger-zone stack">
                       <h3>Danger zone</h3>
@@ -2412,7 +2476,7 @@ async function openUser(id, reload) {
   if (!home)
     import("/admin/user-customization.js")
       .then(({ mountUserCustomization }) => {
-        if (body.isConnected && !$("#drawer").hidden) mountUserCustomization(body, u, { api, toast });
+        if (body.isConnected && !$("#drawer").hidden) mountUserCustomization(body, u, { api, toast, editable: access.manage_users });
       })
       .catch(() => toast("Could not load account customization", "err"));
   $("#shadow-form", body)?.addEventListener("submit", async (e) => {
@@ -2454,7 +2518,10 @@ async function openUser(id, reload) {
   $("#user-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
-    const patch = {
+    const patch = {};
+    if (access.support) patch.verified = form.verified.checked;
+    if (access.moderate && !isSelf) patch.disabled = form.disabled.checked;
+    if (access.manage_users) Object.assign(patch, {
       username: form.username.value,
       pronouns: form.pronouns.value,
       accent_color: form.accent_default.checked
@@ -2467,13 +2534,13 @@ async function openUser(id, reload) {
           ),
       global_name: form.global_name.value,
       bio: form.bio.value,
-      verified: form.verified.checked,
       tag: form.tag.value,
-    };
+    });
+    // keep the order badges were originally given in, appending new ones
+    if (access.manage_users) {
     const registrationDate = fromLocalInput(form.registration_date.value);
     if (!registrationDate || new Date(registrationDate).getTime() !== new Date(u.registration_date ?? u.created_at).getTime())
       patch.registration_date = registrationDate;
-    // keep the order badges were originally given in, appending new ones
     for (const field of ["avatar_decoration_sku_id", "nameplate_sku_id"]) {
       if (form.elements[field].value !== (u[field] ?? ""))
         patch[field] = form.elements[field].value || null;
@@ -2493,7 +2560,7 @@ async function openUser(id, reload) {
     ];
     if (JSON.stringify(nextBadges) !== JSON.stringify(u.badge_ids ?? []))
       patch.badge_ids = nextBadges;
-    if (!isSelf) patch.disabled = form.disabled.checked;
+    }
     if (isOperator) {
       let rights = BigInt(u.rights || 0);
       for (const box of $$("[data-right]", form)) {
@@ -2505,7 +2572,7 @@ async function openUser(id, reload) {
     const saved = await act(
       $("button[type=submit]", form),
       async () => {
-        await imagePatch(form, ["avatar", "banner"], patch);
+        if (access.manage_users) await imagePatch(form, ["avatar", "banner"], patch);
         return api(`/admin/users/${u.id}`, { method: "PATCH", body: patch });
       },
       "User updated",
@@ -2532,17 +2599,16 @@ async function openUser(id, reload) {
     );
 
   const syncTag = () => {
-    const tag = $("#user-form").tag.value;
+    const tag = $("#user-form")?.tag?.value;
+    if (!tag) return;
     mount($("#tag-preview"), nameTag(tag, u.bot));
     $("#tag-hint").textContent =
       tag === "verified_bot" && !u.bot
         ? "Verified Bot only shows on bot accounts. This is a regular user, so their name will show no tag."
         : (USER_TAGS.find(([k]) => k === tag)?.[2] ?? "");
   };
-  if (!home) {
-    $("#user-form").tag.addEventListener("change", syncTag);
-    syncTag();
-  }
+  $("#user-form")?.tag?.addEventListener("change", syncTag);
+  syncTag();
 
   for (const btn of $$("[data-guild]", body))
     btn.addEventListener("click", () => openGuild(btn.dataset.guild));
@@ -2557,14 +2623,18 @@ async function openUser(id, reload) {
                     <h3>Account standing</h3>
                     <span class="badge ${tone}" style="font-size:12px;padding:3px 10px"><span class="dot"></span>${label}</span>
                 </div>
-                <label
+                ${
+                  access.moderate
+                    ? html`<label
                     >Standing<span class="hint"
                         >What the user sees on their Account Standing page. Automatic goes down one step per active violation (suspended for disabled accounts).</span
                     ><select name="standing">
                         <option value="">Automatic (${standingOf(standing.standing.automatic)[1].toLowerCase()})</option>
                         ${options(STANDINGS, standing.standing.override ?? "")}
                     </select></label
-                >
+                >`
+                    : ""
+                }
                 <div class="stack">
                     <h3>Violations (${standing.violations.length})</h3>
                     ${
@@ -2621,7 +2691,9 @@ async function openUser(id, reload) {
                                               Issued ${fmtDate(v.created_at)}${v.issued_by ? html` by ${userName(v.issued_by)}` : ""} ·
                                               ${v.permanent ? "Permanent" : html`${v.active || new Date(v.expires_at) > new Date() ? "Expires" : "Expired"} ${fmtDate(v.expires_at)}`}
                                           </div>
-                                          <div class="row" style="justify-content:flex-end">
+                                          ${
+                                            access.moderate
+                                              ? html`<div class="row" style="justify-content:flex-end">
                                               ${
                                                 v.appeal_status === 1
                                                   ? html`
@@ -2631,7 +2703,9 @@ async function openUser(id, reload) {
                                                   : ""
                                               }
                                               <button class="btn small ghost" type="button" data-remove-violation>Remove</button>
-                                          </div>
+                                          </div>`
+                                              : ""
+                                          }
                                       </div>`,
                           )
                         : html`
@@ -2639,7 +2713,9 @@ async function openUser(id, reload) {
                           `
                     }
                 </div>
-                <details class="stack">
+                ${
+                  access.moderate
+                    ? html`<details class="stack">
                     <summary class="btn small" style="width:max-content">Add violation</summary>
                     <form id="violation-form" class="stack" style="margin-top:12px">
                         <label
@@ -2670,11 +2746,13 @@ async function openUser(id, reload) {
                         <p class="muted" style="margin:0">This records the violation and its effect on their standing. To actually restrict the account, disable it above.</p>
                         <div class="form-actions"><button class="btn danger" type="submit">Add violation</button></div>
                     </form>
-                </details>
+                </details>`
+                    : ""
+                }
             `,
     );
 
-    card.querySelector("[name=standing]").addEventListener("change", async (e) => {
+    card.querySelector("[name=standing]")?.addEventListener("change", async (e) => {
       const value = e.target.value === "" ? null : Number(e.target.value);
       const saved = await act(
         e.target,
@@ -2705,7 +2783,7 @@ async function openUser(id, reload) {
             renderStanding();
           }
         });
-      $("[data-remove-violation]", row).addEventListener("click", async (e) => {
+      $("[data-remove-violation]", row)?.addEventListener("click", async (e) => {
         if (
           !confirm("Remove this violation completely? Use Overturn instead to keep a record of it.")
         )
@@ -2722,7 +2800,7 @@ async function openUser(id, reload) {
       });
     }
 
-    $("#violation-form", card).addEventListener("submit", async (e) => {
+    $("#violation-form", card)?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const form = e.currentTarget;
       const payload = {
@@ -2745,7 +2823,8 @@ async function openUser(id, reload) {
     });
   };
   if (!home) {
-    renderStanding();
+    if (standing) renderStanding();
+    renderUserStaffRoles(u);
     renderUserSecurity(u);
     renderUserSessions(u);
     renderUserInvites(u);
@@ -2778,6 +2857,59 @@ async function openUser(id, reload) {
       closeDrawer();
       reload?.();
     }
+  });
+}
+
+async function renderUserStaffRoles(u) {
+  const card = $("#staff-roles-card");
+  if (!card) return;
+  if (!state.overview.access.users) return card.remove();
+  let held, catalog;
+  try {
+    [held, catalog] = await Promise.all([
+      api(`/admin/users/${u.id}/staff-roles`),
+      state.overview.access.staff ? api("/admin/staff/roles") : null,
+    ]);
+  } catch (e) {
+    if (e.status === 401 || e.status === 499) return;
+    return mount(card, html`<h3>Staff roles</h3><p class="form-error">${e.message}</p>`);
+  }
+  if (!card.isConnected) return;
+  const heldIds = new Set(held.roles.map((role) => role.id));
+  const locked = (role) => catalog.level != null && role.position >= catalog.level;
+  mount(
+    card,
+    html`
+      <h3>Staff roles</h3>
+      ${held.roles.length ? html`<div class="badges">${held.roles.map(staffRoleBadge)}</div>` : html`<p class="muted" style="margin:0">No staff roles</p>`}
+      ${
+        catalog?.roles.length
+          ? html`<form id="staff-roles-form" class="stack">
+              <div class="checks">
+                ${catalog.roles.map(
+                  (role) => html`<label class="toggle"
+                    ><input type="checkbox" name="role" value="${role.id}" ${heldIds.has(role.id) ? raw("checked") : ""} ${locked(role) ? raw("disabled") : ""} /><span
+                      >${role.name}${locked(role) ? html`<span class="hint">At or above your own role</span>` : ""}</span
+                    ></label
+                  >`,
+                )}
+              </div>
+              <div class="form-actions"><button class="btn primary" type="submit">Save staff roles</button></div>
+            </form>`
+          : ""
+      }
+    `,
+  );
+  const form = $("#staff-roles-form", card);
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const role_ids = $$("input[name=role]:checked", form).map((box) => box.value);
+    const saved = await act(
+      $("button[type=submit]", form),
+      () => api(`/admin/users/${u.id}/staff-roles`, { method: "PUT", body: { role_ids } }),
+      "Staff roles saved",
+    );
+    if (saved) renderUserStaffRoles(u);
   });
 }
 
@@ -2825,14 +2957,16 @@ async function renderUserSecurity(u) {
                         </div>
                     </div>
                     ${
-                      mfa.mfa_enabled && !isSelf
+                      mfa.mfa_enabled && !isSelf && state.overview.access.support
                         ? html`
                             <button class="btn small" id="mfa-reset" type="button">Turn off 2FA</button>
                           `
                         : ""
                     }
                 </div>
-                <div class="list-item">
+                ${
+                  state.overview.access.support
+                    ? html`<div class="list-item">
                     <div class="grow">
                         <strong>Password</strong>
                         <div class="muted">
@@ -2846,7 +2980,9 @@ async function renderUserSecurity(u) {
                           `
                         : ""
                     }
-                </div>
+                </div>`
+                    : ""
+                }
             </div>
             <div id="reset-result" hidden></div>
         `,
@@ -2968,7 +3104,7 @@ async function renderInstanceInvites(view) {
                     <h1>Instance invites</h1>
                     <p class="muted" id="invites-intro">Codes that let people make an account. Members make their own from User Settings, and staff invites don't count against anyone.</p>
                 </div>
-                <button class="btn primary" id="new-instance-invite" type="button">Create invite</button>
+                ${state.overview.access.manage_users ? html`<button class="btn primary" id="new-instance-invite" type="button">Create invite</button>` : ""}
             </div>
             <div class="row" style="margin-bottom:12px">
                 <label class="grow list-search">Find invites<input id="invite-search" type="search" placeholder="Exact code or note text" value="${invitesState.q}" aria-controls="invite-results" /></label>
@@ -3036,7 +3172,7 @@ async function renderInstanceInvites(view) {
                       </table>
                   </div>
                   ${pager(total, invitesState)}`
-            : html`<div class="card empty">No invites match. Create one to let someone sign up.</div>`,
+            : html`<div class="card empty">${state.overview.access.manage_users ? "No invites match. Create one to let someone sign up." : "No invites match."}</div>`,
         );
         bindUserLinks(results);
         for (const row of $$("tr[data-invite]", results))
@@ -3058,7 +3194,7 @@ async function renderInstanceInvites(view) {
     invitesState.offset = 0;
     load();
   });
-  $("#new-instance-invite", view).addEventListener("click", () => openNewInstanceInvite(load));
+  $("#new-instance-invite", view)?.addEventListener("click", () => openNewInstanceInvite(load));
   await load();
 }
 
@@ -3147,7 +3283,9 @@ async function openInstanceInvite(code, reload) {
                           </div>`
                     : html`<p class="muted" style="margin:0">Nobody has joined with it yet.</p>`
                 }
-                <form id="invite-revoke" class="card stack">
+                ${
+                  state.overview.access.manage_users
+                    ? html`<form id="invite-revoke" class="card stack">
                     <h3>${invite.state === "revoked" ? "Disable accounts" : "Revoke invite"}</h3>
                     <p class="muted" style="margin:0">Revoking stops the code from working. Accounts with staff rights are never disabled.</p>
                     <label
@@ -3163,7 +3301,9 @@ async function openInstanceInvite(code, reload) {
                         </select></label
                     >
                     <div class="form-actions"><button class="btn danger" type="submit">${invite.state === "revoked" ? "Disable accounts" : "Revoke invite"}</button></div>
-                </form>
+                </form>`
+                    : ""
+                }
             </div>
         `,
   );
@@ -3178,7 +3318,7 @@ async function openInstanceInvite(code, reload) {
     }
   });
   const form = $("#invite-revoke", body);
-  form.addEventListener("submit", async (event) => {
+  form?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const disable = form.disable.value;
     const count = disable === "branch" ? invite.branch_size : disable === "joined" ? joinedCount : 0;
@@ -3244,13 +3384,17 @@ async function renderUserInvites(u) {
                 </div>
                 ${quota.eligible ? "" : html`<div class="list-item"><span class="grow muted">Can make invites from</span><span>${fmtDate(quota.eligible_at)}</span></div>`}
             </div>
-            <form id="invite-bonus" class="row" style="align-items:flex-end">
+            ${
+              state.overview.access.manage_users
+                ? html`<form id="invite-bonus" class="row" style="align-items:flex-end">
                 <label class="grow"
                     >Extra invites<span class="hint">Added to the instance default. A negative number takes some away.</span
                     ><input name="bonus_invites" type="number" inputmode="numeric" min="-1000" max="10000" step="1" value="${quota.bonus}" required
                 /></label>
                 <button class="btn" type="submit">Save extra invites</button>
-            </form>
+            </form>`
+                : ""
+            }
             <h3>Brought in ${accounts(data.branch_size)}</h3>
             ${
               data.tree.length
@@ -3258,7 +3402,7 @@ async function renderUserInvites(u) {
                 : html`<p class="muted" style="margin:0">Nobody has joined through this account.</p>`
             }
             ${
-              data.branch_size
+              data.branch_size && state.overview.access.moderate
                 ? html`<form id="invite-branch" class="stack">
                           <label class="toggle"><input type="checkbox" name="include_user" /><span>Also disable this account</span></label>
                           <div class="form-actions"><button class="btn danger" type="submit">Disable everyone they brought in</button></div>
@@ -3287,7 +3431,7 @@ async function renderUserInvites(u) {
   for (const button of $$("[data-invite-code]", card))
     button.addEventListener("click", () => openInstanceInvite(button.dataset.inviteCode));
   const bonus = $("#invite-bonus", card);
-  bonus.addEventListener("submit", async (event) => {
+  bonus?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const saved = await act(
       $("button", bonus),
@@ -3330,7 +3474,7 @@ async function renderUserSessions(u) {
             <div class="row" style="justify-content:space-between">
                 <h3>Sessions (${sessions.length})</h3>
                 ${
-                  sessions.length
+                  sessions.length && state.overview.access.support
                     ? html`
                         <button class="btn small" id="sessions-end-all" type="button">Sign out everywhere</button>
                       `
@@ -3355,7 +3499,7 @@ async function renderUserSessions(u) {
                                               · signed in ${fmtDay(s.created_at)}
                                           </div>
                                       </div>
-                                      <button class="btn small ghost" type="button" data-end>Sign out</button>
+                                      ${state.overview.access.support ? html`<button class="btn small ghost" type="button" data-end>Sign out</button>` : ""}
                                   </div>`,
                           )}
                       </div>`
@@ -3378,7 +3522,7 @@ async function renderUserSessions(u) {
     if (done !== undefined) renderUserSessions(u);
   };
   for (const row of $$("[data-session]", card))
-    $("[data-end]", row).addEventListener("click", (e) =>
+    $("[data-end]", row)?.addEventListener("click", (e) =>
       end(e.currentTarget, [row.dataset.session]),
     );
   $("#sessions-end-all", card)?.addEventListener("click", (e) => {
@@ -3770,7 +3914,7 @@ function openReport(r, reload) {
                 : ""
             }
             ${
-              r.status === "open" && r.reported_user && access.users
+              r.status === "open" && r.reported_user && access.moderate
                 ? html`<form id="report-violation" class="card stack">
                           <h3>Issue a violation</h3>
                           <label
@@ -3806,7 +3950,9 @@ function openReport(r, reload) {
                 : ""
             }
 
-            <form id="report-form" class="card stack">
+            ${
+              access.moderate
+                ? html`<form id="report-form" class="card stack">
                 <h3>${r.status === "open" ? "Close this report" : "Change the outcome"}</h3>
                 <label>Note<span class="hint">For staff only. The reporter isn't told.</span><textarea name="note" maxlength="2000">${r.resolution_note ?? ""}</textarea></label>
                 ${
@@ -3854,7 +4000,9 @@ function openReport(r, reload) {
                         : ""
                     }
                 </div>
-            </form>
+            </form>`
+                : ""
+            }
         `,
   );
   if (!body) return;
@@ -3898,7 +4046,7 @@ function openReport(r, reload) {
     }
   });
 
-  $("#report-form", body).addEventListener("submit", async (e) => {
+  $("#report-form", body)?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const status = e.submitter?.value ?? "resolved";

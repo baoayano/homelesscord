@@ -205,6 +205,8 @@ const harness = (variant = 0) => {
                     profileMetadata: (source) => source.toPublicUser(),
                     authenticatorTypes: async () => ["totp"],
                     resolveProfileCollectibles: async (_current, ids) => ids ?? [],
+                    STAFF_BADGE_ID: "1",
+                    ensureStaffBadge: async () => ({ icon: "staff" }),
                 };
             if (name === "@spacebar/util")
                 return {
@@ -214,6 +216,9 @@ const harness = (variant = 0) => {
                     handleFile: async () => "updated-banner",
                     emitEvent: async (event) => calls.push({ type: "self", event }),
                     broadcastUserUpdate: async (id) => calls.push({ type: "broadcast", id, public: user.toPublicUser() }),
+                    loadStaffRoles: async () => ({ roles: new Map(), members: new Map() }),
+                    staffBadgeRole: () => null,
+                    instanceName: () => "Meowcord",
                 };
             if (name === "@spacebar/api/util/utility/prideBadges") return badgeModule.exports;
             if (name === "@spacebar/api/util/utility/profile") return profileModule.exports;

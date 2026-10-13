@@ -1,4 +1,4 @@
-import { scheduleSavedPoll } from "@spacebar/api/util";
+import { noteRightsBypass, permitted, scheduleSavedPoll } from "@spacebar/api/util";
 import { Request, Response, Router } from "express";
 import { HTTPError } from "lambert-server/HTTPError";
 import multer from "multer";
@@ -84,7 +84,7 @@ router.patch(
                 permissions.hasThrow("MANAGE_MESSAGES");
                 body = { flags: body.flags };
                 // guild admins can only suppress embeds of other messages, no such restriction imposed to instance-wide admins
-            }
+            } else if (!permissions.has("MANAGE_MESSAGES")) await noteRightsBypass(req, "MANAGE_MESSAGES", message.author_id);
         } else rights.hasThrow("SELF_EDIT_MESSAGES");
 
         const componentErrors = componentMessageErrors({ ...message, ...body }, message.flags);
@@ -362,7 +362,8 @@ router.delete(
             if (!rights.has("MANAGE_MESSAGES")) {
                 const permission = await getPermission(req.user_id, channel.guild_id, channel_id);
                 permission.hasThrow("MANAGE_MESSAGES");
-            }
+            } else if (!(await permitted(async () => (await getPermission(req.user_id, channel.guild_id, channel_id)).has("MANAGE_MESSAGES"))))
+                await noteRightsBypass(req, "MANAGE_MESSAGES", message.author_id);
         } else rights.hasThrow("SELF_DELETE_MESSAGES");
 
         await Message.delete({ id: message_id, channel_id: channel_id });

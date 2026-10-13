@@ -133,6 +133,7 @@ export async function bulkRemoveAccounts(opts: {
     reason?: string;
     actor_id: string;
     actor_is_operator: boolean;
+    actor_rights?: bigint;
 }) {
     const ids = [...new Set(opts.user_ids)];
     const users = ids.length ? await User.find({ where: { id: In(ids) }, select: { id: true, rights: true } }) : [];
@@ -143,7 +144,8 @@ export async function bulkRemoveAccounts(opts: {
         const user = known.get(id);
         if (!user) skipped.push({ id, reason: "unknown" });
         else if (id === opts.actor_id) skipped.push({ id, reason: "self" });
-        else if (isProtectedStaffTarget({ id: opts.actor_id, rights: opts.actor_is_operator ? Rights.FLAGS.OPERATOR : 0n }, user)) skipped.push({ id, reason: "operator" });
+        else if (isProtectedStaffTarget({ id: opts.actor_id, rights: opts.actor_rights ?? (opts.actor_is_operator ? Rights.FLAGS.OPERATOR : 0n) }, user))
+            skipped.push({ id, reason: "operator" });
         else targets.push(id);
     }
 

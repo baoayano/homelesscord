@@ -10,7 +10,7 @@ const router = Router({ mergeParams: true });
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         description: "Mark an automod action as correct so it leaves the review queue and counts as a confirmed hit. Confirming a signup hold rejects the account.",
     }),

@@ -1,9 +1,9 @@
 import { Request, Response, Router } from "express";
 import { In } from "typeorm";
 import { route } from "@spacebar/api/middlewares";
-import { authenticatorTypes, profileMetadata, resolveProfileCollectibles } from "@spacebar/api/util";
+import { authenticatorTypes, ensureStaffBadge, profileMetadata, resolveProfileCollectibles, STAFF_BADGE_ID } from "@spacebar/api/util";
 import { Badge, Member, Relationship, User } from "@spacebar/database";
-import { broadcastUserUpdate, Config, DiscordApiErrors, emitEvent, FieldErrors, handleFile, UserUpdateEvent } from "@spacebar/util";
+import { broadcastUserUpdate, Config, DiscordApiErrors, emitEvent, FieldErrors, handleFile, instanceName, loadStaffRoles, staffBadgeRole, UserUpdateEvent } from "@spacebar/util";
 import { PartialConnectedAccountResponse, PrivateUserProjection, PublicUserProjection, RelationshipType, UserProfileModifySchema } from "@spacebar/schemas";
 
 import { buildBadgeCatalog, visibleProfileBadges } from "@spacebar/api/util/utility/badgeManagement";
@@ -98,6 +98,11 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
 
     const badges = [];
     if (user.badge_ids?.length) badges.push(...(await Badge.find({ where: { id: In(user.badge_ids) } })));
+    const badgeRole = user.badge_ids?.includes(STAFF_BADGE_ID) ? null : staffBadgeRole(user.id, await loadStaffRoles());
+    if (badgeRole) {
+        const staffBadge = await ensureStaffBadge();
+        badges.unshift(Badge.create({ id: `staff-role-${badgeRole.id}`, description: `${instanceName()} ${badgeRole.name}`, icon: staffBadge.icon, link: staffBadge.link }));
+    }
 
     const nitro = nitroBadge(user, Config.get().client.instanceName);
     const orderedBadges = visibleProfileBadges(buildBadgeCatalog(user, badges));

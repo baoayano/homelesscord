@@ -22,7 +22,7 @@ const serializeBan = (ban: InstanceBan) => ({
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "Instance bans on IP addresses, newest first",
         query: {
@@ -47,7 +47,7 @@ router.get(
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         requestBody: "AdminIpBanCreateSchema",
         description:

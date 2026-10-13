@@ -9,6 +9,7 @@ import {
     isOAuth2AccessToken,
     relayApiPath,
     relayLoopbackAllowed,
+    effectiveRights,
     Rights,
     UserTokenData,
 } from "@spacebar/util";
@@ -79,7 +80,7 @@ export async function handleAuthentication(req: Request) {
         req.user = user;
         req.session = session;
         req.oauth2 = oauth2;
-        req.rights = new Rights(user.rights);
+        req.rights = await effectiveRights(user.id, user.rights);
         req.isAuthenticated = true;
 
         const superProperties = req.headers["x-super-properties"];

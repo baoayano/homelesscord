@@ -9,7 +9,7 @@ const router = Router({ mergeParams: true });
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description:
             "Hits per rule over the last `days` days (30 by default), with how many a moderator undid, marked as not a match or confirmed. `false_positive_rate` is undone hits divided by reviewed hits, or null when nobody reviewed any.",

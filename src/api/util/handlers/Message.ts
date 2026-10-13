@@ -23,7 +23,7 @@ import {
     MessageFlags,
     MessageUpdateEvent,
     Permissions,
-    Rights,
+    effectiveRights,
     ROLE_MENTION,
     TraceNode,
     TraceRoot,
@@ -511,7 +511,7 @@ export async function handleMessage(
         message.author = await User.findOneOrFail({
             where: { id: opts.author_id },
         });
-        const rights = new Rights(message.author.rights);
+        const rights = await effectiveRights(message.author.id, message.author.rights);
         message.author.clean_data();
         rights.hasThrow("SEND_MESSAGES");
     }

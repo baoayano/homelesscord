@@ -68,6 +68,8 @@ const harness = ({ settings = {}, bonus = 0, used = 0, invites = [], users = [] 
         "@spacebar/util": {
             Config: { get: () => ({ register: { instanceInvites: { perUser: 3, minAccountAgeDays: 7, maxUsesPerInvite: 3, maxAgeDays: 30, ...settings } } }) },
             emitEvent: async (event) => calls.events.push(event),
+            loadStaffRoles: async () => ({ roles: new Map(), members: new Map() }),
+            rolesOf: () => [],
             Rights: class {
                 constructor(bits) {
                     this.bits = bits;

@@ -68,7 +68,7 @@ export async function serializeIncidents(incidents: RaidIncident[], sample = 5) 
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "Live raid and spam incidents across servers, recent ones newest first, and the accounts automod acted on most in the last `days` days",
         query: {

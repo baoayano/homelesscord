@@ -31,7 +31,7 @@ const describe = (match: AutomodMatch | null) => {
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         requestBody: "AdminAutomodTestSchema",
         description:

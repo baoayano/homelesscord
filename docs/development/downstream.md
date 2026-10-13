@@ -63,6 +63,14 @@ The native modal hit-testing fixture loads both the container stylesheet and the
 
 Verification uses a fresh PostgreSQL database on port 3002. The API parity probe passes 151 checks with 1 skip, the federation API probe passes 106 checks, the federation voice and video probe passes 33 checks, and both local and cross-instance encryption browser suites pass. The SFU Go tests, the registry's 18 unit tests and the required client patches also pass against build 633029. The test environment uses standalone Chromium and WebKit with local shared libraries.
 
+## Update through adae985
+
+The 2026-10-13 update integrates 122 upstream commits through `adae985`. It adds spam and raid handling, account origin filters, read-only remote administration, staff roles and the staff audit log, durable federation delivery, encrypted mentions, DAVE and streams across instances, bounded public requests and CDN cache eviction. The merge preserves free Nitro dates, all nine pinned Nitro images, tooltip clicks, native badge progress and permanent Pride. Generated staff role badges use the Staff management ID 22 so ordering and hiding remain consistent when a role changes. Nitro registration date editing requires MANAGE_USERS and remains unavailable for remote accounts.
+
+Verification on a fresh 3002 database passes 1453 unit tests with 31 optional skips, 151 API parity checks with 1 provider skip, 166 federation API checks, 75 staff role checks, 41 federation attack checks, 12 AutoMod checks and 8 raid checks. The server build, lint, encryption build, SFU Go tests, 18 registry unit tests and required client patches pass. Both local and cross-instance encryption browser suites pass. A browser check saves a Nitro date with its local timezone and milliseconds while preserving account creation. A generated Moderator badge agrees between profile and directory and precedes Nitro by default.
+
+Local voice sends and receives audio in both directions. The extended federation voice probe passes 125 of 126 checks; Bob receives no decoded samples in the final group call after the preceding guild, stream, restart and DM cases, including a repeat with a 20 second media wait. The registry worker integration harness reaches Workerd's Ready log but local HTTP requests stall when Wrangler runs under Bun in this environment. Its D1 migrations and unit tests pass. These limitations do not restart or deploy the owner's 3001 instance.
+
 ## Downstream features
 
 Place client behavior in a dedicated Equicord plugin and follow [client-patches.md](client-patches.md). Server features use cohesive modules with small changes at their integration points. There is no general server plugin loader. Preserve required encryption and Pride behavior and keep paid capabilities free.

@@ -17,7 +17,7 @@ export async function findIncident(id: string) {
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "One incident with every account in it, how often automod acted on each and the actions staff took",
     }),

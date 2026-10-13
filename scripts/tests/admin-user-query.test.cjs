@@ -47,7 +47,7 @@ function harness(options = {}) {
                 return {
                     Router: () => ({
                         get: (_path, options, fn) => {
-                            assert.equal(options.right, "MANAGE_USERS");
+                            assert.equal(options.right, "VIEW_USERS");
                             handler = fn;
                         },
                     }),

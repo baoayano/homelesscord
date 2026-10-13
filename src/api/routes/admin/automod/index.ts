@@ -76,7 +76,7 @@ const countSince = async (since: Date) => {
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "Instance automod settings, action counts for the last day and week, and how many accounts wait for approval",
     }),

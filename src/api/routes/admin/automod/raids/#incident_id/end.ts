@@ -10,7 +10,7 @@ const router = Router({ mergeParams: true });
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         description: "Mark an incident as over. New activity of the same kind in the same server starts a new incident.",
     }),

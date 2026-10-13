@@ -4,14 +4,6 @@ const assert = require("node:assert/strict");
 const { StubError, loadModule, loadRoutes, response } = require("./helpers/route-harness.cjs");
 
 const FLAGS = { OPERATOR: 1n, MANAGE_GUILDS: 4n, MANAGE_MESSAGES: 8n, MANAGE_USERS: 128n, BYPASS_RATE_LIMITS: 512n, SEND_MESSAGES: 1n << 25n };
-class Rights {
-    constructor(bits) {
-        this.bitfield = BigInt(bits);
-    }
-    has(name) {
-        return (this.bitfield & FLAGS.OPERATOR) !== 0n || (this.bitfield & (FLAGS[name] ?? 0n)) !== 0n;
-    }
-}
 
 test("dm history for a user without a shared dm returns nothing instead of every message", async () => {
     const queries = [];
@@ -109,12 +101,18 @@ test("guild channel list requires membership", async () => {
 });
 
 test("moderators can't manage other staff accounts, operators can", () => {
-    const { isProtectedStaffTarget } = loadModule("src/api/util/utility/adminTargets.ts", { "@spacebar/util": { Rights } });
+    const { util } = require("./helpers/staff-roles.cjs").loadStaffModules();
+    const { isProtectedStaffTarget } = loadModule("src/api/util/utility/adminTargets.ts", {
+        "@spacebar/util": util,
+        "@spacebar/database": {},
+        "lambert-server/HTTPError": { HTTPError: StubError },
+    });
     const moderator = { id: "mod", rights: FLAGS.MANAGE_USERS };
     assert.equal(isProtectedStaffTarget(moderator, { id: "guilds", rights: FLAGS.MANAGE_GUILDS }), true);
     assert.equal(isProtectedStaffTarget(moderator, { id: "peer", rights: FLAGS.MANAGE_USERS }), true);
     assert.equal(isProtectedStaffTarget(moderator, { id: "ratelimit", rights: FLAGS.BYPASS_RATE_LIMITS }), true);
     assert.equal(isProtectedStaffTarget(moderator, { id: "member", rights: FLAGS.SEND_MESSAGES }), false);
+    assert.equal(isProtectedStaffTarget(moderator, { id: "default", rights: 875069521787904n }), false);
     assert.equal(isProtectedStaffTarget(moderator, { id: "mod", rights: FLAGS.MANAGE_USERS }), false);
     assert.equal(isProtectedStaffTarget({ id: "op", rights: FLAGS.OPERATOR }, { id: "mod", rights: FLAGS.MANAGE_USERS }), false);
 });

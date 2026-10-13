@@ -64,7 +64,7 @@ test("profile response keeps free features and custom badges alongside one evolv
         },
         typeorm: { In: (x) => x },
         "@spacebar/api/middlewares": { route: (x) => x },
-        "@spacebar/api/util": { profileMetadata: () => ({ theme_colors: [123, 456] }) },
+        "@spacebar/api/util": { profileMetadata: () => ({ theme_colors: [123, 456] }), STAFF_BADGE_ID: "1", ensureStaffBadge: async () => ({ icon: "staff" }) },
         "@spacebar/database": {
             User: { createQueryBuilder: () => query },
             Member: { find: async () => [] },
@@ -76,7 +76,12 @@ test("profile response keeps free features and custom badges alongside one evolv
             },
             Relationship: {},
         },
-        "@spacebar/util": { Config: { get: () => ({ client: { instanceName: "Test Instance" } }) } },
+        "@spacebar/util": {
+            Config: { get: () => ({ client: { instanceName: "Test Instance" } }) },
+            loadStaffRoles: async () => ({ roles: new Map(), members: new Map() }),
+            staffBadgeRole: () => null,
+            instanceName: () => "Test Instance",
+        },
         "@spacebar/schemas": {},
         "@spacebar/api/util/utility/prideBadges": {
             prideBadges: () => [{ id: "8000000000000000001", icon: "pride_rainbow" }],

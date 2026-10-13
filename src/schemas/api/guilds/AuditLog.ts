@@ -25,6 +25,12 @@ export interface AuditLogEntry {
 export enum AuditLogEvents {
     ADMIN_USER_CUSTOMIZATION = 2000,
     ADMIN_OFFICIAL_MESSAGE_SEND = 2001,
+    ADMIN_STAFF_ACTION = 2002,
+    ADMIN_STAFF_ROLE_CREATE = 2003,
+    ADMIN_STAFF_ROLE_UPDATE = 2004,
+    ADMIN_STAFF_ROLE_DELETE = 2005,
+    ADMIN_STAFF_ROLE_ASSIGN = 2006,
+    ADMIN_STAFF_ROLE_REMOVE = 2007,
     // guild level
     GUILD_UPDATE = 1,
     // channels

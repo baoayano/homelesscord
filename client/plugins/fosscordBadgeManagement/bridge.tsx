@@ -39,6 +39,7 @@ export function prepareCatalog(badges: CatalogBadge[]) {
 export function currentPreferences() {
     const catalog = DirectoryStore.getBadges(UserStore.getCurrentUser()?.id);
     if (!catalog.length) return null;
+    registry.remember(catalog);
     return {
         displayOrder: catalog.filter((badge) => badge.owned && !badge.hidden && badge.reorderable).map((badge) => badge.badge_id),
         hiddenBadges: new Set(catalog.filter((badge) => badge.owned && badge.hidden && badge.hideable).map((badge) => badge.badge_id)),

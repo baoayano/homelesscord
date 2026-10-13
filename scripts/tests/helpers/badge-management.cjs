@@ -9,6 +9,8 @@ exports.managementUtilities = (options = {}) => {
         Config: { get: () => ({ client: { instanceName: "Test Instance" }, cdn: { endpointPublic: "http://localhost:3003/" } }) },
         FieldErrors: (fields) => Object.assign(new Error(Object.keys(fields).join(",")), { fields }),
         getApexExperiments: (id) => ({ assignments: { 1: { [id]: { assignments: [[3093904580, options.variant ?? 0]] } } } }),
+        loadStaffRoles: async () => ({ roles: new Map(), members: new Map() }),
+        staffBadgeRole: () => null,
     };
     const load = (file) => {
         if (cache.has(file)) return cache.get(file);

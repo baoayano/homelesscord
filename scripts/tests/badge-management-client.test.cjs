@@ -109,6 +109,17 @@ test("management mappings distinguish database Staff from native Nitro and clear
     assert.equal(registry.legacyId("pride:rainbow"), undefined);
 });
 
+test("generated staff role IDs map to Staff and restore the catalog's profile ID", () => {
+    const registry = new model.BadgeRegistry();
+    assert.equal(registry.managementId("staff-role-42"), 22);
+    registry.remember([{ badge_id: 22, legacy_id: "staff-role-42" }]);
+    assert.equal(registry.legacyId(22), "staff-role-42");
+    registry.remember([{ badge_id: 22, legacy_id: "staff-role-43" }]);
+    assert.equal(registry.legacyId(22), "staff-role-43");
+    registry.clear();
+    assert.equal(registry.legacyId(22), "1");
+});
+
 test("pointer and keyboard reorder targets work across rows, edges and reversed moves", () => {
     const rects = [
         { id: "a", index: 0, left: 0, right: 40, top: 0, bottom: 40 },

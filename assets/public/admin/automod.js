@@ -244,6 +244,7 @@ const automodActionBadge = (entry) => {
 async function renderAutomod(view) {
   const overview = await api("/admin/automod");
   const s = overview.settings;
+  const access = state.overview.access;
   const countChips = (counts) =>
     AUTOMOD_RULES.filter(([key]) => counts.by_rule[key]).map(
       ([key, label]) => html`<span class="badge">${label}: ${fmtNumber(counts.by_rule[key])}</span>`,
@@ -407,11 +408,15 @@ async function renderAutomod(view) {
           characters, look like keyboard mashing or match two or more other signups from the last 7 days.
         </p>
         <div class="row" id="automod-join-tabs"></div>
-        <div class="row automod-bulk">
-          <button class="btn small primary" type="button" data-join-action="approve" disabled>Approve selected</button>
-          <button class="btn small danger" type="button" data-join-action="reject" disabled>Reject selected</button>
-          <span class="muted" id="automod-join-selected" aria-live="polite"></span>
-        </div>
+        ${
+          access.moderate
+            ? html`<div class="row automod-bulk">
+                <button class="btn small primary" type="button" data-join-action="approve" disabled>Approve selected</button>
+                <button class="btn small danger" type="button" data-join-action="reject" disabled>Reject selected</button>
+                <span class="muted" id="automod-join-selected" aria-live="polite"></span>
+              </div>`
+            : ""
+        }
         <div id="automod-join-results"><div class="spinner">Loading…</div></div>
       </section>
 
@@ -544,7 +549,7 @@ async function renderAutomod(view) {
         </div>
         <div class="form-actions"><button class="btn primary" type="submit">Save quarantine</button></div>
         <h3>Accounts in quarantine</h3>
-        <div class="row automod-bulk">
+        <div class="row automod-bulk" ${access.moderate ? "" : raw("hidden")}>
           <button class="btn small" type="button" id="automod-quarantine-clear" disabled>Clear selected early</button>
           <span class="muted" id="automod-quarantine-selected" aria-live="polite"></span>
         </div>
@@ -653,7 +658,7 @@ async function renderAutomod(view) {
         <p class="muted">Scans existing usernames and display names against the slur rule, the word lists and the blocked name words, 10,000 accounts at a time.</p>
         <div class="row automod-bulk">
           <button class="btn small" type="button" id="automod-name-scan-run">Scan accounts</button>
-          <button class="btn small danger" type="button" id="automod-name-disable" disabled>Disable selected</button>
+          <button class="btn small danger" type="button" id="automod-name-disable" disabled ${access.moderate ? "" : raw("hidden")}>Disable selected</button>
           <span class="muted" id="automod-name-status" aria-live="polite"></span>
         </div>
         <div id="automod-name-results"></div>
@@ -729,12 +734,16 @@ async function renderAutomod(view) {
           </label>
         </div>
         <div class="form-actions"><button class="btn primary" type="submit">Save address limits</button></div>
-        <h3>Who is on an address</h3>
-        <div class="row">
-          <label class="grow">Address<input id="automod-ip-lookup" maxlength="64" placeholder="203.0.113.7 or 2001:db8::1" /></label>
-          <button class="btn" type="button" id="automod-ip-lookup-run">Look up</button>
-        </div>
-        <div id="automod-ip-lookup-result" role="status" aria-live="polite"></div>
+        ${
+          access.users
+            ? html`<h3>Who is on an address</h3>
+                <div class="row">
+                  <label class="grow">Address<input id="automod-ip-lookup" maxlength="64" placeholder="203.0.113.7 or 2001:db8::1" /></label>
+                  <button class="btn" type="button" id="automod-ip-lookup-run">Look up</button>
+                </div>
+                <div id="automod-ip-lookup-result" role="status" aria-live="polite"></div>`
+            : ""
+        }
       </form>
 
       <form class="card" id="automod-login" aria-labelledby="automod-login-title">
@@ -899,12 +908,12 @@ async function renderAutomod(view) {
     ${part.users.length
       ? html`<div class="badges">${part.users.map((u) => html`<button class="btn small ghost" type="button" data-open="${u.id}">${u.username ? `@${u.username}` : u.id}</button>`)}</div>`
       : ""}`;
-  $("#automod-ip-lookup", view).addEventListener("keydown", (event) => {
+  $("#automod-ip-lookup", view)?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
     $("#automod-ip-lookup-run", view).click();
   });
-  $("#automod-ip-lookup-run", view).addEventListener("click", async (event) => {
+  $("#automod-ip-lookup-run", view)?.addEventListener("click", async (event) => {
     const ip = $("#automod-ip-lookup", view).value.trim();
     const target = $("#automod-ip-lookup-result", view);
     if (!ip) {
@@ -944,7 +953,7 @@ async function renderAutomod(view) {
             <table>
               <thead>
                 <tr>
-                  <th><span class="visually-hidden">Select</span></th>
+                  ${access.moderate ? html`<th><span class="visually-hidden">Select</span></th>` : ""}
                   <th>Account</th>
                   <th class="hide-sm">Created</th>
                   <th>Ends</th>
@@ -953,7 +962,7 @@ async function renderAutomod(view) {
               <tbody>
                 ${users.map(
                   (u) => html`<tr>
-                    <td><input type="checkbox" data-quarantine="${u.id}" aria-label="Select ${userName(u)}" /></td>
+                    ${access.moderate ? html`<td><input type="checkbox" data-quarantine="${u.id}" aria-label="Select ${userName(u)}" /></td>` : ""}
                     <td><button class="link-button ident" type="button" data-open="${u.id}">${avatar(u)}<span><strong>${userName(u)}</strong><span class="muted">${userTag(u)}</span></span></button></td>
                     <td class="hide-sm">${fmtDate(u.created_at)}</td>
                     <td>${fmtDate(u.ends_at)}</td>
@@ -1009,10 +1018,14 @@ async function renderAutomod(view) {
                       <td>${automodActionBadge(entry)}</td>
                       <td class="hide-sm automod-excerpt">${entry.term ? html`<span>${entry.term}</span>` : ""}${entry.excerpt ? html`<span class="muted automod-sub">${entry.excerpt}</span>` : ""}</td>
                       <td>
-                        <div class="row automod-row-actions">
-                          <button class="btn small primary" type="button" data-review="confirm">Confirm</button>
-                          <button class="btn small" type="button" data-review="undo">Undo</button>
-                        </div>
+                        ${
+                          access.moderate
+                            ? html`<div class="row automod-row-actions">
+                                <button class="btn small primary" type="button" data-review="confirm">Confirm</button>
+                                <button class="btn small" type="button" data-review="undo">Undo</button>
+                              </div>`
+                            : ""
+                        }
                       </td>
                     </tr>`,
                   )}
@@ -1126,7 +1139,7 @@ async function renderAutomod(view) {
           ><textarea data-field="terms" rows="4">${list.terms.join("\n")}</textarea>
         </label>
       </div>
-      <div class="row"><button class="btn small ghost" type="button" data-remove>Remove this list</button></div>
+      ${access.manage_users ? html`<div class="row"><button class="btn small ghost" type="button" data-remove>Remove this list</button></div>` : ""}
     </fieldset>
   `;
   const readLists = () =>
@@ -1148,7 +1161,7 @@ async function renderAutomod(view) {
       $("[data-field=action]", fieldset).addEventListener("change", (event) => {
         $("[data-suspend]", fieldset).hidden = event.target.value !== "suspend";
       });
-      $("[data-remove]", fieldset).addEventListener("click", () => {
+      $("[data-remove]", fieldset)?.addEventListener("click", () => {
         lists = readLists();
         lists.splice(Number(fieldset.dataset.index), 1);
         $("#automod-lists").dataset.dirty = "true";
@@ -1157,6 +1170,12 @@ async function renderAutomod(view) {
     }
   };
   drawLists();
+  if (!access.manage_users)
+    for (const form of $$("form.card", view)) {
+      for (const button of $$(".form-actions button, #automod-list-add", form)) button.hidden = true;
+      for (const control of $$("input, select, textarea", form))
+        if (!control.closest("#automod-quarantine-results") && control.id !== "automod-ip-lookup") control.disabled = true;
+    }
   $("#automod-list-add", view).addEventListener("click", () => {
     lists = [...readLists(), { name: "", action: "delete", suspendDays: 7, terms: [] }];
     drawLists();
@@ -1312,7 +1331,7 @@ async function renderAutomod(view) {
                             <td>
                               <div class="row automod-row-actions">
                                 ${entry.user_id ? html`<button class="btn small" type="button" data-open="${entry.user_id}">Open user</button>` : ""}
-                                ${entry.reversed
+                                ${entry.reversed || !access.moderate
                                   ? ""
                                   : entry.confirmed_at
                                     ? ""
@@ -1372,7 +1391,8 @@ async function renderAutomod(view) {
   const syncJoinSelection = () => {
     const count = $$("input[data-select]:checked", joinResults).length;
     for (const button of joinButtons) button.disabled = count === 0;
-    $("#automod-join-selected", view).textContent = count ? `${fmtNumber(count)} selected` : "";
+    const selected = $("#automod-join-selected", view);
+    if (selected) selected.textContent = count ? `${fmtNumber(count)} selected` : "";
   };
   const loadJoin = async () => {
     const st = automodState.join;
@@ -1399,7 +1419,7 @@ async function renderAutomod(view) {
               <table>
                 <thead>
                   <tr>
-                    <th><input type="checkbox" data-select-all aria-label="Select every account on this page" /></th>
+                    ${access.moderate ? html`<th><input type="checkbox" data-select-all aria-label="Select every account on this page" /></th>` : ""}
                     <th>Account</th>
                     <th>Why they want to join</th>
                     <th class="hide-sm">Signed up</th>
@@ -1410,7 +1430,7 @@ async function renderAutomod(view) {
                   ${users.map(
                     (u) => html`
                       <tr data-id="${u.id}">
-                        <td><input type="checkbox" data-select="${u.id}" aria-label="Select ${userName(u)}" /></td>
+                        ${access.moderate ? html`<td><input type="checkbox" data-select="${u.id}" aria-label="Select ${userName(u)}" /></td>` : ""}
                         <td><button class="link-button ident" type="button" data-open="${u.id}">${avatar(u)}<span><strong>${userName(u)}</strong><span class="muted">${userTag(u)}</span></span></button></td>
                         <td class="automod-reason">
                           ${u.join_reason ? html`<p>${u.join_reason}</p>` : html`<span class="muted">No reason given</span>`}
@@ -1470,7 +1490,7 @@ async function renderAutomod(view) {
             <table>
               <thead>
                 <tr>
-                  <th><span class="visually-hidden">Select</span></th>
+                  ${access.moderate ? html`<th><span class="visually-hidden">Select</span></th>` : ""}
                   <th>Account</th>
                   <th>Matched</th>
                   <th class="hide-sm">Joined</th>
@@ -1479,7 +1499,7 @@ async function renderAutomod(view) {
               <tbody>
                 ${st.users.map(
                   (u) => html`<tr>
-                    <td><input type="checkbox" data-name-select="${u.id}" ${u.disabled ? raw("disabled") : ""} aria-label="Select ${u.username}" /></td>
+                    ${access.moderate ? html`<td><input type="checkbox" data-name-select="${u.id}" ${u.disabled ? raw("disabled") : ""} aria-label="Select ${u.username}" /></td>` : ""}
                     <td><button class="link-button ident" type="button" data-open="${u.id}">${avatar(u)}<span><strong>${userName(u)}</strong><span class="muted">${userTag(u)}</span></span></button>${u.disabled ? html` <span class="badge danger">Disabled</span>` : ""}</td>
                     <td>${u.field === "username" ? "Username" : "Display name"} · ${u.rule === "word" && u.list ? u.list.name : ruleLabel(u.rule)}</td>
                     <td class="hide-sm">${fmtDay(u.created_at)}</td>
@@ -1679,7 +1699,9 @@ async function renderAutomod(view) {
                   </ul>
                 </div>`
               : ""}
-            <div>
+            ${
+              access.moderate
+                ? html`<div>
               <h3>Act on the accounts</h3>
               <p class="muted">
                 Acts on the accounts you select, or on everyone in the incident when none are selected. Your own account
@@ -1688,17 +1710,19 @@ async function renderAutomod(view) {
               </p>
               <label>Reason<span class="hint">Optional. Shown in the automod log and on suspensions.</span><input id="incident-reason" maxlength="512" placeholder="Raid on ${incident.guild?.name ?? "the instance"}" /></label>
               <div class="row automod-bulk">
-                ${INCIDENT_ACTIONS.map(([key, label]) => html`<button class="btn small danger" type="button" data-incident-action="${key}">${label}</button>`)}
+                ${INCIDENT_ACTIONS.filter(([key]) => key !== "delete_messages" || access.messages).map(([key, label]) => html`<button class="btn small danger" type="button" data-incident-action="${key}">${label}</button>`)}
                 ${incident.ended_at ? "" : html`<button class="btn small ghost" type="button" id="incident-end">End incident</button>`}
               </div>
               <p class="muted" id="incident-target" role="status" aria-live="polite"></p>
-            </div>
+            </div>`
+                : ""
+            }
             ${users.length
               ? html`<div class="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th><input type="checkbox" data-incident-all aria-label="Select every account in this incident" /></th>
+                        ${access.moderate ? html`<th><input type="checkbox" data-incident-all aria-label="Select every account in this incident" /></th>` : ""}
                         <th>Account</th>
                         <th class="hide-sm">Created</th>
                         <th>Caught</th>
@@ -1708,7 +1732,7 @@ async function renderAutomod(view) {
                     <tbody>
                       ${users.map(
                         (entry) => html`<tr>
-                          <td><input type="checkbox" data-incident-user="${entry.id}" aria-label="Select ${entry.user ? userName(entry.user) : entry.id}" /></td>
+                          ${access.moderate ? html`<td><input type="checkbox" data-incident-user="${entry.id}" aria-label="Select ${entry.user ? userName(entry.user) : entry.id}" /></td>` : ""}
                           <td>
                             ${entry.user
                               ? html`<button class="link-button ident" type="button" data-open="${entry.id}">${avatar(entry.user)}<span><strong>${userName(entry.user)}</strong><span class="muted">${userTag(entry.user)}</span></span></button>`
@@ -1730,7 +1754,8 @@ async function renderAutomod(view) {
       const selected = () => $$("input[data-incident-user]:checked", body).map((box) => box.dataset.incidentUser);
       const syncTarget = () => {
         const count = selected().length;
-        $("#incident-target", body).textContent = count
+        const target = $("#incident-target", body);
+        if (target) target.textContent = count
           ? `Buttons act on the ${plural(count, "selected account")}.`
           : `Buttons act on all ${plural(users.length, "account")}.`;
       };

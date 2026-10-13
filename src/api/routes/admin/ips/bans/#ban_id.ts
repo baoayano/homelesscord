@@ -10,7 +10,7 @@ const router = Router({ mergeParams: true });
 router.delete(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "MODERATE_USERS",
         spacebarOnly: true,
         description: "Lift an IP ban, together with the bans it propagated to accounts that used the address",
         responses: { 204: {} },

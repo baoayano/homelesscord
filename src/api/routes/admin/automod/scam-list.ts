@@ -8,7 +8,7 @@ const router = Router({ mergeParams: true });
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_MODERATION",
         spacebarOnly: true,
         description: "The remote scam domain list: its address, how many domains it holds, when it was last fetched and the last error",
     }),

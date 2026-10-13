@@ -10,7 +10,7 @@ const router = Router({ mergeParams: true });
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_USERS",
         spacebarOnly: true,
         description: "Which two-factor methods a user has set up",
     }),
@@ -35,7 +35,7 @@ router.get(
 router.delete(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "SUPPORT_USERS",
         spacebarOnly: true,
         description: "Turn off two-factor for a user: removes their authenticator app, security keys, SMS and backup codes",
         responses: { 204: {} },

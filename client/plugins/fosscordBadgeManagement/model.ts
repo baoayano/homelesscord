@@ -68,13 +68,13 @@ export class BadgeRegistry {
     }
 
     managementId(id: string): BadgeId | undefined {
-        if (id === "1") return 22;
+        if (id === "1" || /^staff-role-\d{1,20}$/.test(id)) return 22;
         if (/^nitro_account_tenure_(?:0|1|3|6|12|24|36|60|72)_month$/.test(id)) return 1;
         return this.forward.get(id) ?? (/^\d+$/.test(id) ? `custom:${id}` : undefined);
     }
 
     legacyId(id: BadgeId): string | undefined {
-        if (id === 22) return "1";
+        if (id === 22) return this.reverse.get(id) ?? "1";
         if (typeof id === "string" && id.startsWith("custom:")) return id.slice(7);
         return this.reverse.get(id);
     }

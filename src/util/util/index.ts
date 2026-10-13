@@ -23,6 +23,7 @@ export * from "./ipc/RabbitMQ";
 export * from "./Regex";
 export * from "./RequiredAction";
 export * from "./Rights";
+export * from "./StaffRoles";
 export * from "./Snowflake";
 export * from "./Token";
 export * from "./TraverseDirectory";

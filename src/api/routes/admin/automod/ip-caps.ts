@@ -13,7 +13,7 @@ const router = Router({ mergeParams: true });
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_USERS",
         spacebarOnly: true,
         description:
             "Who counts toward the accounts per address caps for one address. IPv4 addresses count on their own and IPv6 addresses count per /64. Operators and deleted or disabled accounts don't count.",

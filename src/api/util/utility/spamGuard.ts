@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { In, Like, MoreThan } from "typeorm";
 import { CloudAttachment, FederationBlock, Guild, Member, Message, RateLimit, User } from "@spacebar/database";
-import { ApiError, Config, DiscordApiErrors, emitEvent, MessageDeleteBulkEvent, Permissions, Rights, Snowflake } from "@spacebar/util";
+import { ApiError, Config, DiscordApiErrors, effectiveRightsSync, emitEvent, loadStaffRoles, MessageDeleteBulkEvent, Permissions, Rights, Snowflake } from "@spacebar/util";
 import { AutomodSpamAction } from "@spacebar/util/config/types/AutomodConfiguration";
 import { ContactKind, escalateSpamAction, SpamDetector, SpamHit, SpamMessageRef, strongerSpamAction } from "@spacebar/util/util/SpamDetector";
 import { UserFlags } from "@spacebar/schemas";
@@ -255,12 +255,15 @@ async function enforceSpamHits(hits: SpamHit[], check: SpamCheck) {
     if (!fresh.length) return;
     const config = Config.get().automod.spam;
     const ids = [...new Set(fresh.flatMap((hit) => hit.users))];
+    const snap = await loadStaffRoles();
     const accounts = await User.find({
         where: { id: In(ids) },
         select: { id: true, username: true, federated_instance: true, rights: true, system: true, flags: true },
     });
     const targets = new Map(
-        accounts.filter((user) => user.id === check.user_id || (!isSystemUser(user) && !new Rights(user.rights).has("BYPASS_RATE_LIMITS"))).map((user) => [user.id, user]),
+        accounts
+            .filter((user) => user.id === check.user_id || (!isSystemUser(user) && !effectiveRightsSync(user.id, user.rights, snap).has("BYPASS_RATE_LIMITS")))
+            .map((user) => [user.id, user]),
     );
 
     const planned = new Map<string, AutomodSpamAction>();

@@ -41,7 +41,7 @@ import {
     checkToken,
     Config,
     requiredAction,
-    Rights,
+    effectiveRights,
     CurrentTokenFormatVersion,
     emitEvent,
     EVENTEnum,
@@ -124,7 +124,7 @@ export async function onIdentify(this: WebSocket, data: Payload) {
     }
 
     const { enabled, identify: identifyLimit } = Config.get().limits.rate;
-    if (enabled && !new Rights(user.rights).has("BYPASS_RATE_LIMITS")) {
+    if (enabled && !(await effectiveRights(user.id, user.rights)).has("BYPASS_RATE_LIMITS")) {
         const max = user.bot ? (identifyLimit.bot ?? identifyLimit.count) : identifyLimit.count;
         const limit = await RateLimit.hit(`${user.id}:identify`, user.id, max, identifyLimit.window);
         if (limit.hits > max) {

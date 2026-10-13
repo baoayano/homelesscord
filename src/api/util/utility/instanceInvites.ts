@@ -4,7 +4,7 @@ import { HTTPError } from "lambert-server/HTTPError";
 import { In, IsNull } from "typeorm";
 import { InstanceInvite, InstanceInviteUser, Session, User } from "@spacebar/database";
 import { lockTransaction, sqlNow, sqlReturning } from "@spacebar/database/Sql";
-import { Config, emitEvent, Event, Rights } from "@spacebar/util";
+import { Config, emitEvent, Event, loadStaffRoles, Rights, rolesOf } from "@spacebar/util";
 import { staffDisableColumns } from "./staffDisable";
 
 export const INVITE_CODE = /^[A-Za-z0-9]{6,32}$/;
@@ -209,7 +209,8 @@ export const joinedWithInvite = async (code: string) =>
 export async function disableAccounts(ids: string[], actorId: string) {
     const candidates = [...new Set(ids)].filter((id) => id !== actorId);
     const users = (await Promise.all(chunks(candidates).map((part) => User.find({ where: { id: In(part) }, select: { id: true, rights: true, disabled: true } })))).flat();
-    const protectedIds = users.filter((user) => new Rights(BigInt(user.rights ?? 0)).any([...ADMIN_RIGHTS])).map((user) => user.id);
+    const snap = await loadStaffRoles();
+    const protectedIds = users.filter((user) => new Rights(BigInt(user.rights ?? 0)).any([...ADMIN_RIGHTS]) || rolesOf(user.id, snap).length > 0).map((user) => user.id);
     const targets = users.filter((user) => !protectedIds.includes(user.id)).map((user) => user.id);
     const now = new Date();
     for (const part of chunks(targets)) {

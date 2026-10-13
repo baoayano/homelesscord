@@ -162,7 +162,12 @@ router.post(
                     attachment_count: files.length,
                     recipient_count: 0,
                 });
-                const filter = body.audience === "staff" ? `AND (u.rights & CAST($2 AS bigint)) != 0` : body.audience === "selected" ? `AND ${sqlArrayIncludes("u.id", "$2")}` : "";
+                const filter =
+                    body.audience === "staff"
+                        ? `AND ((u.rights & CAST($2 AS bigint)) != 0 OR u.id IN (SELECT m.user_id FROM staff_role_members m))`
+                        : body.audience === "selected"
+                          ? `AND ${sqlArrayIncludes("u.id", "$2")}`
+                          : "";
                 const args = body.audience === "everyone" ? [id] : [id, body.audience === "staff" ? STAFF_RIGHTS_MASK : selected];
                 const queued = await manager.query(
                     `INSERT INTO announcement_deliveries (announcement_id,user_id)

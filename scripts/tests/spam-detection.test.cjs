@@ -389,6 +389,8 @@ function spamGuardFixture(users, spamConfig = new AutomodSpamConfiguration()) {
             DiscordApiErrors: { OPENING_DIRECT_MESSAGES_TOO_FAST: { code: 40003, message: "Opening direct messages too fast" } },
             emitEvent: async (event) => calls.events.push(event),
             Rights,
+            loadStaffRoles: async () => ({ roles: new Map(), members: new Map() }),
+            effectiveRightsSync: (_id, rights) => new Rights(rights),
             Snowflake: {
                 generate: () => "12345",
                 deconstruct: (id) => ({ timestamp: Number((BigInt(id) >> 22n) + EPOCH) }),

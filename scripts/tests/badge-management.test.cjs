@@ -18,6 +18,28 @@ const fixture = () => ({
 const ids = (catalog) => Array.from(catalog, (badge) => String(badge.badge_id));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+test("staff role badges keep the Staff family, visibility preferences and saved order", () => {
+    const api = managementUtilities();
+    const { user, assigned } = fixture();
+    user.badge_ids = ["123", "456"];
+    const role = { id: "staff-role-42", description: "Test Instance Moderator", icon: "staff" };
+    assigned.unshift(role);
+    const catalog = api.buildBadgeCatalog(user, assigned);
+    assert.deepEqual(ids(catalog).slice(0, 2), ["22", "1"]);
+    assert.equal(catalog[0].legacy_id, role.id);
+    assert.equal(catalog[0].name, role.description);
+    assert.equal(catalog[0].hideable, true);
+    user.badge_settings = { display_order: ["1", "22"], hidden_badges: ["22"] };
+    role.id = "staff-role-43";
+    const changed = api.buildBadgeCatalog(user, assigned);
+    assert.deepEqual(ids(changed).slice(0, 2), ["1", "22"]);
+    assert.equal(changed[1].hidden, true);
+    assert.equal(changed[1].legacy_id, "staff-role-43");
+    assert.ok(api.visibleProfileBadges(changed).every((badge) => !badge.id.startsWith("staff-role-")));
+    user.badge_ids.push("1");
+    assert.equal(api.buildBadgeCatalog(user, assigned).filter((badge) => badge.badge_id === 22).length, 1);
+});
+
 test("catalog uses stable native Staff/Nitro IDs and collision-free custom and Pride IDs", () => {
     const api = managementUtilities();
     const { user, assigned } = fixture();

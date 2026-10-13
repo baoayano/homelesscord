@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In, IsNull, MoreThan } from "typeorm";
 import { RateLimit, User } from "@spacebar/database";
-import { Config, Rights, Snowflake } from "@spacebar/util";
+import { Config, effectiveRightsSync, loadStaffRoles, Rights, Snowflake } from "@spacebar/util";
 import { quarantineEndsAt, quarantineMessage, QuarantineReason, quarantineViolation } from "@spacebar/util/util/Quarantine";
 import { restrictionError } from "@spacebar/util/util/RestrictionError";
 import { recordAutomodAction } from "./instanceAutomod";
@@ -95,6 +95,7 @@ export async function quarantinedAccounts(limit = 100) {
     const config = Config.get().automod.quarantine;
     if (!config.enabled || config.hours <= 0) return [];
     const since = new Date(Date.now() - config.hours * 60 * 60 * 1000);
+    const snap = await loadStaffRoles();
     const users = await User.find({
         where: { created_at: MoreThan(since), federated_instance: IsNull(), bot: false, deleted: false },
         select: { id: true, username: true, global_name: true, avatar: true, discriminator: true, created_at: true, rights: true, system: true },
@@ -105,7 +106,7 @@ export async function quarantinedAccounts(limit = 100) {
     const clears = ids.length ? await RateLimit.find({ where: { id: In(ids.map(clearKey)), expires_at: MoreThan(new Date()) }, select: { id: true } }) : [];
     const cleared = new Set(clears.map((row) => row.id.slice("quarantine-clear:".length)));
     return users
-        .filter((user) => !user.system && !new Rights(user.rights).has("BYPASS_RATE_LIMITS") && !cleared.has(user.id))
+        .filter((user) => !user.system && !effectiveRightsSync(user.id, user.rights, snap).has("BYPASS_RATE_LIMITS") && !cleared.has(user.id))
         .map((user) => ({
             id: user.id,
             username: user.username,

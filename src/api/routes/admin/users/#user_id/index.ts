@@ -4,6 +4,7 @@ import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
 import { Badge, FederatedObject, Guild, InstanceBan, Member, Session, User } from "@spacebar/database";
 import { broadcastUserUpdate, Collectibles, CollectibleItemType, emitEvent, emitRequiredAction, handleFile, Rights, UserUpdateEvent } from "@spacebar/util";
+import type { RightString } from "@spacebar/util";
 import { AccountStandingState, AdminUserUpdateSchema, PrivateUserProjection } from "@spacebar/schemas";
 import { In, Not } from "typeorm";
 import {
@@ -22,6 +23,15 @@ import { assertShadowUserEditable, SHADOW_USER_LOCAL_FIELDS } from "@spacebar/ap
 import { ADMIN_USER_COLUMNS, applyUserTag, assertCanManage, pickAdminUser } from "../index";
 
 const router = Router({ mergeParams: true });
+
+export const ADMIN_USER_FIELD_RIGHTS: Record<string, RightString> = {
+    disabled: "MODERATE_USERS",
+    suspended_until: "MODERATE_USERS",
+    account_standing: "MODERATE_USERS",
+    join_status: "MODERATE_USERS",
+    verified: "SUPPORT_USERS",
+    rights: "OPERATOR",
+};
 
 const loadUser = (id: string) =>
     User.findOneOrFail({
@@ -46,7 +56,7 @@ const loadUser = (id: string) =>
 router.get(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_USERS",
         spacebarOnly: true,
         description: "Get a user with their servers, session count and instance bans",
     }),
@@ -120,13 +130,16 @@ router.get(
 router.patch(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "VIEW_USERS",
         spacebarOnly: true,
         requestBody: "AdminUserUpdateSchema",
-        description: "Edit a user. Changing rights, or editing an operator, requires OPERATOR.",
+        description:
+            "Edit a user. Profile fields need MANAGE_USERS, `disabled`, `suspended_until`, `account_standing` and `join_status` need MODERATE_USERS, `verified` needs SUPPORT_USERS and `rights` needs OPERATOR. Staff at or above your own role can't be edited.",
     }),
     async (req: Request, res: Response) => {
         const body = req.body as AdminUserUpdateSchema;
+        const missing = [...new Set(Object.keys(body).map((field) => ADMIN_USER_FIELD_RIGHTS[field] ?? "MANAGE_USERS"))].filter((right) => !req.rights.has(right));
+        if (missing.length) throw new HTTPError(`You are missing the following rights ${missing.join(", ")}`, 403);
         const user = await loadUser(req.params.user_id as string);
         const callerIsOperator = req.rights.has("OPERATOR");
         const targetIsOperator = new Rights(user.rights).has("OPERATOR");

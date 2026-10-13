@@ -12,7 +12,7 @@ const router = Router({ mergeParams: true });
 router.post(
     "/",
     route({
-        right: "MANAGE_USERS",
+        right: "SUPPORT_USERS",
         spacebarOnly: true,
         requestBody: "AdminPasswordResetSchema",
         description: "Make a one hour password reset link for a user, optionally emailing it and signing them out everywhere",
