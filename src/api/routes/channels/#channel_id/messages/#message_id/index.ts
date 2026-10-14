@@ -4,6 +4,7 @@ import { HTTPError } from "lambert-server/HTTPError";
 import multer from "multer";
 import { assertNoHarmfulLinks, checkAutomod, checkSpam, enforceQuarantine, handleMessage, postHandleMessage, syncCrosspostCopies } from "@spacebar/api/util";
 import { route } from "@spacebar/api/middlewares";
+import { relayedAuthorship } from "@spacebar/api/util/utility/federationAuthorship";
 import { Attachment, AuditLog, Channel, Message } from "@spacebar/database";
 import {
     MessageCreateEvent,
@@ -128,7 +129,9 @@ router.patch(
                     rights: req.rights,
                     bot: req.user_bot,
                     system: req.user?.system,
+                    account: req.user,
                     edit: true,
+                    encrypted: !!body.encrypted,
                 });
         }
         if (message.guild_id && body.content !== undefined && body.content !== message.content) {
@@ -165,6 +168,8 @@ router.patch(
             { componentsChanged: body.components !== undefined },
         );
         if (new_message.flags & suppress) new_message.embeds = new_message.embeds.filter((embed) => embed.type === EmbedType.rich);
+        const authorship = relayedAuthorship(req);
+        if (authorship && req.user_id === message.author_id) new_message.authorship = authorship;
 
         await new_message.save();
 

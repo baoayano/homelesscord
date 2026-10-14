@@ -4,9 +4,9 @@ import { FederationRequestError, parseCanonicalId } from "./Protocol";
 export const SNOWFLAKE = /^\d{15,20}$/;
 export const CANONICAL = /^@\d{1,20}@[a-z0-9.\-:[\]]{1,260}$/;
 
-const ID_KEYS = new Set(["id", "roles", "mention_roles", "recipients", "sticker_ids", "exempt_roles", "exempt_channels", "ringing", "participants"]);
+const ID_KEYS = new Set(["id", "owner", "roles", "mention_roles", "recipients", "sticker_ids", "exempt_roles", "exempt_channels", "ringing", "participants"]);
 export const ID_MAP_KEYS = new Set(["channel_overrides", "e2ee_context_keys", "ongoing_rings"]);
-const SKIPPED_KEYS = new Set(["encrypted", "nonce", "e2ee", "fingerprint"]);
+const SKIPPED_KEYS = new Set(["encrypted", "nonce", "e2ee", "fingerprint", "meowcord_authorship"]);
 
 export const isIdKey = (key: string) => ID_KEYS.has(key) || key.endsWith("_id") || key.endsWith("_ids");
 

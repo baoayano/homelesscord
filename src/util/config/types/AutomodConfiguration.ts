@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 
+export type AutomodSpamAction = "log" | "delete" | "timeout" | "hold" | "suspend" | "disable";
+
 export class AutomodSlurConfiguration {
     enabled: boolean = true;
+    action: AutomodSpamAction = "suspend";
     includeSoftA: boolean = false;
     suspendDays: number = 7;
     deleteAllMessages: boolean = true;
@@ -9,7 +12,7 @@ export class AutomodSlurConfiguration {
     actOnVerifiedReports: boolean = true;
 }
 
-export type AutomodWordListAction = "delete" | "suspend" | "name";
+export type AutomodWordListAction = "log" | "delete" | "timeout" | "hold" | "suspend" | "disable" | "name";
 
 export interface AutomodWordList {
     id: string;
@@ -30,8 +33,6 @@ export class AutomodLoginConfiguration {
     maxAccountsPerIp: number = 0;
     sessionActiveDays: number = 30;
 }
-
-export type AutomodSpamAction = "log" | "delete" | "timeout" | "suspend" | "disable";
 
 export class AutomodSpamEveryoneConfiguration {
     enabled: boolean = true;
@@ -121,6 +122,7 @@ export class AutomodSpamConfiguration {
     burst: AutomodSpamBurstConfiguration = new AutomodSpamBurstConfiguration();
     attachments: AutomodSpamAttachmentConfiguration = new AutomodSpamAttachmentConfiguration();
     dms: AutomodSpamDmConfiguration = new AutomodSpamDmConfiguration();
+    ignoreLinkDomains: string[] = ["tenor.com", "giphy.com", "klipy.com"];
     timeoutMinutes: number = 60;
     suspendHours: number = 24;
     escalateAfterStrikes: number = 3;
@@ -186,6 +188,71 @@ export class AutomodFederationConfiguration {
     reportsPerHourPerInstance: number = 120;
 }
 
+export const AUTOMOD_POLICY_KEYS = [
+    "everyoneSpam",
+    "mentionSpam",
+    "flood",
+    "duplicate",
+    "linkSpam",
+    "newAccountBurst",
+    "duplicateAttachment",
+    "dmSpam",
+    "scamLink",
+    "slurs",
+    "wordLists",
+    "quarantine",
+    "verificationLevel",
+    "ipAccountLimit",
+    "ipLimit",
+    "signupBot",
+    "explicitContent",
+    "joinRaid",
+    "mentionRaid",
+    "dmRaid",
+] as const;
+
+export type AutomodPolicyKey = (typeof AUTOMOD_POLICY_KEYS)[number];
+
+export class AutomodRulePolicy {
+    enabled: boolean = true;
+    dryRun: boolean = false;
+    exemptStaff: boolean = false;
+    exemptBots: boolean = false;
+    exemptVerifiedEmail: boolean = false;
+    exemptAccountAgeDays: number = 0;
+    exemptUserIds: string[] = [];
+    exemptGuildIds: string[] = [];
+
+    constructor(defaults: Partial<Pick<AutomodRulePolicy, "exemptStaff" | "exemptBots">> = {}) {
+        Object.assign(this, defaults);
+    }
+}
+
+const spamPolicy = () => new AutomodRulePolicy({ exemptStaff: true, exemptBots: true });
+
+export class AutomodPoliciesConfiguration {
+    everyoneSpam: AutomodRulePolicy = spamPolicy();
+    mentionSpam: AutomodRulePolicy = spamPolicy();
+    flood: AutomodRulePolicy = spamPolicy();
+    duplicate: AutomodRulePolicy = spamPolicy();
+    linkSpam: AutomodRulePolicy = spamPolicy();
+    newAccountBurst: AutomodRulePolicy = spamPolicy();
+    duplicateAttachment: AutomodRulePolicy = spamPolicy();
+    dmSpam: AutomodRulePolicy = spamPolicy();
+    scamLink: AutomodRulePolicy = new AutomodRulePolicy({ exemptBots: true });
+    slurs: AutomodRulePolicy = new AutomodRulePolicy();
+    wordLists: AutomodRulePolicy = new AutomodRulePolicy();
+    quarantine: AutomodRulePolicy = new AutomodRulePolicy({ exemptStaff: true, exemptBots: true });
+    verificationLevel: AutomodRulePolicy = new AutomodRulePolicy({ exemptBots: true });
+    ipAccountLimit: AutomodRulePolicy = new AutomodRulePolicy({ exemptStaff: true });
+    ipLimit: AutomodRulePolicy = new AutomodRulePolicy();
+    signupBot: AutomodRulePolicy = new AutomodRulePolicy();
+    explicitContent: AutomodRulePolicy = new AutomodRulePolicy();
+    joinRaid: AutomodRulePolicy = new AutomodRulePolicy({ exemptStaff: true });
+    mentionRaid: AutomodRulePolicy = new AutomodRulePolicy({ exemptStaff: true });
+    dmRaid: AutomodRulePolicy = new AutomodRulePolicy({ exemptStaff: true });
+}
+
 export class AutomodConfiguration {
     slurs: AutomodSlurConfiguration = new AutomodSlurConfiguration();
     wordLists: AutomodWordList[] = [];
@@ -200,4 +267,5 @@ export class AutomodConfiguration {
     verification: AutomodVerificationConfiguration = new AutomodVerificationConfiguration();
     explicitContent: AutomodExplicitContentConfiguration = new AutomodExplicitContentConfiguration();
     federation: AutomodFederationConfiguration = new AutomodFederationConfiguration();
+    policies: AutomodPoliciesConfiguration = new AutomodPoliciesConfiguration();
 }

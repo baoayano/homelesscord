@@ -1634,6 +1634,9 @@
                     "string"
                 ]
             },
+            "owner": {
+                "type": "string"
+            },
             "bitrate": {
                 "type": "integer"
             },
@@ -5409,6 +5412,29 @@
                 "type": "string"
             },
             "gift_code_sku_id": {
+                "type": "string"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "login",
+            "password"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AutomodAppealSchema": {
+        "type": "object",
+        "properties": {
+            "login": {
+                "type": "string"
+            },
+            "password": {
+                "minLength": 1,
+                "maxLength": 72,
+                "type": "string"
+            },
+            "message": {
+                "maxLength": 1000,
                 "type": "string"
             }
         },
@@ -9681,9 +9707,7 @@
             },
             "auto_moderation_rules": {
                 "type": "array",
-                "items": {
-                    "$ref": "#/definitions/AutomodRuleSchema"
-                }
+                "items": {}
             },
             "guild_scheduled_events": {
                 "type": "array",
@@ -10782,6 +10806,38 @@
                             }
                         },
                         "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "network": {
+                "type": "object",
+                "properties": {
+                    "forwardedFor": {
+                        "description": "Header that carries the client address, read only from trusted proxies and Cloudflare. Empty picks automatically.",
+                        "anyOf": [
+                            {
+                                "enum": [
+                                    "",
+                                    "CF-Connecting-IP",
+                                    "Fly-Client-IP",
+                                    "True-Client-IP",
+                                    "X-Forwarded-For",
+                                    "X-Real-IP"
+                                ],
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
+                    },
+                    "trustedProxies": {
+                        "description": "Express trust proxy value: comma separated addresses, ranges or loopback, linklocal and uniquelocal",
+                        "type": [
+                            "null",
+                            "string"
+                        ]
                     }
                 },
                 "additionalProperties": false
@@ -12044,6 +12100,25 @@
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
+    "AdminIpBanLiftSchema": {
+        "type": "object",
+        "properties": {
+            "ban_ids": {
+                "description": "The address bans to lift, at most 100 per request. Each one also lifts the bans it spread.",
+                "minItems": 1,
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "ban_ids"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
     "AdminSessionsRevokeSchema": {
         "type": "object",
         "properties": {
@@ -12216,6 +12291,11 @@
                         "type": "integer"
                     },
                     "maxGroupDmRecipients": {
+                        "minimum": 1,
+                        "maximum": 2147483647,
+                        "type": "integer"
+                    },
+                    "maxStaffGroupDmRecipients": {
                         "minimum": 1,
                         "maximum": 2147483647,
                         "type": "integer"
@@ -12865,8 +12945,12 @@
             "action": {
                 "enum": [
                     "delete",
+                    "disable",
+                    "hold",
+                    "log",
                     "name",
-                    "suspend"
+                    "suspend",
+                    "timeout"
                 ],
                 "type": "string"
             },
@@ -12894,6 +12978,7 @@
                 "enum": [
                     "delete",
                     "disable",
+                    "hold",
                     "log",
                     "suspend",
                     "timeout"
@@ -12928,6 +13013,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -12967,6 +13053,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13006,6 +13093,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13050,6 +13138,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13094,6 +13183,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13133,6 +13223,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13172,6 +13263,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13216,6 +13308,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -13268,6 +13361,13 @@
                 "minimum": 1,
                 "maximum": 40320,
                 "type": "integer"
+            },
+            "ignoreLinkDomains": {
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
             },
             "suspendHours": {
                 "minimum": 1,
@@ -13391,6 +13491,7 @@
                 "enum": [
                     "delete",
                     "disable",
+                    "hold",
                     "log",
                     "suspend",
                     "timeout"
@@ -13568,6 +13669,17 @@
                 "properties": {
                     "enabled": {
                         "type": "boolean"
+                    },
+                    "action": {
+                        "enum": [
+                            "delete",
+                            "disable",
+                            "hold",
+                            "log",
+                            "suspend",
+                            "timeout"
+                        ],
+                        "type": "string"
                     },
                     "includeSoftA": {
                         "type": "boolean"
@@ -13766,11 +13878,29 @@
         ],
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
+    "AdminAutomodAppealDecisionSchema": {
+        "type": "object",
+        "properties": {
+            "decision": {
+                "enum": [
+                    "accept",
+                    "deny"
+                ],
+                "type": "string"
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "decision"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
     "AdminAutomodReverseSchema": {
         "type": "object",
         "properties": {
             "reversal": {
                 "enum": [
+                    "false_positive",
                     "not_a_match",
                     "undo"
                 ],
@@ -13781,6 +13911,58 @@
         "required": [
             "reversal"
         ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "AdminAutomodRulePolicySchema": {
+        "type": "object",
+        "properties": {
+            "enabled": {
+                "type": "boolean"
+            },
+            "action": {
+                "enum": [
+                    "delete",
+                    "disable",
+                    "hold",
+                    "log",
+                    "suspend",
+                    "timeout"
+                ],
+                "type": "string"
+            },
+            "dryRun": {
+                "type": "boolean"
+            },
+            "exemptStaff": {
+                "type": "boolean"
+            },
+            "exemptBots": {
+                "type": "boolean"
+            },
+            "exemptVerifiedEmail": {
+                "type": "boolean"
+            },
+            "exemptAccountAgeDays": {
+                "minimum": 0,
+                "maximum": 3650,
+                "type": "integer"
+            },
+            "exemptUserIds": {
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "exemptGuildIds": {
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            }
+        },
+        "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
     },
     "AdminAutomodUsersSchema": {
@@ -13857,11 +14039,21 @@
             "announce": {
                 "type": "boolean"
             },
+            "announceStats": {
+                "type": "boolean"
+            },
             "allowUnlistedPeers": {
                 "type": "boolean"
             },
             "peers": {
                 "maxItems": 200,
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "contacts": {
+                "maxItems": 10,
                 "type": "array",
                 "items": {
                     "type": "string"
@@ -17003,6 +17195,42 @@
                 "type": [
                     "null",
                     "string"
+                ]
+            },
+            "remote_badges": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string"
+                                },
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "description": {
+                                    "type": "string"
+                                },
+                                "pride_flag": {
+                                    "type": "string"
+                                },
+                                "icon": {
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": [
+                                "description",
+                                "id",
+                                "kind"
+                            ]
+                        }
+                    },
+                    {
+                        "type": "null"
+                    }
                 ]
             },
             "tag": {
@@ -20347,6 +20575,12 @@
                     "null",
                     "string"
                 ]
+            },
+            "category_ids": {
+                "type": "array",
+                "items": {
+                    "type": "integer"
+                }
             }
         },
         "additionalProperties": false,
@@ -20670,6 +20904,12 @@
                     {
                         "type": "null"
                     }
+                ]
+            },
+            "authorship": {
+                "type": [
+                    "null",
+                    "string"
                 ]
             },
             "soundboard_sounds": {
@@ -22225,6 +22465,12 @@
                 "type": "array",
                 "items": {
                     "$ref": "#/definitions/E2eeEnvelopeBackupKey"
+                }
+            },
+            "mentions": {
+                "type": "array",
+                "items": {
+                    "type": "string"
                 }
             },
             "sig": {
@@ -25032,6 +25278,10 @@
             "maxGroupDmRecipients": {
                 "type": "integer",
                 "default": 25
+            },
+            "maxStaffGroupDmRecipients": {
+                "type": "integer",
+                "default": 100
             }
         },
         "additionalProperties": false,
@@ -25040,6 +25290,7 @@
             "maxGroupDmRecipients",
             "maxName",
             "maxPins",
+            "maxStaffGroupDmRecipients",
             "maxTopic",
             "maxWebhooks"
         ],

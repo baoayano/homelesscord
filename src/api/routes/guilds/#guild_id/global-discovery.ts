@@ -12,6 +12,7 @@ import {
     guildRegistryStatus,
     instanceId,
     instanceUrl,
+    invalidateSignedDiscoveryList,
     localBlocks,
     permanentInvite,
 } from "@spacebar/api/util/utility/federation";
@@ -72,6 +73,7 @@ router.patch(
         if (enabled && !invite) throw new HTTPError("Add a text channel first, so people from other instances have somewhere to land", 400);
         guild.global_discovery = enabled;
         await Guild.update({ id: guild.id }, { global_discovery: enabled });
+        invalidateSignedDiscoveryList();
         if (guild.global_discovery_verified && !guild.global_discovery_hidden) announceSoon();
         res.json(await describe(guild, invite));
     },

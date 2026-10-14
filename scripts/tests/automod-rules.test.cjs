@@ -392,7 +392,8 @@ function load(file, imports) {
     return module.exports;
 }
 
-function ipCapFixture({ users = [], sessions = [], registration = 0, login = 0, allow = [] } = {}) {
+function ipCapFixture({ users = [], sessions = [], registration = 0, login = 0, allow = [], staff = [], policy = {} } = {}) {
+    const ipPolicy = { enabled: true, dryRun: false, exemptUserIds: [], ...policy };
     const logs = [];
     const ipMatches = (value, condition) => (condition.in ? condition.in.includes(value) : value?.startsWith(condition.like.replace(/%$/, "")));
     const caps = load("src/api/util/utility/ipAccountCaps.ts", {
@@ -419,19 +420,19 @@ function ipCapFixture({ users = [], sessions = [], registration = 0, login = 0, 
                 get: () => ({ automod: { ipAllowList: allow, registration: { maxAccountsPerIp: registration }, login: { maxAccountsPerIp: login, sessionActiveDays: 30 } } }),
             },
             FieldErrors: (fields) => Object.assign(new Error("Invalid Form Body"), { fields }),
-            Rights: class {
-                constructor(bits) {
-                    this.bits = BigInt(bits);
-                }
-                has() {
-                    return (this.bits & 1n) === 1n;
-                }
-            },
+            isPrivateAddress: (ip) => /^(?:127\.|10\.|192\.168\.)/.test(ip),
+            isCloudflareAddress: (ip) => ip.startsWith("162.158."),
+            loadStaffRoles: async () => ({ staff: new Set(staff) }),
+            isStaffAccount: (user, snap) => (BigInt(user.rights ?? 0) & 1n) === 1n || snap.staff.has(user.id),
         },
         "@spacebar/util/util/IpGroups": require("../../src/util/util/IpGroups.ts"),
         "./accountIps": { ipVariants: (ip) => (ip.includes(":") ? [ip] : [ip, `::ffff:${ip}`]) },
         "./instanceAutomod": { recordAutomodAction: async (entry) => logs.push(entry) },
         "./spamGuard": { logRestrictionOnce: () => true },
+        "./automodPolicy": {
+            rulePolicy: () => ipPolicy,
+            exemptionFrom: async (_key, account) => (ipPolicy.exemptUserIds.includes(account?.id) ? "user" : null),
+        },
     });
     return { caps, logs };
 }
@@ -517,4 +518,32 @@ test("the routes call the new checks", () => {
     assert.match(read("routes/users/@me/relationships.ts"), /checkContactSpam\(/);
     assert.match(read("util/utility/federationRelay.ts"), /enforceQuarantine\(/);
     assert.match(read("util/handlers/UserMessage.ts"), /applyExplicitContentFilter\(/);
+});
+
+test("false positive: staff with a staff role are exempt from both address caps and never count toward them", async () => {
+    const now = new Date();
+    const users = [
+        { id: "1", rights: "0", registration_ip: "198.51.100.9" },
+        { id: "5", rights: "0", registration_ip: "198.51.100.9" },
+    ];
+    const sessions = [{ user_id: "5", last_seen_ip: "198.51.100.9", last_seen: now }];
+    const { caps } = ipCapFixture({ users, sessions, login: 1, registration: 2, staff: ["5", "6"] });
+    await caps.assertLoginIpCap("198.51.100.9", { id: "6", rights: "0" });
+    await caps.assertLoginIpCap("198.51.100.9", { id: "7", rights: "0" });
+    await caps.assertRegistrationIpCap("198.51.100.9", "new");
+    const strict = ipCapFixture({ users, sessions, login: 1, registration: 2 });
+    assert.equal(fieldCode(await strict.caps.assertLoginIpCap("198.51.100.9", { id: "7", rights: "0" }).catch((error) => error), "login"), "TOO_MANY_ACCOUNTS_ON_IP");
+    assert.equal(fieldCode(await strict.caps.assertRegistrationIpCap("198.51.100.9", "new").catch((error) => error), "username"), "TOO_MANY_ACCOUNTS_ON_IP");
+});
+
+test("false positive: the daily signups per address limit skips shared and allowed addresses", () => {
+    const source = fs.readFileSync(path.join(__dirname, "../../src/api/util/utility/instanceAutomod.ts"), "utf8");
+    const daily = source.slice(source.indexOf("export async function assertRegistrationAllowedForIp"), source.indexOf("export async function recordRegistrationForIp"));
+    const record = source.slice(source.indexOf("export async function recordRegistrationForIp"));
+    for (const part of [daily, record]) assert.match(part, /if \(isIpCapExempt\(ip\)\) return;/);
+    const { caps } = ipCapFixture({ allow: ["203.0.113.0/24"] });
+    assert.equal(caps.isIpCapExempt("162.158.1.1"), true);
+    assert.equal(caps.isIpCapExempt("10.0.0.2"), true);
+    assert.equal(caps.isIpCapExempt("203.0.113.40"), true);
+    assert.equal(caps.isIpCapExempt("198.51.100.1"), false);
 });

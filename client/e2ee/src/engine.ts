@@ -57,6 +57,7 @@ export interface Envelope {
     ct: string;
     keys: EnvelopeKey[];
     backup?: EnvelopeBackupKey[];
+    mentions?: string[];
     sig: string;
 }
 
@@ -81,6 +82,9 @@ export interface RawMessage {
     attachments?: RawAttachment[];
     sticker_items?: unknown[];
     encrypted?: Envelope | null;
+    mentions?: { id: string }[];
+    mention_everyone?: boolean;
+    referenced_message?: { author?: { id: string } } | null;
 }
 
 export interface ServerDevice {
@@ -227,7 +231,7 @@ const sleep = (ms: number) =>
     });
 
 const signedPayload = (channelId: string, senderId: string, bind: string, env: Omit<Envelope, "sig">) => {
-    const base = [
+    const base: unknown[] = [
         "fosscord-e2ee/v1/sig",
         channelId,
         senderId,
@@ -241,8 +245,14 @@ const signedPayload = (channelId: string, senderId: string, bind: string, env: O
         [...env.keys].sort((a, b) => (a.device_id < b.device_id ? -1 : 1)).map((k) => [k.user_id, k.device_id, k.prekey_id, k.enc, k.wrapped]),
     ];
     if (env.backup) base.push([...env.backup].sort((a, b) => (a.user_id < b.user_id ? -1 : 1)).map((b) => [b.user_id, b.enc, b.wrapped]));
+    if (env.mentions) base.push({ mentions: [...env.mentions].sort() });
     return JSON.stringify(base);
 };
+
+export const mentionedIn = (content: string) => new Set([...content.replace(/```[\s\S]*?```|`[^`]*`/g, "").matchAll(/<@!?(\d{15,20})>/g)].map(([, id]) => id));
+
+export const unreadableMembers = (entries: DirectoryEntry[], self: string | null) =>
+    entries.filter((entry) => entry.userId !== self && !entry.backupKey && !entry.devices.some((device) => device.status === "active")).map((entry) => entry.userId);
 
 export const deviceName = () => {
     const ua = navigator.userAgent;
@@ -1333,13 +1343,16 @@ export class Engine {
     async encrypt(channelId: string, payload: Payload, opts: { nonce?: string; mid?: string }): Promise<Envelope> {
         if (!this.device || !this.userId) throw new E2eeError("NOT_READY", t("Encryption is still starting up"));
         if (!this.linked) throw new E2eeError("NOT_LINKED", t("This browser isn't unlocked for encrypted messages yet"));
-        const members = [this.userId, ...(await this.channelMembers(channelId))];
+        const others = await this.channelMembers(channelId);
+        const members = [this.userId, ...others];
         const entries = await this.keysFor(members);
+        const unreadable = unreadableMembers(entries, this.userId);
+        if (others.length && unreadable.length === others.length) throw new E2eeError("NO_DEVICES", "Nobody else here has encryption keys yet", unreadable[0]);
         const targets: { userId: string; device: DirectoryDevice }[] = [];
         for (const entry of entries) {
             if (entry.identityChanged) throw new E2eeError("IDENTITY_CHANGED", "A safety number changed", entry.userId);
             const active = entry.devices.filter((d) => d.status === "active");
-            if (!active.length) throw new E2eeError("NO_DEVICES", "A member has no encryption keys yet", entry.userId);
+            if (!active.length && entry.userId === this.userId) throw new E2eeError("NO_DEVICES", "This browser has no encryption keys yet", entry.userId);
             active.forEach((device) => targets.push({ userId: entry.userId, device }));
         }
         if (!targets.some((t) => t.device.deviceId === this.device!.deviceId)) {
@@ -1380,6 +1393,8 @@ export class Engine {
                     ...(await hpkeSeal(e.backupKey!, contentKey, BACKUP_INFO, `${aad}\nbackup:${ids.user(e.userId)}`)),
                 })),
         );
+        const mentioned = mentionedIn(payload.content);
+        const mentions = others.filter((id) => mentioned.has(id)).map(ids.user);
         const unsigned = {
             v: ids.v,
             alg: ALGORITHM,
@@ -1389,6 +1404,7 @@ export class Engine {
             ct: toB64u(ct),
             keys,
             ...(backup.length ? { backup } : {}),
+            ...(mentions.length ? { mentions } : {}),
         };
         const sig = await sign(this.device.privateKey, signedPayload(ids.channel, ids.sender, bind, unsigned));
         const envelope = { ...unsigned, sig };

@@ -2792,6 +2792,34 @@ ${userId}`)));
       "{name} nie skonfigurował(a) jeszcze szyfrowania, więc wiadomość nie została wysłana. Poproś tę osobę, żeby raz otworzyła aplikację.",
       "{name} 还没有设置加密，因此你的消息没有发送。请让对方打开一次应用。"
     ],
+    "{name} hasn't set up encryption yet, so they couldn't read your message. It's still in the text box.": [
+      "{name} hat die Verschlüsselung noch nicht eingerichtet und könnte deine Nachricht nicht lesen. Sie bleibt im Textfeld.",
+      "{name} n'a pas encore configuré le chiffrement et ne pourrait pas lire ton message. Il reste dans le champ de texte.",
+      "{name} はまだ暗号化を設定していないため、メッセージを読めません。メッセージは入力欄に残っています。",
+      "{name} nie skonfigurował(a) jeszcze szyfrowania i nie mógłby/mogłaby przeczytać wiadomości. Pozostaje ona w polu tekstowym.",
+      "{name} 还没有设置加密，无法阅读你的消息。消息仍保留在输入框中。"
+    ],
+    "{names} haven't set up encryption yet, so nobody here could read your message. It's still in the text box.": [
+      "{names} haben die Verschlüsselung noch nicht eingerichtet, daher könnte hier niemand deine Nachricht lesen. Sie bleibt im Textfeld.",
+      "{names} n'ont pas encore configuré le chiffrement, personne ici ne pourrait donc lire ton message. Il reste dans le champ de texte.",
+      "{names} はまだ暗号化を設定していないため、ここでは誰もメッセージを読めません。メッセージは入力欄に残っています。",
+      "{names} nie skonfigurowali jeszcze szyfrowania, więc nikt tutaj nie mógłby przeczytać wiadomości. Pozostaje ona w polu tekstowym.",
+      "{names} 还没有设置加密，这里没有人能阅读你的消息。消息仍保留在输入框中。"
+    ],
+    "{name} hasn't set up encryption yet and can't read this message. Everyone else here can.": [
+      "{name} hat die Verschlüsselung noch nicht eingerichtet und kann diese Nachricht nicht lesen. Alle anderen hier können es.",
+      "{name} n'a pas encore configuré le chiffrement et ne peut pas lire ce message. Tous les autres ici le peuvent.",
+      "{name} はまだ暗号化を設定していないため、このメッセージを読めません。ほかの人は読めます。",
+      "{name} nie skonfigurował(a) jeszcze szyfrowania i nie przeczyta tej wiadomości. Wszyscy pozostali mogą.",
+      "{name} 还没有设置加密，无法阅读这条消息。这里的其他人都可以。"
+    ],
+    "{names} haven't set up encryption yet and can't read this message. Everyone else here can.": [
+      "{names} haben die Verschlüsselung noch nicht eingerichtet und können diese Nachricht nicht lesen. Alle anderen hier können es.",
+      "{names} n'ont pas encore configuré le chiffrement et ne peuvent pas lire ce message. Tous les autres ici le peuvent.",
+      "{names} はまだ暗号化を設定していないため、このメッセージを読めません。ほかの人は読めます。",
+      "{names} nie skonfigurowali jeszcze szyfrowania i nie przeczytają tej wiadomości. Wszyscy pozostali mogą.",
+      "{names} 还没有设置加密，无法阅读这条消息。这里的其他人都可以。"
+    ],
     "{name}'s safety number changed. Review it before sending more messages.": [
       "Die Sicherheitsnummer von {name} hat sich geändert. Prüfe sie, bevor du weitere Nachrichten sendest.",
       "Le numéro de sécurité de {name} a changé. Vérifie-le avant d'envoyer d'autres messages.",
@@ -3671,8 +3699,12 @@ ${sig}`;
     ];
     if (env.backup)
       base.push([...env.backup].sort((a, b) => a.user_id < b.user_id ? -1 : 1).map((b) => [b.user_id, b.enc, b.wrapped]));
+    if (env.mentions)
+      base.push({ mentions: [...env.mentions].sort() });
     return JSON.stringify(base);
   };
+  var mentionedIn = (content) => new Set([...content.replace(/```[\s\S]*?```|`[^`]*`/g, "").matchAll(/<@!?(\d{15,20})>/g)].map(([, id]) => id));
+  var unreadableMembers = (entries, self2) => entries.filter((entry) => entry.userId !== self2 && !entry.backupKey && !entry.devices.some((device) => device.status === "active")).map((entry) => entry.userId);
   var deviceName = () => {
     const ua = navigator.userAgent;
     const brave = !!navigator.brave;
@@ -4705,15 +4737,19 @@ ${digest}`;
         throw new E2eeError("NOT_READY", t("Encryption is still starting up"));
       if (!this.linked)
         throw new E2eeError("NOT_LINKED", t("This browser isn't unlocked for encrypted messages yet"));
-      const members = [this.userId, ...await this.channelMembers(channelId)];
+      const others = await this.channelMembers(channelId);
+      const members = [this.userId, ...others];
       const entries = await this.keysFor(members);
+      const unreadable = unreadableMembers(entries, this.userId);
+      if (others.length && unreadable.length === others.length)
+        throw new E2eeError("NO_DEVICES", "Nobody else here has encryption keys yet", unreadable[0]);
       const targets = [];
       for (const entry of entries) {
         if (entry.identityChanged)
           throw new E2eeError("IDENTITY_CHANGED", "A safety number changed", entry.userId);
         const active = entry.devices.filter((d) => d.status === "active");
-        if (!active.length)
-          throw new E2eeError("NO_DEVICES", "A member has no encryption keys yet", entry.userId);
+        if (!active.length && entry.userId === this.userId)
+          throw new E2eeError("NO_DEVICES", "This browser has no encryption keys yet", entry.userId);
         active.forEach((device) => targets.push({ userId: entry.userId, device }));
       }
       if (!targets.some((t) => t.device.deviceId === this.device.deviceId)) {
@@ -4749,6 +4785,8 @@ ${device.deviceId}`)
         ...await hpkeSeal(e.backupKey, contentKey, BACKUP_INFO, `${aad}
 backup:${ids.user(e.userId)}`)
       })));
+      const mentioned = mentionedIn(payload.content);
+      const mentions = others.filter((id) => mentioned.has(id)).map(ids.user);
       const unsigned = {
         v: ids.v,
         alg: ALGORITHM,
@@ -4757,7 +4795,8 @@ backup:${ids.user(e.userId)}`)
         iv: toB64u(iv),
         ct: toB64u(ct),
         keys,
-        ...backup.length ? { backup } : {}
+        ...backup.length ? { backup } : {},
+        ...mentions.length ? { mentions } : {}
       };
       const sig = await sign(this.device.privateKey, signedPayload(ids.channel, ids.sender, bind, unsigned));
       const envelope = { ...unsigned, sig };
@@ -5019,6 +5058,12 @@ backup:${ownId}`).catch(() => null);
     };
     const show = (message, payload) => {
       ctx.attachments.apply(message, payload);
+      const mentioned = mentionedIn(payload.content);
+      const replied = message.referenced_message?.author?.id;
+      if (Array.isArray(message.mentions))
+        message.mentions = message.mentions.filter((user) => mentioned.has(user?.id) || user?.id === replied);
+      if (/@(everyone|here)\b/.test(payload.content))
+        message.mention_everyone = true;
       if (payload.embeds?.length && message.author?.system === true) {
         message.embeds = payload.embeds;
         message.content = "";
@@ -6973,18 +7018,39 @@ ${approver}`;
       }
       if (!engine.trustsServer) {
         const checked = await Promise.race([changedMember(channelId).catch(() => null), new Promise((resolve) => void setTimeout(() => resolve(null), 3000))]);
-        return checked ? pauseForChange(channelId, checked) : false;
+        if (checked)
+          return pauseForChange(channelId, checked);
       }
-      const prepared = await Promise.race([
-        engine.channelMembers(channelId).then((ids) => engine.keysFor(ids)).then((entries) => entries.every((entry) => entry.devices.some((device) => device.status === "active"))).catch(() => false),
-        new Promise((resolve) => void setTimeout(() => resolve(false), 3000))
+      const entries = await Promise.race([
+        engine.channelMembers(channelId).then((ids) => engine.keysFor(ids)).catch(() => null),
+        new Promise((resolve) => void setTimeout(() => resolve(null), 3000))
       ]);
-      if (!prepared)
+      if (!entries) {
+        if (!engine.trustsServer)
+          return false;
         flash(channelId, {
           tone: "info",
           text: t("Preparing private chat… Your message is still in the text box.")
         });
-      return !prepared;
+        return true;
+      }
+      const unreadable = unreadableMembers(entries, engine.userId);
+      if (!unreadable.length)
+        return false;
+      const who = await namesOf(unreadable);
+      const many = unreadable.length > 1;
+      if (unreadable.length === entries.length) {
+        flash(channelId, {
+          tone: "danger",
+          text: many ? t("{names} haven't set up encryption yet, so nobody here could read your message. It's still in the text box.", { names: who }) : t("{name} hasn't set up encryption yet, so they couldn't read your message. It's still in the text box.", { name: who })
+        });
+        return true;
+      }
+      flash(channelId, {
+        tone: "warning",
+        text: many ? t("{names} haven't set up encryption yet and can't read this message. Everyone else here can.", { names: who }) : t("{name} hasn't set up encryption yet and can't read this message. Everyone else here can.", { name: who })
+      }, 15000);
+      return false;
     };
     const decorateMessages = () => {
       for (const [id, info] of states) {
@@ -7542,7 +7608,7 @@ ${approver}`;
     }
   };
   var startWhenReady = () => {
-    if (started || probing || failure || signedOut || loggedOut || !http || Date.now() - lastProbe < 1e4)
+    if (started || probing || failure || signedOut || loggedOut || !http || !storedToken() || Date.now() - lastProbe < 1e4)
       return;
     lastProbe = Date.now();
     probing = true;

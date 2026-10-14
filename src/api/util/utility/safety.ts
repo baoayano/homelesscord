@@ -1,12 +1,13 @@
 import { In, IsNull, MoreThan } from "typeorm";
 import { AutomodActionRule, AutomodActionSource, Channel, Guild, GuildIncidentsData, Member, Message, RaidIncident, User } from "@spacebar/database";
-import { Config, DiscordApiErrors, emitEvent, GuildMemberUpdateEvent, MessageCreateEvent, Snowflake } from "@spacebar/util";
+import { Config, DiscordApiErrors, emitEvent, getPermission, GuildMemberUpdateEvent, MessageCreateEvent, Snowflake } from "@spacebar/util";
 import { AttachmentFlags, Embed, EmbedType, MessageType } from "@spacebar/schemas";
 import { explicitFilterApplies, explicitReason, verificationMessage, verificationShortfall } from "@spacebar/util/util/GuildVerification";
 import { restrictionError } from "@spacebar/util/util/RestrictionError";
 import { recordAutomodAction } from "./instanceAutomod";
 import { endOpenIncidents, recordIncident } from "./raidIncidents";
 import { getSystemAccount } from "./systemAccounts";
+import { createdAtOf, exemptionFrom, rulePolicy } from "./automodPolicy";
 
 const EMPTY_INCIDENTS: GuildIncidentsData = {
     invites_disabled_until: null,
@@ -142,12 +143,35 @@ async function logRaid(rule: AutomodActionRule, source: AutomodActionSource, gui
     );
 }
 
+async function dryRunRaid(rule: "join_raid" | "dm_raid" | "mention_raid", guild_id: string, text: string, user_id?: string | null) {
+    const { logRestrictionOnce } = await import("./spamGuard.js");
+    if (!logRestrictionOnce(`dry-run:${rule}:${guild_id}`, ALERT_COOLDOWN)) return;
+    await recordAutomodAction({
+        user_id: user_id ?? null,
+        rule,
+        source: rule === "join_raid" ? "guild_join" : rule === "dm_raid" ? "direct_message" : "message",
+        action: "log",
+        would_action: "raid_alert",
+        text,
+        guild_id,
+    }).catch((e) => console.error("[Safety] couldn't log a raid dry run", e));
+}
+
 export async function recordGuildJoin(guild_id: string, user_id?: string, invite?: string | null) {
     const safety = Config.get().guild.safety;
+    const policy = rulePolicy("joinRaid");
+    if (!policy.enabled || policy.exemptGuildIds.includes(guild_id)) return;
     const now = Date.now();
+    const joiner = user_id
+        ? await User.findOne({ where: { id: user_id }, select: { id: true, bot: true, verified: true, rights: true, federated_instance: true, created_at: true } }).catch(
+              () => null,
+          )
+        : null;
+    if (joiner && (await exemptionFrom("joinRaid", joiner, guild_id))) return;
+    const created_at = user_id ? createdAtOf(joiner ?? { id: user_id }) : now;
     const joins = [
         ...prune(joinLog.get(guild_id) ?? [], now - safety.raidJoinWindowSeconds * 1000, (entry) => entry.at),
-        { at: now, user_id: user_id ?? "", created_at: user_id ? Snowflake.deconstruct(user_id).timestamp : now, invite: invite ?? null },
+        { at: now, user_id: user_id ?? "", created_at, invite: invite ?? null },
     ];
     joinLog.set(guild_id, joins);
     const fresh = joins.filter((entry) => now - entry.created_at < safety.raidNewAccountHours * HOUR);
@@ -163,6 +187,12 @@ export async function recordGuildJoin(guild_id: string, user_id?: string, invite
         if (ongoing && user_id && now - ongoing < ALERT_COOLDOWN) await recordIncident({ guild_id, kind: "join_raid", user_ids: [user_id] });
         return;
     }
+    if (policy.dryRun)
+        return dryRunRaid(
+            "join_raid",
+            guild_id,
+            `${joins.length} joins in ${safety.raidJoinWindowSeconds}s, ${fresh.length} from new accounts${viaInvite.length ? `, ${viaInvite.length} through invite ${invite}` : ""}`,
+        );
     if (!ongoing || now - ongoing >= ALERT_COOLDOWN) activeJoinRaids.set(guild_id, now);
     const raiders = (reasons.includes("invite") ? viaInvite : reasons.includes("new_accounts") ? fresh : joins).map((entry) => entry.user_id).filter(Boolean);
     const incident = await recordIncident({
@@ -188,15 +218,32 @@ export async function recordGuildJoin(guild_id: string, user_id?: string, invite
         );
 }
 
+async function moderatesGuild(guild_id: string, user_id: string) {
+    const permission = await getPermission(user_id, guild_id).catch(() => null);
+    return !!permission && (["KICK_MEMBERS", "BAN_MEMBERS", "MODERATE_MEMBERS", "MANAGE_GUILD"] as const).some((flag) => permission.has(flag));
+}
+
 export async function recordGuildMemberDm(guild_ids: string[], sender: string, recipient: string) {
     const { dmRaidThreshold, dmRaidWindowSeconds, dmRaidPauseDmsMinutes } = Config.get().guild.safety;
-    if (!dmRaidThreshold) return;
+    const policy = rulePolicy("dmRaid");
+    if (!dmRaidThreshold || !policy.enabled) return;
     const now = Date.now();
     for (const guild_id of guild_ids) {
+        if (policy.exemptGuildIds.includes(guild_id)) continue;
         const entries = [...prune(dmLog.get(guild_id) ?? [], now - dmRaidWindowSeconds * 1000, (entry) => entry.at), { at: now, sender, recipient }];
         dmLog.set(guild_id, entries);
         const fromSender = new Set(entries.filter((entry) => entry.sender === sender).map((entry) => entry.recipient));
         if (fromSender.size < dmRaidThreshold) continue;
+        if (await moderatesGuild(guild_id, sender)) continue;
+        const account = await User.findOne({
+            where: { id: sender },
+            select: { id: true, bot: true, verified: true, rights: true, federated_instance: true, created_at: true },
+        }).catch(() => null);
+        if (await exemptionFrom("dmRaid", account ?? { id: sender }, guild_id)) continue;
+        if (policy.dryRun) {
+            await dryRunRaid("dm_raid", guild_id, `${fromSender.size} members messaged in ${dmRaidWindowSeconds}s`, sender);
+            continue;
+        }
         await Member.update({ id: sender, guild_id }, { unusual_dm_activity_until: new Date(now + 24 * 60 * 60 * 1000) });
         await emitMemberUpdate(guild_id, sender).catch(() => undefined);
         const incident = await recordIncident({ guild_id, kind: "dm_raid", user_ids: [sender], details: { dms_sent: fromSender.size } });
@@ -232,7 +279,8 @@ export async function resolveGuildRaid(guild_id: string, user_id?: string) {
 
 export async function recordMentionSpam(guild_id: string, user_id: string) {
     const { mentionRaidThreshold, mentionRaidWindowSeconds } = Config.get().guild.safety;
-    if (!mentionRaidThreshold) return;
+    const policy = rulePolicy("mentionRaid");
+    if (!mentionRaidThreshold || !policy.enabled || policy.exemptGuildIds.includes(guild_id) || policy.exemptUserIds.includes(user_id)) return;
     const now = Date.now();
     const entries = [...prune(mentionLog.get(guild_id) ?? [], now - mentionRaidWindowSeconds * 1000, (entry) => entry.at), { at: now, user_id }];
     mentionLog.set(guild_id, entries);
@@ -242,6 +290,7 @@ export async function recordMentionSpam(guild_id: string, user_id: string) {
     }
     const users = [...new Set(entries.map((entry) => entry.user_id))];
     if (users.length < mentionRaidThreshold) return;
+    if (policy.dryRun) return dryRunRaid("mention_raid", guild_id, `${users.length} accounts sent mention spam in ${mentionRaidWindowSeconds}s`);
 
     const until = new Date(now + ALERT_COOLDOWN);
     const decision_id = Snowflake.generate();
@@ -292,7 +341,7 @@ export async function assertGuildVerification(guild_id: string, user_id: string,
     const [user, member] = await Promise.all([
         User.findOne({
             where: { id: user_id },
-            select: { id: true, bot: true, verified: true, phone: true, federated_instance: true, created_at: true },
+            select: { id: true, bot: true, verified: true, phone: true, federated_instance: true, created_at: true, rights: true },
         }),
         known_member ??
             Member.findOne({
@@ -316,6 +365,8 @@ export async function assertGuildVerification(guild_id: string, user_id: string,
     const facts = { verified: !!user.verified, phone: !!user.phone, accountAgeMs: Date.now() - created, memberAgeMs: Date.now() - new Date(member.joined_at).getTime() };
     const shortfall = verificationShortfall(level, facts, config.requirePhoneForHighest);
     if (!shortfall) return;
+    if (await exemptionFrom("verificationLevel", user, guild_id)) return;
+    const dryRun = rulePolicy("verificationLevel").dryRun;
     const { logRestrictionOnce } = await import("./spamGuard.js");
     if (logRestrictionOnce(`verification:${guild_id}:${user_id}:${shortfall}`, HOUR))
         await recordAutomodAction({
@@ -323,9 +374,11 @@ export async function assertGuildVerification(guild_id: string, user_id: string,
             rule: "verification_level",
             term: `level ${level} needs ${shortfall.replace("_", " ")}`,
             source: "message",
-            action: "block",
+            action: dryRun ? "log" : "block",
+            would_action: dryRun ? "block" : null,
             guild_id,
         }).catch(() => undefined);
+    if (dryRun) return;
     throw restrictionError(403, { code: 50009, message: verificationMessage(shortfall, facts), restriction: "GUILD_VERIFICATION_LEVEL", reason: shortfall });
 }
 
@@ -345,13 +398,20 @@ export async function applyExplicitContentFilter(
     if (!config.enabled || !channel.guild_id || channel.nsfw || !message.attachments?.length) return 0;
     const guild = await Guild.findOne({ where: { id: channel.guild_id }, select: { id: true, explicit_content_filter: true } });
     if (!explicitFilterApplies(guild?.explicit_content_filter, hasRoles)) return 0;
+    const author = message.author_id
+        ? await User.findOne({ where: { id: message.author_id }, select: { id: true, bot: true, verified: true, rights: true, federated_instance: true, created_at: true } })
+        : null;
+    if (await exemptionFrom("explicitContent", author, channel.guild_id)) return 0;
+    const dryRun = rulePolicy("explicitContent").dryRun;
     let flagged = 0;
     const matched: string[] = [];
     for (const [index, attachment] of message.attachments.entries()) {
         const reason = explicitReason({ ...attachment, hash: hashes[index] ?? null }, config);
         if (!reason) continue;
-        attachment.flags = (attachment.flags ?? 0) | AttachmentFlags.CONTAINS_EXPLICIT_MEDIA;
-        flagged++;
+        if (!dryRun) {
+            attachment.flags = (attachment.flags ?? 0) | AttachmentFlags.CONTAINS_EXPLICIT_MEDIA;
+            flagged++;
+        }
         if (reason !== "media") matched.push(`${attachment.filename ?? "file"} (${reason === "hash" ? "blocked file" : "explicit name"})`);
     }
     if (matched.length && message.author_id)
@@ -360,7 +420,8 @@ export async function applyExplicitContentFilter(
             rule: "explicit_content",
             term: matched.join(", ").slice(0, 200),
             source: "message",
-            action: "flag",
+            action: dryRun ? "log" : "flag",
+            would_action: dryRun ? "flag" : null,
             guild_id: message.guild_id ?? channel.guild_id,
             channel_id: message.channel_id ?? null,
             message_id: message.id,

@@ -246,6 +246,32 @@ export const verifyUploadPath = (instanceId: string, token: string, path: string
     return expected.length === given.length && crypto.timingSafeEqual(expected, given);
 };
 
+const FORWARDED_UPLOAD_TTL = 24 * 60 * 60 * 1000;
+const FORWARDED_UPLOAD_LIMIT = 20_000;
+const forwardedUploads = new Map<string, { size: number; sha256: string; at: number }>();
+
+const rememberForwardedUpload = (pathname: string, body: Buffer) => {
+    const name = (() => {
+        try {
+            return decodeURIComponent(pathname.replace(/^\/attachments\//, ""));
+        } catch {
+            return null;
+        }
+    })();
+    if (!name) return;
+    if (forwardedUploads.size >= FORWARDED_UPLOAD_LIMIT) {
+        const now = Date.now();
+        for (const [key, entry] of forwardedUploads) if (now - entry.at > FORWARDED_UPLOAD_TTL) forwardedUploads.delete(key);
+        if (forwardedUploads.size >= FORWARDED_UPLOAD_LIMIT) forwardedUploads.delete(forwardedUploads.keys().next().value as string);
+    }
+    forwardedUploads.set(name, { size: body.length, sha256: crypto.createHash("sha256").update(body).digest("base64url"), at: Date.now() });
+};
+
+export const forwardedUpload = (uploadedFilename: string) => {
+    const entry = forwardedUploads.get(uploadedFilename);
+    return entry && Date.now() - entry.at <= FORWARDED_UPLOAD_TTL ? entry : null;
+};
+
 export const federationUploadLimit = () => Math.min(bounded(Config.get().cdn.maxAttachmentSize, FETCH_HARD_LIMIT, FETCH_HARD_LIMIT), FETCH_HARD_LIMIT);
 
 export const forwardUpload = async (
@@ -265,6 +291,7 @@ export const forwardUpload = async (
     const release = uploadForwards.reserve(options.contentLength ?? limit);
     if (!release) throw new FederationMediaError(503, "Too many uploads are being forwarded right now", 5);
     let response: Response;
+    let forwarded = Buffer.alloc(0);
     try {
         const parts: Buffer[] = [];
         let size = 0;
@@ -274,12 +301,13 @@ export const forwardUpload = async (
             if (size > (options.contentLength ?? limit)) throw new FederationMediaError(413, "The file is too large to forward");
             parts.push(chunk);
         }
+        forwarded = Buffer.concat(parts, size);
         response = await fetchPublicUrl(
             url.href,
             {
                 method: "PUT",
                 redirect: "error",
-                body: Buffer.concat(parts, size),
+                body: forwarded,
                 headers: { "content-type": options.contentType || "application/octet-stream", "user-agent": "Meowcord federation media" },
             },
             0,
@@ -295,6 +323,7 @@ export const forwardUpload = async (
     }
     try {
         const body = Buffer.from(await response.arrayBuffer()).subarray(0, 64 * 1024);
+        if (response.ok) rememberForwardedUpload(url.pathname, forwarded);
         return { status: response.status, body, contentType: response.headers.get("content-type") };
     } finally {
         release();

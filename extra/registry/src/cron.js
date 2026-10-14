@@ -2,6 +2,7 @@ import { logEvent, nowIso, pruneExpired } from "./db.js";
 import { refreshInstance } from "./instances.js";
 import { allowsPrivateHosts, fetchJson, httpUrl, instanceIdFromUrl, parseInstanceId } from "./net.js";
 import { publish } from "./registry.js";
+import { writeHourlySnapshot } from "./stats.js";
 
 export function parseInstancesFile(document) {
     const list = Array.isArray(document) ? document : document?.instances;
@@ -67,5 +68,10 @@ export async function runScheduled(env) {
     }
     const { checked, ok } = await refreshKnownInstances(env);
     if (checked) await logEvent(env, { kind: "refresh", message: `checked ${checked} instances, ${ok} served a usable well-known document` });
+    try {
+        await writeHourlySnapshot(env);
+    } catch (error) {
+        await logEvent(env, { kind: "stats", level: "error", message: `hourly snapshot failed: ${error.message}` });
+    }
     await publish(env);
 }

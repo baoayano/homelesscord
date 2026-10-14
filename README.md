@@ -3,17 +3,21 @@
 </p>
 <h1 align="center">Meowcord</h1>
 
-**meowcord is a self-hosted discord clone with feature parity and message encryption.** it serves a custom patched Discord web client with Equicord from a local copy and rebrands that client as your instance. the default instance name is Meowcord, and custom names come from the instance configuration. anyone can sign up on your instance, log in with the real Discord UI and use it the way they use Discord, without a Discord account.
+meowcord is a self-hosted discord clone with feature parity, e2e encryption and federation.
+
+it serves a custom patched Discord web client with Equicord from a local copy and rebrands that client as your instance. anyone can sign up on your instance, log in with the real Discord UI and use it the way they use Discord, without a Discord account.
+
+you can also join servers, group chats, and add friends from other instances, as long as they're running meowcord and have their instance verified.
 
 **meowcord is currently in very early alpha.** right now, it's a big mess and not recommended for production use or anything other than testing. during this alpha, we'll also have an extremely permissive ai contribution policy, so that we can get as many people as possible to test it and contribute to it. else, we'd never get anywhere near discord feature parity.
 
-encryption has not yet been audited, and you will find plenty of bugs and issues. as a future warning, please open an issue or pr rather than trying to dunk on an alpha release on the internet.
+## join meowcord!!
 
-## joining an instance
+since meowcord is federated, no matter what instance you pick, you'll always be able to talk to anybody else, even on other instances :3
 
-you don't need to host anything to try meowcord. pick an instance from [instances.md](instances.md), open its link and sign up. accounts on one instance can talk to people on the others through federation.
+**start by [picking an instance from this list](instances.md) and signing up.** you can find servers to join in the Discovery tab.
 
-## getting started
+## self-hosting
 
 follow [the setup guide](docs/self-hosting/setup.md) for Docker, local development and the source archive. to run without Docker, [the native Linux guide](docs/self-hosting/native.md) sets the server up as a dedicated `meowcord` user with systemd, local PostgreSQL and an HTTPS reverse proxy, and covers voice, operator access, backups and updates. the server supports [PostgreSQL and SQLite](docs/self-hosting/databases.md).
 

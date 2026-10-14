@@ -4,6 +4,7 @@ import { Config, FieldErrors } from "@spacebar/util";
 import { emailDomainOf, isDeniedEmail, scoreSignup, SignupTracker } from "@spacebar/util/util/SignupSignals";
 import { recordAutomodAction } from "./instanceAutomod";
 import { captchaSolveTime } from "./localCap";
+import { rulePolicy } from "./automodPolicy";
 
 const PASSWORD_KEY = randomBytes(32);
 
@@ -11,7 +12,7 @@ export const signupTracker = new SignupTracker();
 
 export const signupPasswordKey = (password: string) => createHmac("sha256", PASSWORD_KEY).update(password, "utf8").digest("hex").slice(0, 16);
 
-export type SignupAssessment = ReturnType<typeof scoreSignup> & { summary: string };
+export type SignupAssessment = ReturnType<typeof scoreSignup> & { summary: string; wouldAction?: "hold" | "refuse" };
 
 const summarize = (result: ReturnType<typeof scoreSignup>) => `score ${result.score}: ${result.signals.map((signal) => signal.detail).join(", ")}`.slice(0, 200);
 
@@ -34,9 +35,11 @@ export async function assessSignup(input: {
         throw FieldErrors({ email: { code: "EMAIL_DOMAIN_NOT_ALLOWED", message: "This instance doesn't accept signups from this email provider. Use another email address." } });
     }
     const signup = { username: input.username, email: input.email, passwordKey: input.passwordKey, solveMs: captchaSolveTime(input.captchaToken) };
-    const result = scoreSignup(signup, config, signupTracker);
+    const scored = scoreSignup(signup, config, signupTracker);
     signupTracker.record(signup, config);
-    const assessment = { ...result, summary: summarize(result) };
+    const dryRun = rulePolicy("signupBot").dryRun && (scored.verdict === "hold" || scored.verdict === "refuse");
+    const result = dryRun ? { ...scored, verdict: "log" as const } : scored;
+    const assessment: SignupAssessment = { ...result, summary: summarize(result), wouldAction: dryRun ? (scored.verdict as "hold" | "refuse") : undefined };
     if (result.verdict === "refuse") {
         await recordAutomodAction({ username: input.username.slice(0, 64), rule: "signup_bot", term: assessment.summary, source: "registration", action: "block" }).catch(
             () => undefined,
@@ -57,5 +60,6 @@ export async function logSignupAssessment(user: { id: string; username: string }
         term: assessment.summary,
         source: "registration",
         action: assessment.verdict === "hold" ? "hold" : "log",
+        would_action: assessment.wouldAction === "refuse" ? "block" : (assessment.wouldAction ?? null),
     }).catch((error) => console.error("[Automod] couldn't log a signup", error));
 }

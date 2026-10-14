@@ -135,6 +135,16 @@ The AEAD additional data binds the channel id, the sender, the sender device and
 
 The encrypted payload is JSON with `content` and, when the message has them, `attachments` and `stickers`. Polls and clips aren't encrypted, so the attach menu disables "Create Poll" and clips in an encrypted DM and the server rejects them there.
 
+### Mentions
+
+The server can't read who a message mentions, so the sending browser lists them. Before encrypting, it collects every `<@id>` in the text outside code blocks that names another member of the conversation and puts those ids in the envelope's `mentions` field, in plaintext. Version 2 envelopes list canonical ids. The list is part of what the sender signs, after `backup`, as `{ "mentions": [...] }` with the ids sorted, and an envelope without mentions signs exactly what it signed before.
+
+The server accepts at most 100 ids, with no duplicates and no empty list. Every id has to be a current member of the conversation other than the sender, or the send fails with `E2EE_INVALID_ENVELOPE`. `allowed_mentions` still applies, so a reply that turns pings off mentions nobody. The server then fills `mentions` on the message the same way it does for plaintext, which gives the mentioned member the mention entry, the push notification in a muted conversation and the mention in the message object every client receives.
+
+After decrypting, the reader's browser keeps only the entries of `mentions` that the decrypted text names, plus the author of a replied-to message, and sets `mention_everyone` when the text has `@everyone` or `@here`. Discord's client then highlights the row like any other mention. A sender who lists someone the text doesn't name can still trigger that person's push notification, the same as writing the mention in the text, but the row isn't highlighted for them.
+
+This puts who was mentioned in the server's metadata, next to who sent what and when. The server already knows every member of a DM or group DM and counts every message there as a mention for unread badges, so the list only adds which of those members the sender named. Leaving the list out would cost the highlight in other browsers and the push notification in a muted group.
+
 ### Attachments
 
 Files go through Discord's normal cloud upload flow, and the client rewrites each step in the HTTP client hook:
@@ -150,6 +160,23 @@ After decrypting a message, the client matches each payload entry to the server 
 Edits keep the attachments of the decrypted original in the new payload. Removing one attachment sends a `PATCH` with only the kept attachment ids and `.bin` names and re-encrypts the payload without the removed entry. A message whose decrypted content is empty, such as a sticker or a voice message, is refreshed through Vencord's `updateMessage` after a local `MESSAGE_UPDATE`, because Discord's partial message update ignores empty content and sticker changes.
 
 Search in an encrypted DM never reaches the server. The client answers `GET /channels/:id/messages/search` and `POST /channels/:id/messages/search/tabs` itself from the decrypted copies of the last 1000 messages, matching every word of the query and the author filter.
+
+## Group membership
+
+### Members without keys
+
+A member who has never signed in since encryption existed has no device and no key backup, and nothing sent to them can ever be opened by them. A member whose devices are all signed out still has a key backup, and the envelope's `backup` list lets them read the message after their next login. Before each send the browser looks up every member's keys and decides:
+
+- When every other member of the conversation has neither an active device nor a key backup, nobody else could read the message. The browser refuses the send, keeps the draft and shows an error that names them. In a DM this is the only case.
+- When only some members are in that state, the message goes to everyone else, and a warning names the members who can't read it. The envelope skips their keys and the server accepts it, since it only requires keys for active devices.
+
+Before this rule a single member without keys stopped every send into a group with "Preparing private chat…" and no reason, and one member who signed out everywhere was enough to do it.
+
+### Members who left a group
+
+The content key of every message is wrapped to every member's devices when it is sent, so a member who stays can still open the messages of someone who left. Opening one needs the sender's device keys to check the signature, and those come from `POST /e2ee/keys/query`. When a member leaves a DM or group DM, or is removed, a trigger on `recipients` records them in `former_recipients` with the channel, the host instance for a mirror and the time. The directory answers for a former member to anyone who is a member of that channel now. A stranger, or someone who only shares a different conversation, still gets nothing. Someone added after the member left also gets their keys. That only lets them check the signatures of messages they can already see and can't open. The migration that adds the table fills it from the authors of encrypted messages who are no longer members.
+
+Across instances the member's home answers the key request when the asking instance hosts a group the member left, or when one of the asking instance's users is still in that group on the home's mirror. The asking instance sends the left group as its channel hint when the user has no current conversation there. When the home refuses with 403, an instance keeps its cached copy of a former member's keys instead of deleting it, so old messages keep verifying. One case is still open as ENC-022: a third instance that never cached the keys, asking a home whose last local member has left the group, gets nothing, because the home deleted its mirror.
 
 ## Client integration
 
@@ -171,7 +198,7 @@ The client plugin derives its settings layout nodes from Equicord's entry builde
 ## Server work
 
 - Entities `E2eeIdentity` and `E2eeDevice`, a channel encryption state, and a nullable `encrypted` jsonb column on messages, plus a migration.
-- Routes under `users/@me/e2ee` for the identity, devices and prekeys, `POST /e2ee/keys/query` limited to users who share a channel or relationship, and `PUT /channels/:id/e2ee`.
+- Routes under `users/@me/e2ee` for the identity, devices and prekeys, `POST /e2ee/keys/query` limited to users who share a channel or relationship or who left a channel the caller is in, and `PUT /channels/:id/e2ee`.
 - `handleMessage` validates envelopes. It checks the shape, a size limit of `limits.e2ee.maxEnvelopeBytes` (64 KiB by default), that the sender device belongs to the sender and isn't revoked, and that no recipient device is missing. Then it forces the fallback content, empty embeds and the suppress-embeds flag. It also rejects plaintext sends into encrypted channels, and rejects forwards, polls, plaintext stickers, attachments that aren't opaque `.bin` files, and components there.
 - Gateway events `E2EE_DEVICES_UPDATE`, `E2EE_IDENTITY_UPDATE`, `E2EE_TRUST_UPDATE`, `CHANNEL_E2EE_UPDATE` and `E2EE_LINK_REQUEST`/`E2EE_LINK_RESPONSE`.
 - `POST /users/@me/e2ee/password` to check the account password and `POST /users/@me/e2ee/reset` to start over with a new identity. `PUT /channels/:id/e2ee` answers `E2EE_RECIPIENT_NO_DEVICES` with the `user_ids` that have no active device, so the client can name them.
@@ -224,7 +251,7 @@ Instance automod only reads plaintext. It skips encrypted messages and only acts
 
 ## What it doesn't protect
 
-The server ships the client JavaScript, so a malicious operator can ship a client that leaks keys. That is the limit of any E2EE on the web. Publishing the patch bundle hash and a pinning extension or desktop wrapper reduce it. Metadata is visible to the server: who talks to whom, when, sizes, reactions and read state. For files that includes the number of attachments, each ciphertext size, which is the file size plus 16 bytes per 64 KiB, and the voice message flag. Sticker images still load from the instance's CDN, so the server sees which sticker a client renders. In a conversation with users of other instances, the host and every member's home see this metadata. Default mode trusts the server key directory, including later identity changes and the server's claim that a requesting browser is signed in to the same account. A compromised server could substitute identities or authorize a device link; default mode does not independently prove those claims to the user. Strict safety mode adds contact pinning, safety-number comparison and explicit approval instead. Trusted-server mode escrows the backup secret encrypted at rest under a master key kept outside the database. The strict browser option skips recovery upload and retrieval; it does not delete an escrow previously published by another trusted browser. Disabling server trust prevents recovery endpoints from accepting or returning secrets. Discord's own analytics and Sentry code runs in the same page, so their payloads need auditing to keep plaintext out.
+The server ships the client JavaScript, so a malicious operator can ship a client that leaks keys. That is the limit of any E2EE on the web. Publishing the patch bundle hash and a pinning extension or desktop wrapper reduce it. Metadata is visible to the server: who talks to whom, when, sizes, reactions, read state and which members a message mentions. For files that includes the number of attachments, each ciphertext size, which is the file size plus 16 bytes per 64 KiB, and the voice message flag. Sticker images still load from the instance's CDN, so the server sees which sticker a client renders. In a conversation with users of other instances, the host and every member's home see this metadata. Default mode trusts the server key directory, including later identity changes and the server's claim that a requesting browser is signed in to the same account. A compromised server could substitute identities or authorize a device link; default mode does not independently prove those claims to the user. Strict safety mode adds contact pinning, safety-number comparison and explicit approval instead. Trusted-server mode escrows the backup secret encrypted at rest under a master key kept outside the database. The strict browser option skips recovery upload and retrieval; it does not delete an escrow previously published by another trusted browser. Disabling server trust prevents recovery endpoints from accepting or returning secrets. Discord's own analytics and Sentry code runs in the same page, so their payloads need auditing to keep plaintext out.
 
 Password mode trades some of that protection for convenience. Whoever holds a copy of the database has the salt and the sealed secret, so they can guess passwords offline, at the cost of one 64 MiB Argon2id run per guess. A weak or reused password makes the encryption about as strong as that password. Recovery-code mode avoids this, because 160 random bits can't be guessed, but losing the code and every signed-in device means losing the history. The backup secret also sits in each unlocked browser's IndexedDB, so malware with access to the profile can read it there.
 
@@ -245,7 +272,7 @@ Development setup seeds an empty private DM and posts sample messages only in th
 PORT=<port> E2EE_TEST_DATABASE_NAME=<db> bun scripts/dev/e2ee-test.mjs
 ```
 
-The harness registers disposable accounts and refuses an unexpected database before writing.
+The harness registers disposable accounts and refuses an unexpected database before writing. One phase builds a group DM with a member who sends a message and leaves, then checks that a member who was never their friend reads it, that a mention is listed in the envelope and on the message and is highlighted for the member it names, that a send goes through with a warning after a member with no keys joins, and that a DM with that member refuses the send. `scripts/tests/e2ee-former-members.test.cjs`, `e2ee-mentions.test.cjs` and `e2ee-unreadable-members.test.cjs` cover the same rules without a browser.
 
 `scripts/dev/federation-e2ee-test.mjs` starts two instances on their own new databases and runs the same browser flows across them: a DM both ways with edits, an encrypted image from each side, a text file from the member whose home relays it, mentions inside encrypted text in both directions, safety numbers in strict mode, a group DM with members on both instances, history after a password login on a fresh browser and a report the host verifies. It drops its databases and browser profiles at the end.
 

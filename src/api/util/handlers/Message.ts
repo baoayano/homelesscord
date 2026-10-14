@@ -1082,7 +1082,7 @@ async function handleMessageMentionsAsync(message: Message, allowed?: AllowedMen
         if (referencedMessage && referencedMessage.author_id !== message.author_id && allowed?.replied_user !== false) {
             const repliedUser =
                 referencedMessage.author?.id === referencedMessage.author_id ? referencedMessage.author : await User.findOne({ where: { id: referencedMessage.author_id } });
-            if (repliedUser) message.mentions.push(repliedUser);
+            if (repliedUser && !message.mentions.some((user) => user.id === repliedUser.id)) message.mentions.push(repliedUser);
         }
 
         if (message.embeds[0]?.type === EmbedType.poll_result) {

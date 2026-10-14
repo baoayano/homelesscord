@@ -15,12 +15,13 @@ export interface ContactInput {
     at?: number;
 }
 
-export const SPAM_ACTION_ORDER: AutomodSpamAction[] = ["log", "delete", "timeout", "suspend", "disable"];
+export const SPAM_ACTION_ORDER: AutomodSpamAction[] = ["log", "delete", "timeout", "hold", "suspend", "disable"];
 
 export const strongerSpamAction = (a: AutomodSpamAction, b: AutomodSpamAction) => (SPAM_ACTION_ORDER.indexOf(a) >= SPAM_ACTION_ORDER.indexOf(b) ? a : b);
 
 export function escalateSpamAction(action: AutomodSpamAction): AutomodSpamAction {
     if (action === "disable" || action === "suspend") return action;
+    if (action === "timeout" || action === "hold") return "suspend";
     return SPAM_ACTION_ORDER[SPAM_ACTION_ORDER.indexOf(action) + 1];
 }
 
@@ -37,6 +38,8 @@ export interface SpamInput {
     dm: boolean;
     edit?: boolean;
     attachments?: string[];
+    ignoredLinkHosts?: readonly string[];
+    knownRecipient?: boolean;
 }
 
 export interface SpamMessageRef {
@@ -54,6 +57,7 @@ export interface SpamHit {
     repeat: boolean;
     detail: Record<string, number>;
     term?: string;
+    wouldAction?: AutomodSpamAction;
 }
 
 interface UserEntry extends SpamMessageRef {
@@ -67,6 +71,7 @@ interface UserEntry extends SpamMessageRef {
     loose: string;
     substantial: boolean;
     dm: boolean;
+    knownRecipient: boolean;
     attachments: string[];
 }
 
@@ -89,25 +94,43 @@ const HOUR = 60 * 60 * 1000;
 
 const LINK = /https?:\/\/(?:[^\s/@<>]+@)?([^\s/:?#<>]+)[^\s<>]*/gi;
 const INVITE = /(?:discord(?:app)?\.com\/invite|discord\.gg|\/invite)\/[\w-]{2,}/i;
-const EVERYONE = /@(?:everyone|here)(?![\p{L}\p{N}_])/u;
+const EVERYONE = /(?<![\p{L}\p{N}_.+-])@(?:everyone|here)(?![\p{L}\p{N}_])/u;
+const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
 
-export const countSpamMentions = (content: string) => new Set([...content.matchAll(/<@(?:!|&)?(\d+)>/g)].map((match) => match[0].replace("!", ""))).size;
+const withoutCode = (content: string) => content.replace(CODE, " ");
 
-export const hasEveryoneMention = (content: string) => EVERYONE.test(content);
+export const countSpamMentions = (content: string) => new Set([...withoutCode(content).matchAll(/<@(?:!|&)?(\d+)>/g)].map((match) => match[0].replace("!", ""))).size;
+
+export const hasEveryoneMention = (content: string) => EVERYONE.test(withoutCode(content));
 
 export const hasInviteLink = (content: string) => INVITE.test(content);
 
 export const countLinks = (content: string) => [...content.matchAll(LINK)].length;
 
-export function spamFingerprint(content: string | null | undefined) {
-    const text = (content ?? "")
-        .normalize("NFKC")
+const linkHost = (host: string) =>
+    host
         .toLowerCase()
+        .replace(/^www\./, "")
+        .replace(/\.$/, "");
+
+export function withoutIgnoredLinks(content: string, ignored: readonly string[] = []) {
+    if (!ignored.length) return content;
+    const hosts = ignored.map(linkHost);
+    return content.replace(LINK, (link: string, host: string) => {
+        const name = linkHost(host);
+        return !INVITE.test(link) && hosts.some((entry) => name === entry || name.endsWith(`.${entry}`)) ? " " : link;
+    });
+}
+
+export function spamFingerprint(content: string | null | undefined) {
+    const source = (content ?? "").normalize("NFKC").toLowerCase();
+    const bare = !/\p{L}/u.test(source.replace(LINK, " ").replace(/<a?:\w+:\d+>|<(?:@[!&]?|#)\d+>|@(?:everyone|here)/g, " "));
+    const text = source
         .replace(/\p{Cf}/gu, "")
         .replace(/<a?:(\w+):\d+>/g, " $1 ")
         .replace(/<(?:@[!&]?|#)\d+>/g, " ")
         .replace(/@(?:everyone|here)/g, " ")
-        .replace(LINK, (_, host: string) => ` ${host.replace(/^www\./, "").replace(/\.$/, "")} `)
+        .replace(LINK, (link: string, host: string) => ` ${linkHost(host)}${bare ? link.slice(link.indexOf(host) + host.length).split("#")[0] : ""} `)
         .replace(/\p{N}+/gu, " ")
         .replace(/[^\p{L}.]+/gu, " ")
         .replace(/\.(?=\s|$)|(?<=\s|^)\./g, " ")
@@ -118,6 +141,9 @@ export function spamFingerprint(content: string | null | undefined) {
     const words = [...new Set(text.split(" ").filter((word) => word.length >= 3))].sort();
     return { exact: text, loose: words.length >= 3 ? words.join(" ") : "" };
 }
+
+const looksCoordinated = (group: { users: string[]; messages: SpamMessageRef[] }, plain: boolean) =>
+    !plain || new Set(group.messages.map((message) => message.channel_id)).size > 1 || group.messages.length > group.users.length;
 
 export class SpamDetector {
     private users = new Map<string, UserEntry[]>();
@@ -176,7 +202,7 @@ export class SpamDetector {
     inspect(input: SpamInput, config: AutomodSpamConfiguration): SpamHit[] {
         const now = input.at ?? Date.now();
         this.sweep(now, config);
-        const content = input.content ?? "";
+        const content = withoutIgnoredLinks(input.content ?? "", input.ignoredLinkHosts);
         const age = now - input.accountCreatedAt;
         const exempt = (days: number) => days > 0 && age >= days * DAY;
         const { exact, loose } = spamFingerprint(content);
@@ -196,6 +222,7 @@ export class SpamDetector {
             loose,
             substantial: link || exact.length > 0,
             dm: input.dm,
+            knownRecipient: !!input.knownRecipient,
             attachments: [...new Set(input.attachments ?? [])],
         };
 
@@ -242,7 +269,7 @@ export class SpamDetector {
         const flood = config.flood;
         if (flood.enabled && !exempt(flood.exemptAccountAgeDays)) {
             const burst = posts(flood.windowSeconds);
-            const spread = posts(flood.channelWindowSeconds);
+            const spread = entry.dm ? [] : posts(flood.channelWindowSeconds).filter((item) => !item.dm && item.guild_id === entry.guild_id);
             const channels = new Set(spread.map((item) => item.channel_id)).size;
             if (burst.length >= flood.messageLimit)
                 hits.push(this.hit("flood", flood.action, [input.user_id], own(burst), { messages: burst.length, channels }, now, flood.windowSeconds));
@@ -273,16 +300,17 @@ export class SpamDetector {
             return list;
         });
 
-        const burstHit = burstConfig.enabled && (entry.link || entry.exact.length >= burstConfig.minLength) ? this.burstOf(groups, now, burstConfig) : null;
+        const plain = !entry.link && !entry.invite && !entry.mentions && !entry.everyone;
+        const burstHit = burstConfig.enabled && (entry.link || entry.exact.length >= burstConfig.minLength) ? this.burstOf(groups, now, burstConfig, plain) : null;
         if (burstHit)
             hits.push(this.hit("new_account_burst", burstConfig.action, burstHit.users, burstHit.messages, { accounts: burstHit.users.length }, now, burstConfig.windowSeconds));
         else if (duplicates.enabled && (entry.link || entry.exact.length >= duplicates.minLength) && !exempt(duplicates.exemptAccountAgeDays)) {
             const mine = posts(duplicates.windowSeconds).filter((item) => item.exact === entry.exact || (!!entry.loose && item.loose === entry.loose));
             const channels = new Set(mine.map((item) => item.channel_id)).size;
             const best = this.bestGroup(groups, now - duplicates.windowSeconds * 1000, (item) => !this.isOlder(item, now, duplicates.exemptAccountAgeDays));
-            if (best.users.length >= duplicates.accountLimit)
+            if (best.users.length >= duplicates.accountLimit && looksCoordinated(best, plain))
                 hits.push(this.hit("duplicate", duplicates.action, best.users, best.messages, { accounts: best.users.length, channels }, now, duplicates.windowSeconds));
-            else if (channels >= duplicates.channelLimit)
+            else if (!input.moderator && channels >= duplicates.channelLimit)
                 hits.push(this.hit("duplicate", duplicates.action, [input.user_id], own(mine), { accounts: 1, channels }, now, duplicates.windowSeconds));
         }
 
@@ -314,8 +342,8 @@ export class SpamDetector {
         }
 
         const dms = config.dms;
-        if (dms.enabled && entry.dm && entry.exact.length >= dms.minLength && !exempt(dms.exemptAccountAgeDays)) {
-            const same = posts(dms.windowSeconds).filter((item) => item.dm && item.exact === entry.exact);
+        if (dms.enabled && entry.dm && !entry.knownRecipient && entry.exact.length >= dms.minLength && !exempt(dms.exemptAccountAgeDays)) {
+            const same = posts(dms.windowSeconds).filter((item) => item.dm && !item.knownRecipient && item.exact === entry.exact);
             const recipients = new Set(same.map((item) => item.channel_id)).size;
             if (dms.sameContentLimit > 0 && recipients >= dms.sameContentLimit)
                 hits.push(this.hit("dm_spam", dms.action, [input.user_id], own(same), { same_dms: recipients }, now, dms.windowSeconds));
@@ -324,10 +352,10 @@ export class SpamDetector {
         return this.finish(hits);
     }
 
-    private burstOf(groups: ContentEntry[][], now: number, config: AutomodSpamConfiguration["burst"]) {
+    private burstOf(groups: ContentEntry[][], now: number, config: AutomodSpamConfiguration["burst"], plain: boolean) {
         if (config.exemptAccountAgeDays <= 0) return null;
         const best = this.bestGroup(groups, now - config.windowSeconds * 1000, (item) => !this.isOlder(item, now, config.exemptAccountAgeDays));
-        return best.users.length >= config.accountLimit ? best : null;
+        return best.users.length >= config.accountLimit && looksCoordinated(best, plain) ? best : null;
     }
 
     private isOlder(item: ContentEntry, now: number, days: number) {

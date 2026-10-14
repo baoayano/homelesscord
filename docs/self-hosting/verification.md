@@ -1,43 +1,51 @@
 # Getting verified
 
-Global discovery has two levels of trust, and each one is checked by a different person.
+As an admin of a verified instance, you can approve servers to get into the global discovery, and your instance can federate with any other verified instance.
 
-1. **We approve instances.** The registry at `https://meowcord-registry.tiag.workers.dev` keeps the list of approved instances. Only an approved instance can federate, and only its servers show up under Other instances on everyone else's Discover page.
-2. **Instance admins verify servers.** An approved instance publishes the servers its own admins verified. We don't review those servers one by one, so an instance's admins answer for what they verify.
+To make sure this doesn't get abused, we manually verify every instance that opts in to federation. However, we don't manually verify servers that you approve before them getting into the global discovery.
 
-We can remove or block any single server, user or whole instance at any time, whatever the instance's admins decided. See [emergency removals and blocks](#emergency-removals-and-blocks).
+## Pre-verification checklist
 
-## Getting your instance approved
+Before submitting for verification, make sure all of these have been done:
 
-### What we check
+- You are running an up-to-date Meowcord instance with federation on over HTTPs, and haven't disabled sign-up CAPTCHAs, pride flags or put anything behind a paywall.
 
-We approve an instance when all of these hold:
+- Your instance must be actively moderated, and you must be able to be reached by the main project's moderators. Please specify your Discord username on your PR.
 
-- It runs on a real domain over HTTPS. Instances on localhost, an IP address or a private name never announce and can't be approved.
-- It serves `/.well-known/meowcord` with federation on and its key, which a current Meowcord does by default.
-- It runs a recent Meowcord. The registry shows the version each instance reports, and we ask for an update when it's far behind `main`.
-- Registration asks for a captcha. Cap is on by default, see [captcha.md](../features/captcha.md).
-- Someone moderates it and we can reach them. For a pull request that's the GitHub account that opened it. Otherwise put a contact in the instance description, which the instance serves in its well-known document.
-- It follows the rules of the main project: it isn't built for spam, harassment or illegal content, and it doesn't reverse the owner policy in [CLAUDE.md](../../CLAUDE.md), such as putting features behind a payment or hiding pride flags.
+- Your instance **must** have a publicly accessible Terms of Service which explicitly bans the following:
 
-### How to ask
+  - Sexual content, including pornography, sexually explicit material, and sexualized imagery. This includes non-consensual intimate media, such as sharing or threatening to share private sexual images, including AI-generated or deepfake ones.
+  - Harassment, doxxing, threats and violence, including incitement to violence, glorifying violent attacks, or promoting terrorist or violent extremist groups.
+  - Hateful conduct, including attacking or demeaning people based on race, ethnicity, nationality, religion, sex, gender identity, sexual orientation, disability, or age. This includes racial slurs, misgendering, and deadnaming.
+  - Self-harm promotion, including encouraging or instructing suicide, self-harm, or eating disorders. Supportive and recovery discussion is fine.
+  - Spam, scams and manipulation, including unsolicited advertising, repetitive posting, automated or bot activity, fake engagement, vote or metric manipulation, phishing, fake giveaways, pyramid schemes, and deceptive financial offers.
+  - Impersonation, including pretending to be another person, brand, or organization in a misleading way.
+  - Anything illegal under Portuguese law or applicable EU law.
+  - Creating new accounts or otherwise circumventing bans, suspensions, or these rules.
 
-You can do one of these or both.
+  Not enforcing any of these properly may result in a permanent or temporary ban from verification.
 
-- **Open a pull request.** Add your instance to `instances.json` at the repository root with `id`, `name`, `url` and `source_url`, run `bun scripts/instances-md.mjs` to regenerate `instances.md`, and open a pull request with both files. The admin dashboard's Federation page has the exact entry for your instance, with a Copy entry button and a link that opens the file for editing on GitHub. Once we merge it, the registry imports `instances.json` at minute 17 of the next hour and treats your instance as approved.
-- **Let your instance announce itself.** A public instance with federation and `federation.announce` on announces itself on start, once a day and when an admin presses Send to registry on the Federation page. It shows up for review as pending, and nothing about it is published until we approve it in the registry's admin pages.
+* We may still deny any verification requests regardless of the rules above, or remove verified instances at any time for any reason.
 
-Your instance is `listed` once approved and `active` once the registry has read its key from `/.well-known/meowcord`. Only `active` instances federate. The Federation page shows the registry's view of your instance and the last error from the registry, if any.
+## Submitting your request
 
-### Keeping it approved
+If you meet all of the above requirements, you're eligible to ask for approval!
+
+You should now open a pull request. Add your instance to `instances.json` at the repository root with `id`, `name`, `url` and `source_url`, run `bun scripts/instances-md.mjs` to regenerate `instances.md`, and open a pull request with both files.
+
+Once you get approved, your instance will be added to the registry and should propagate to every other verified instance within a few minutes. This may take up to an hour.
+
+## Keeping it approved
 
 - **Keep `federation.key`.** It sits next to `jwt.key` in the working directory, or in the `state` volume under Docker. Back both up. When an approved instance starts serving a different key, the registry keeps publishing the old key, marks the instance "new key waiting" and ignores its discovery list until we confirm the change with you. Tell us in an issue when you rotate the key on purpose. This stops someone who takes over your domain from speaking for your instance.
 - **Keep updating.** An old version can miss protocol changes and stop federating.
+- **Keep your admin contacts current.** Every announce sends the registry up to 10 handles such as `meow@meow.example` for your admins. By default these are the accounts with the operator right. The registry admins see them privately, on your instance's entry in the registry dashboard, and can add them to a "Meowcord Admins" group DM with the admins of every approved instance. The handles are never published in the registry document. To send other accounts, list their local usernames, one per line, under Registry contacts in the admin dashboard's Federation page, or set `federation.contacts` in the config. With announcing on, saving the list announces again 30 seconds later, and the Announce card shows which handles go out. An account that leaves the group DM can be added back the next time the registry admins open it.
+- **Decide whether to share counts.** Every announce also sends how many local users and servers your instance has and how many messages its users sent in the last 24 hours. The registry admins see these numbers on their dashboard and never publish them. To stop sending them, turn off "Send user, server and message counts with each announce" in the admin dashboard's Federation page, or set `federation.announceStats` to false.
 - **Answer reports.** We suspend an instance whose admins don't act on reports about it. A suspended instance stays in the document but other instances stop federating with it until we approve it again.
 
 ## Getting a server verified
 
-This part happens on one instance, between the server owner and that instance's admins.
+If you operate an instance and would like a server in it to be shown to listed to all other instances in discovery, here's what you should do:
 
 1. The owner opens Server Settings, Other instances, and turns on Show on other instances. The server gets a permanent invite if it has none, and people from other instances can join through that invite right away.
 2. The server shows "waiting for this instance's admins" in that section.
@@ -58,19 +66,3 @@ Verifying a server puts your instance's name behind it. Before you press Verify,
 Press Take back to unverify a server. It leaves your discovery list right away, your instance announces 30 seconds later, and the registry publishes a document without it. Turning the switch off as the owner has the same effect.
 
 By default an instance shows every server the registry lists. Set `federation.discovery.verification` to `instance` to also verify servers from other instances yourself before your users see them. The Federation page then lists them with the same Verify and Take back buttons.
-
-## Emergency removals and blocks
-
-These work no matter what the instance's admins decided.
-
-| Who | What | Effect |
-| --- | --- | --- |
-| Us, in the registry | Remove a server from discovery | It leaves Other instances everywhere at the next publish. Joins through its invite still work. |
-| Us, in the registry | Block a server or user | It leaves discovery, and every instance refuses its joins and federation. |
-| Us, in the registry | Suspend an instance | It stops federating until we approve it again. |
-| Us, in the registry | Block an instance | Every instance refuses its relays, joins and inbox requests, and hides its servers and users. |
-| An instance's admins | Block an instance, server or user locally | Only that instance stops showing it and talking to it. |
-
-The registry publishes a new signed document right after a block when an operator presses Sign and publish now, and at minute 17 of every hour otherwise. Instances fetch the document every 5 minutes. To report a server, user or instance, open an issue on GitHub with its link or canonical id, such as `@123@meow.example`.
-
-See [registry.md](registry.md) for how the registry works and how we run it, and [federation.md](../features/federation.md) for everything else about federation.

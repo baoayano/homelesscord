@@ -78,6 +78,7 @@ function tokenFixture() {
             OrmUtils: { keysToObject: (keys) => Object.fromEntries(keys.map((key) => [key, true])) },
         },
         "@spacebar/util/util/ProcessLifecycle": { ProcessLifecycle: {} },
+        "./StaffRoles": { isStaffAccount: () => false, loadStaffRoles: async () => ({}) },
     });
     const token = jwt.sign({ id: user.id, iat: Math.floor(Date.now() / 1000) }, "isolated-regression-secret");
     return {

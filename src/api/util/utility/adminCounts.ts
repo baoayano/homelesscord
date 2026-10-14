@@ -1,4 +1,5 @@
-import { Guild, Member, Message, Report, RESOLVED_INCIDENT_STATES, StatusIncident, User } from "@spacebar/database";
+import { Guild, Member, Message, Report, RESOLVED_INCIDENT_STATES, Session, StatusIncident, User } from "@spacebar/database";
+import { PRESENCE_STALE_AFTER_MS } from "@spacebar/util";
 import { In, IsNull, Not } from "typeorm";
 
 export const ADMIN_COUNTS_TTL_MS = 30000;
@@ -26,7 +27,7 @@ export function cachedAsync<T>(load: () => Promise<T>, ttl: number, now = Date.n
 }
 
 export const adminCounts = cachedAsync(async () => {
-    const [users, remote_users, guilds, remote_guilds, messages, members, disabled_users, open_incidents, open_reports] = await Promise.all([
+    const [users, remote_users, guilds, remote_guilds, messages, members, disabled_users, open_incidents, open_reports, online] = await Promise.all([
         User.count({ where: { bot: false, federated_instance: IsNull() } }),
         User.count({ where: { federated_instance: Not(IsNull()) } }),
         Guild.count({ where: { federated_instance: IsNull() } }),
@@ -36,6 +37,13 @@ export const adminCounts = cachedAsync(async () => {
         User.count({ where: { disabled: true, federated_instance: IsNull() } }),
         StatusIncident.count({ where: { status: Not(In(RESOLVED_INCIDENT_STATES)) } }),
         Report.count({ where: { status: "open" } }),
+        Session.createQueryBuilder("session")
+            .select("COUNT(DISTINCT session.user_id)", "online")
+            .where("session.status <> :offline", { offline: "offline" })
+            .andWhere("session.is_admin_session = :admin", { admin: false })
+            .andWhere("session.last_seen > :since", { since: new Date(Date.now() - PRESENCE_STALE_AFTER_MS) })
+            .getRawOne<{ online: string }>()
+            .then((row) => Number(row?.online ?? 0)),
     ]);
-    return { users, remote_users, guilds, remote_guilds, messages, members, disabled_users, open_incidents, open_reports };
+    return { users, remote_users, guilds, remote_guilds, messages, members, disabled_users, open_incidents, open_reports, online };
 }, ADMIN_COUNTS_TTL_MS);

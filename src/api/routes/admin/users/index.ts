@@ -87,6 +87,26 @@ export const paginationQuery = (value: unknown, name: string, fallback: number):
 };
 
 const USER_FILTERS = ["all", "disabled", "suspended", "pending", "with_reason", "bots", "verified", "unverified"] as const;
+const USER_SORTS: Record<string, [string, "ASC" | "DESC"][]> = {
+    newest: [
+        ["user.created_at", "DESC"],
+        ["user.id", "DESC"],
+    ],
+    oldest: [
+        ["user.created_at", "ASC"],
+        ["user.id", "ASC"],
+    ],
+    name: [
+        ["user.username", "ASC"],
+        ["user.id", "ASC"],
+    ],
+};
+
+export const parseUserHandle = (q: string) => {
+    const handle = /^@?(.+?)#(\d{1,4})$/.exec(q);
+    if (handle) return { text: handle[1], discriminator: handle[2] };
+    return { text: q.startsWith("@") && q.length > 1 ? q.slice(1) : q, discriminator: undefined };
+};
 
 export const userSearchQuery = (req: Request) => {
     const q = scalarQuery(req.query.q, "q", "").trim();
@@ -97,11 +117,16 @@ export const userSearchQuery = (req: Request) => {
     const ipText = scalarQuery(req.query.ip, "ip", "").trim();
     const ip = ipText ? parseIp(ipText) : parseIp(q);
     if (ipText && !ip) throw new HTTPError("ip must be an IPv4 or IPv6 address", 400);
+    const sort = scalarQuery(req.query.sort, "sort", "newest");
+    if (!Object.hasOwn(USER_SORTS, sort)) throw new HTTPError("sort must be newest, oldest or name", 400);
     const origin = parseOrigin(req.query.origin);
     const exactId = !ip && /^\d{15,20}$/.test(q);
-    const searchPattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+    const handle = parseUserHandle(q);
+    const searchPattern = `%${handle.text.replace(/[\\%_]/g, "\\$&")}%`;
 
-    const query = User.createQueryBuilder("user").orderBy("user.created_at", "DESC").addOrderBy("user.id", "DESC");
+    const [[firstColumn, firstOrder], ...tieBreaks] = USER_SORTS[sort];
+    const query = User.createQueryBuilder("user").orderBy(firstColumn, firstOrder);
+    for (const [column, order] of tieBreaks) query.addOrderBy(column, order);
 
     if (ip) {
         const ips = ipVariants(ip);
@@ -117,6 +142,9 @@ export const userSearchQuery = (req: Request) => {
     } else if (exactId) {
         if (BigInt(q) > 9223372036854775807n) throw new HTTPError("The user id is outside the supported range", 400);
         query.where("user.id = :id", { id: q });
+    } else if (handle.discriminator) {
+        query.where(`${sqlLike("user.username", ":q")}`, { q: searchPattern });
+        query.andWhere("user.discriminator = :discriminator", { discriminator: handle.discriminator });
     } else if (q)
         query.where(
             new Brackets((qb) =>
@@ -163,7 +191,7 @@ router.get(
         right: "VIEW_USERS",
         spacebarOnly: true,
         description:
-            "Search users on this instance. `q` matches an exact id, an IP address, or part of a username, display name or email. `ip` lists the accounts that registered on or signed in from an address.",
+            "Search users on this instance. `q` matches an exact id, an IP address, a handle such as `@name` or `name#1234`, or part of a username, display name or email. `ip` lists the accounts that registered on or signed in from an address.",
         query: {
             q: { type: "string", required: false },
             ip: { type: "string", required: false, description: "An IPv4 or IPv6 address" },
@@ -177,6 +205,7 @@ router.get(
                 required: false,
                 description: "local (default) lists accounts of this instance, remote lists users of other instances stored here, all lists both. An exact id search ignores it",
             },
+            sort: { type: "string", required: false, description: "newest (default), oldest or name" },
             limit: { type: "number", required: false },
             offset: { type: "number", required: false },
         },

@@ -1,6 +1,7 @@
 import { FindOptionsWhere } from "typeorm";
 import { OPCODES, Payload, WebSocket } from "@spacebar/gateway";
 import { Session } from "@spacebar/database";
+import { broadcastPresence, PRESENCE_STALE_AFTER_MS } from "@spacebar/util";
 import { setHeartbeat } from "../util/Heartbeat";
 import { Send } from "../util/Send";
 
@@ -29,9 +30,14 @@ export async function onHeartbeat(this: WebSocket, data: Payload) {
     await Send(this, { op: 11, d: {} });
     const now = Date.now();
     if (this.session && now - (this.lastSeenWrite ?? 0) >= LastSeenInterval) {
+        const lapsed = now - (this.lastSeenWrite ?? this.session.last_seen?.getTime() ?? now) > PRESENCE_STALE_AFTER_MS;
         this.lastSeenWrite = now;
-        Session.update({ session_id: this.session.session_id, user_id: this.user_id } as FindOptionsWhere<Session>, { last_seen: new Date() }).catch((e) =>
-            console.error(`[Gateway/${this.user_id}] failed to record heartbeat`, e),
-        );
+        const { status, activities, client_status } = this.session;
+        Session.update({ session_id: this.session.session_id, user_id: this.user_id } as FindOptionsWhere<Session>, {
+            last_seen: new Date(),
+            ...(lapsed && { status, activities, client_status }),
+        })
+            .then(() => (lapsed && status !== "offline" ? broadcastPresence(this.user_id) : undefined))
+            .catch((e) => console.error(`[Gateway/${this.user_id}] failed to record heartbeat`, e));
     }
 }

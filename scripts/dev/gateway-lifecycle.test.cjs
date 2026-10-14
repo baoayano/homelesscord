@@ -57,7 +57,9 @@ function connectionHarness() {
         "src/gateway/events/Connection.ts",
         {
             "@spacebar/gateway": { genSessionId: () => "test" },
-            "../util/ClientAddress": load("src/gateway/util/ClientAddress.ts", {}),
+            "../util/ClientAddress": load("src/gateway/util/ClientAddress.ts", {
+                "../../util/util/networking/Cloudflare": require("../../src/util/util/networking/Cloudflare.ts"),
+            }),
             "../util/Send": { Send: async (socket, payload) => sends.push({ socket, payload }) },
             "../util/Constants": { CLOSECODES, OPCODES },
             "../util/Heartbeat": { setHeartbeat() {} },

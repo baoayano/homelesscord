@@ -42,6 +42,7 @@ const SPAM_ACTIONS = [
   ["log", "Log only"],
   ["delete", "Delete the messages"],
   ["timeout", "Delete and time out"],
+  ["hold", "Delete and hold the account for review"],
   ["suspend", "Delete and suspend the account"],
   ["disable", "Delete and disable the account"],
 ];
@@ -159,10 +160,53 @@ const INCIDENT_ACTIONS = [
   ["ban_ip", "Ban IP addresses", "Ban the IP addresses of"],
 ];
 const AUTOMOD_LIST_ACTIONS = [
+  ["log", "Log only"],
   ["delete", "Delete the message"],
+  ["timeout", "Delete the message and time out the account"],
+  ["hold", "Delete the message and hold the account for review"],
   ["suspend", "Delete the message and suspend the account"],
+  ["disable", "Delete the message and disable the account"],
   ["name", "Block names only"],
 ];
+const POLICY_RULES = {
+  everyoneSpam: ["@everyone and @here spam", "everyone"],
+  mentionSpam: ["Mass mentions", "mentions"],
+  flood: ["Message flood", "flood"],
+  duplicate: ["Repeated content", "duplicates"],
+  linkSpam: ["Link and invite spam", "links"],
+  newAccountBurst: ["New account burst", "burst"],
+  duplicateAttachment: ["Repeated files", "attachments"],
+  dmSpam: ["DM and friend request spam", "dms"],
+  scamLink: ["Scam and phishing links"],
+  slurs: ["Slur auto-ban"],
+  wordLists: ["Word lists"],
+  quarantine: ["New account quarantine"],
+  verificationLevel: ["Server verification level"],
+  ipAccountLimit: ["Accounts per address"],
+  ipLimit: ["Signups per address per day"],
+  signupBot: ["Signup scoring"],
+  explicitContent: ["Explicit media filter"],
+  joinRaid: ["Join raids"],
+  mentionRaid: ["Mention raids"],
+  dmRaid: ["DM raids"],
+};
+const WOULD_ACTIONS = {
+  log: "log it",
+  delete: "delete the message",
+  timeout: "time the account out",
+  hold: "hold the account for review",
+  suspend: "suspend the account",
+  disable: "disable the account",
+  block: "block it",
+  name: "block the name",
+};
+const APPEAL_STATUSES = [
+  ["pending", "Waiting"],
+  ["accepted", "Accepted"],
+  ["denied", "Denied"],
+  ["all", "All"],
+];
+const RESTRICTIONS = { suspended: "Suspended", held: "Held for review", disabled: "Disabled" };
 const AUTOMOD_SOURCES = {
   message: "Message",
   message_edit: "Message edit",
@@ -189,7 +233,8 @@ const JOIN_STATUSES = [
 ];
 
 const automodState = {
-  log: { rule: "", action: "", user: "", reversed: "", offset: 0, limit: 25 },
+  log: { rule: "", action: "", user: "", reversed: "", dryRun: "", days: 0, offset: 0, limit: 25 },
+  appeals: { status: "pending", offset: 0, limit: 25 },
   raids: { offset: 0, limit: 10 },
   join: { status: "pending", offset: 0, limit: 25 },
   names: { after: null, users: [], scanned: 0, done: false },
@@ -228,6 +273,8 @@ const automodWhere = (entry) => {
 };
 
 const automodActionBadge = (entry) => {
+  if (entry.would_action)
+    return html`<span class="badge info">Dry run</span><span class="muted automod-sub">Would ${WOULD_ACTIONS[entry.would_action] ?? entry.would_action}</span>`;
   const label = AUTOMOD_ACTIONS.find(([key]) => key === entry.action)?.[1] ?? entry.action;
   const kind = ["suspend", "disable", "ban", "federation_block"].includes(entry.action)
     ? "danger"
@@ -281,6 +328,8 @@ async function renderAutomod(view) {
       </div>
       <div class="row automod-jump" role="navigation" aria-label="Automod sections">
         <a class="btn small ghost" href="#automod-review" data-jump>Review</a>
+        <a class="btn small ghost" href="#automod-appeals" data-jump>Appeals</a>
+        <a class="btn small ghost" href="#automod-rules" data-jump>Rules</a>
         <a class="btn small ghost" href="#automod-rule-stats" data-jump>Rule stats</a>
         <a class="btn small ghost" href="#automod-raids" data-jump>Raids</a>
         <a class="btn small ghost" href="#automod-log" data-jump>Log</a>
@@ -321,6 +370,10 @@ async function renderAutomod(view) {
           <div class="value">${fmtNumber(overview.suspended_accounts)}</div>
         </div>
         <div class="card stat">
+          <span class="muted">Appeals waiting</span>
+          <div class="value" id="automod-appeal-count">…</div>
+        </div>
+        <div class="card stat">
           <span class="muted">Raid and spam incidents going on</span>
           <div class="value" id="automod-live-count">${fmtNumber(overview.live_incidents)}</div>
         </div>
@@ -333,11 +386,42 @@ async function renderAutomod(view) {
         </div>
         <p class="muted">
           Everything automod did in the last 24 hours that nobody has looked at yet, apart from log-only entries.
-          Confirm keeps the action and counts it as a correct hit. Undo lifts what it did and counts it as a false
-          positive. Confirming a held signup rejects the account, and undoing it approves the account.
+          Confirm keeps the action and counts it as a correct hit. Undo and False positive both lift what it did,
+          and False positive also counts it against the rule in the rule overview. Confirming a held signup rejects
+          the account, and undoing it approves the account.
         </p>
         <div class="list-status muted" id="automod-review-status" role="status" aria-live="polite" hidden></div>
         <div id="automod-review-results"><div class="spinner">Loading…</div></div>
+      </section>
+
+      <section class="card" id="automod-appeals" aria-labelledby="automod-appeals-title">
+        <div class="automod-section-head">
+          <h2 id="automod-appeals-title">Appeals</h2>
+          <button class="btn small" type="button" id="automod-appeals-refresh">Refresh</button>
+        </div>
+        <p class="muted">
+          Accounts that can't sign in because they are suspended, held for review or disabled can see why at
+          <a href="/appeal" target="_blank" rel="noopener">/appeal</a> and send one message per restriction. Accepting
+          lifts the restriction and marks the automod action behind it as a false positive. Denying keeps it. The
+          account sees the decision the next time it opens the appeal page.
+        </p>
+        <div class="row" id="automod-appeal-tabs"></div>
+        <div class="list-status muted" id="automod-appeals-status" role="status" aria-live="polite" hidden></div>
+        <div id="automod-appeals-results"><div class="spinner">Loading…</div></div>
+      </section>
+
+      <section class="card" id="automod-rules" aria-labelledby="automod-rules-title">
+        <div class="automod-section-head">
+          <h2 id="automod-rules-title">Rules</h2>
+          <button class="btn small" type="button" id="automod-rules-refresh">Refresh</button>
+        </div>
+        <p class="muted">
+          Every rule with what it caught in the last 7 days. Edit a rule to turn it off, change what it does, run it as
+          a dry run that only logs what it would have done, or skip staff, bots, verified emails, older accounts or
+          specific users and servers. Thresholds stay in each rule's own section below.
+        </p>
+        <div class="list-status muted" id="automod-rules-status" role="status" aria-live="polite" hidden></div>
+        <div id="automod-rules-results"><div class="spinner">Loading…</div></div>
       </section>
 
       <section class="card" id="automod-rule-stats" aria-labelledby="automod-rule-stats-title">
@@ -379,6 +463,17 @@ async function renderAutomod(view) {
           <label
             >Action<select id="automod-action">
               ${options([["", "Any action"], ...AUTOMOD_ACTIONS], automodState.log.action)}
+            </select></label
+          >
+          <label
+            >Mode<select id="automod-dry-run">
+              ${options(
+                [
+                  ["", "Everything"],
+                  ["yes", "Dry runs only"],
+                ],
+                automodState.log.dryRun,
+              )}
             </select></label
           >
           <label
@@ -481,6 +576,10 @@ async function renderAutomod(view) {
           ${number("suspendHours", s.spam.suspendHours, "Suspension length", "Hours", 1, 8760)}
           ${number("escalateAfterStrikes", s.spam.escalateAfterStrikes, "Step up after this many strikes", "Each further hit moves one step up, from log to delete to timeout to suspend. 0 never steps up.", 0, 100)}
           ${number("strikeWindowHours", s.spam.strikeWindowHours, "Strikes count for", "Hours", 1, 720)}
+          <label class="span"
+            >Links that never count<span class="hint">One domain per line, subdomains included. Links to these sites don't count toward link spam and aren't compared as repeated content, unless they are invites. GIF sites are here by default, and links to this instance always count as allowed.</span
+            ><textarea name="ignoreLinkDomains" rows="3">${(s.spam.ignoreLinkDomains ?? []).join("\n")}</textarea>
+          </label>
         </div>
         <div class="form-actions"><button class="btn primary" type="submit">Save spam rules</button></div>
       </form>
@@ -604,12 +703,17 @@ async function renderAutomod(view) {
           and niggardly. Encrypted DMs are only checked when someone reports a message.
         </p>
         <div class="stack">
-          ${toggle("enabled", s.slurs.enabled, "Turn on the slur auto-ban", "Rejects the message, suspends the account and records a violation on its Account Standing page.")}
+          ${toggle("enabled", s.slurs.enabled, "Turn on the slur auto-ban", "Rejects the message and takes the action below. A suspension also records a violation on the account's Account Standing page.")}
           ${toggle("includeSoftA", s.slurs.includeSoftA, "Also act on the soft-A spelling", "Off by default. When on, the soft-A spelling gets the same suspension.")}
           ${toggle("deleteAllMessages", s.slurs.deleteAllMessages, "Delete all of the user's messages", "Removes every message the account ever sent, in every server and DM, right after the suspension.")}
           ${toggle("actOnVerifiedReports", s.slurs.actOnVerifiedReports, "Act on verified encrypted reports", "When a report of an encrypted message carries a signature-verified copy of the text, the same action runs.")}
         </div>
         <div class="form-grid" style="margin-top:16px">
+          <label
+            >When it matches<select name="action">
+              ${options(SPAM_ACTIONS, s.slurs.action ?? "suspend")}
+            </select></label
+          >
           ${number("suspendDays", s.slurs.suspendDays, "Suspension length", "Days. The account can't sign in until it ends, then it lifts by itself.", 1, 365)}
           ${number("violationDays", s.slurs.violationDays, "Violation stays on record for", "Days shown on the user's Account Standing page.", 1, 3650)}
         </div>
@@ -793,7 +897,7 @@ async function renderAutomod(view) {
 
   $("#automod-slurs", view).addEventListener("submit", (event) => {
     event.preventDefault();
-    save(event.currentTarget, { slurs: values(event.currentTarget) }, "Slur auto-ban saved");
+    save(event.currentTarget, { slurs: { ...values(event.currentTarget), action: field(event.currentTarget, "action").value } }, "Slur auto-ban saved");
   });
   $("#automod-registration", view).addEventListener("submit", (event) => {
     event.preventDefault();
@@ -812,7 +916,11 @@ async function renderAutomod(view) {
         { ...values(fieldset), action: $("select[name=action]", fieldset).value },
       ]),
     );
-    save(form, { spam: { ...spam, ...values($("[data-spam-shared]", form)) } }, "Spam rules saved");
+    save(
+      form,
+      { spam: { ...spam, ...values($("[data-spam-shared]", form)), ignoreLinkDomains: linesOf(field(form, "ignoreLinkDomains").value) } },
+      "Spam rules saved",
+    );
   });
   const scamListStatus = (status) => {
     $("#automod-scam-list-status", view).textContent = !status?.url
@@ -1023,6 +1131,7 @@ async function renderAutomod(view) {
                             ? html`<div class="row automod-row-actions">
                                 <button class="btn small primary" type="button" data-review="confirm">Confirm</button>
                                 <button class="btn small" type="button" data-review="undo">Undo</button>
+                                <button class="btn small ghost" type="button" data-review="false_positive">False positive</button>
                               </div>`
                             : ""
                         }
@@ -1038,18 +1147,19 @@ async function renderAutomod(view) {
       for (const button of $$("[data-review]", reviewResults))
         button.addEventListener("click", async () => {
           const id = button.closest("tr").dataset.id;
-          const confirming = button.dataset.review === "confirm";
+          const choice = button.dataset.review;
           const done = await act(
             button,
             () =>
-              confirming
+              choice === "confirm"
                 ? api(`/admin/automod/actions/${id}/confirm`, { method: "POST" })
-                : api(`/admin/automod/actions/${id}/reverse`, { method: "POST", body: { reversal: "undo" } }),
-            confirming ? "Confirmed" : "Action undone",
+                : api(`/admin/automod/actions/${id}/reverse`, { method: "POST", body: { reversal: choice } }),
+            choice === "confirm" ? "Confirmed" : choice === "false_positive" ? "Marked as a false positive and lifted" : "Action undone",
           );
           if (done !== undefined) {
             loadReview();
             loadStats();
+            loadRules();
             loadLog();
           }
         });
@@ -1063,8 +1173,9 @@ async function renderAutomod(view) {
 
   const statsResults = $("#automod-rule-stats-results", view);
   const loadStats = async () => {
-    const { rules } = await api("/admin/automod/stats");
+    const { rules, pending_appeals } = await api("/admin/automod/stats");
     if (!statsResults.isConnected) return;
+    $("#automod-appeal-count", view).textContent = fmtNumber(pending_appeals);
     const used = rules.filter((row) => row.hits);
     mount(
       statsResults,
@@ -1076,8 +1187,10 @@ async function renderAutomod(view) {
                   <th>Rule</th>
                   <th>Hits</th>
                   <th class="hide-sm">Log only</th>
+                  <th class="hide-sm">Dry run</th>
                   <th>Confirmed</th>
                   <th>Undone</th>
+                  <th class="hide-sm">False positive</th>
                   <th class="hide-sm">Not a match</th>
                   <th>False positive rate</th>
                 </tr>
@@ -1088,8 +1201,10 @@ async function renderAutomod(view) {
                     <td>${ruleLabel(row.rule)}</td>
                     <td class="automod-num">${fmtNumber(row.hits)}</td>
                     <td class="automod-num hide-sm">${fmtNumber(row.logged)}</td>
+                    <td class="automod-num hide-sm">${fmtNumber(row.dry_run)}</td>
                     <td class="automod-num">${fmtNumber(row.confirmed)}</td>
                     <td class="automod-num">${fmtNumber(row.undone)}</td>
+                    <td class="automod-num hide-sm">${fmtNumber(row.false_positive)}</td>
                     <td class="automod-num hide-sm">${fmtNumber(row.not_a_match)}</td>
                     <td class="automod-num">${row.false_positive_rate === null ? html`<span class="muted">Not reviewed</span>` : `${Math.round(row.false_positive_rate * 1000) / 10}%`}</td>
                   </tr>`,
@@ -1100,6 +1215,276 @@ async function renderAutomod(view) {
         : html`<div class="card empty">No rule has fired in the last 30 days.</div>`,
     );
   };
+
+  const rulesResults = $("#automod-rules-results", view);
+  const rulesStatus = $("#automod-rules-status", view);
+  let ruleRows = [];
+  const ruleState = (rule) =>
+    !rule.enabled
+      ? html`<span class="badge">Off</span>`
+      : rule.policy.dryRun
+        ? html`<span class="badge info">Dry run</span>`
+        : html`<span class="badge ok">On</span>`;
+  const ruleAction = (rule) =>
+    rule.actions ? (SPAM_ACTIONS.find(([key]) => key === rule.action)?.[1] ?? rule.action ?? "Default") : rule.key === "wordLists" ? "Set on each list" : "Built in";
+  const exemptionSummary = (rule) => {
+    const { policy } = rule;
+    const parts = [
+      policy.exemptStaff && "staff",
+      policy.exemptBots && "bots",
+      policy.exemptVerifiedEmail && "verified emails",
+      policy.exemptAccountAgeDays > 0 && `accounts over ${fmtNumber(policy.exemptAccountAgeDays)} days old`,
+      policy.exemptUserIds.length && plural(policy.exemptUserIds.length, "user"),
+      policy.exemptGuildIds.length && plural(policy.exemptGuildIds.length, "server"),
+    ].filter(Boolean);
+    return parts.length ? `Skips ${parts.join(", ")}` : "Skips nobody";
+  };
+  const syncRuleForms = (rule) => {
+    const spamKey = POLICY_RULES[rule.key]?.[1];
+    const holder = spamKey
+      ? $(`[data-spam-rule="${spamKey}"]`, view)
+      : { scamLink: $("#automod-scam", view), slurs: $("#automod-slurs", view), quarantine: $("#automod-quarantine", view), signupBot: $("#automod-signup-scoring", view) }[rule.key];
+    const switchName = { verificationLevel: "enforce", explicitContent: "explicitEnabled" }[rule.key];
+    const target = switchName ? $("#automod-servers", view) : holder;
+    const box = target && $(`input[name="${switchName ?? "enabled"}"]`, target);
+    if (box) box.checked = rule.enabled;
+    const select = holder && rule.action && $("select[name=action]", holder);
+    if (select) select.value = rule.action;
+  };
+  const showCatches = (rule) => {
+    Object.assign(automodState.log, { rule: rule.log_rules[0], days: 7, dryRun: "", action: "", reversed: "", offset: 0 });
+    $("#automod-rule", view).value = automodState.log.rule;
+    $("#automod-dry-run", view).value = "";
+    $("#automod-action", view).value = "";
+    $("#automod-reversed", view).value = "";
+    loadLog();
+    $("#automod-log", view).scrollIntoView({ block: "start" });
+  };
+  const openRule = (rule) => {
+    const { policy } = rule;
+    const shows = (kind) => rule.exemptions.includes(kind);
+    const editable = access.manage_users;
+    const body = openDrawer(
+      POLICY_RULES[rule.key]?.[0] ?? rule.key,
+      html`<form class="stack" id="rule-form">
+        <p class="muted">
+          Caught ${plural(rule.counts.hits, "time")} in the last 7 days${rule.counts.dry_run ? `, ${fmtNumber(rule.counts.dry_run)} of them in dry run` : ""}.
+          ${fmtNumber(rule.counts.false_positives)} undone or marked as false positives and ${fmtNumber(rule.counts.confirmed)} confirmed.
+        </p>
+        ${toggle("enabled", rule.enabled, "Run this rule")}
+        ${toggle("dryRun", policy.dryRun, "Dry run", "Logs what the rule would have done, marked as a dry run, and acts on nobody.")}
+        ${rule.actions
+          ? html`<label
+              >When it trips<select name="action">
+                ${options(SPAM_ACTIONS.filter(([key]) => rule.actions.includes(key)), rule.action)}
+              </select></label
+            >`
+          : ""}
+        ${rule.exemptions.length
+          ? html`<h3>Skip</h3>
+              <div class="stack">
+                ${shows("staff") ? toggle("exemptStaff", policy.exemptStaff, "Skip staff", "Accounts with a staff role or the operator right.") : ""}
+                ${shows("bots") ? toggle("exemptBots", policy.exemptBots, "Skip bots") : ""}
+                ${shows("verified") ? toggle("exemptVerifiedEmail", policy.exemptVerifiedEmail, "Skip accounts with a verified email", "Accounts from other instances never count as verified here.") : ""}
+              </div>
+              <div class="form-grid">
+                ${shows("age") ? number("exemptAccountAgeDays", policy.exemptAccountAgeDays, "Skip accounts older than", "Days. 0 checks every account.", 0, 3650) : ""}
+                ${shows("users")
+                  ? html`<label class="span"
+                      >Users to skip<span class="hint">User IDs, one per line, up to 500.</span
+                      ><textarea name="exemptUserIds" rows="3" inputmode="numeric">${policy.exemptUserIds.join("\n")}</textarea>
+                    </label>`
+                  : ""}
+                ${shows("servers")
+                  ? html`<label class="span"
+                      >Servers to skip<span class="hint">Server IDs, one per line, up to 500.</span
+                      ><textarea name="exemptGuildIds" rows="3" inputmode="numeric">${policy.exemptGuildIds.join("\n")}</textarea>
+                    </label>`
+                  : ""}
+              </div>`
+          : html`<p class="muted">This rule runs before there is an account to skip, so it has no exemptions.</p>`}
+        <div class="form-actions">
+          ${rule.counts.hits ? html`<button class="btn" type="button" id="rule-catches">See catches</button>` : ""}
+          ${editable ? html`<button class="btn primary" type="submit">Save rule</button>` : ""}
+        </div>
+      </form>`,
+    );
+    if (!body) return;
+    const form = $("#rule-form", body);
+    if (!editable) for (const control of $$("input, select, textarea", form)) control.disabled = true;
+    $("#rule-catches", body)?.addEventListener("click", () => {
+      closeDrawer({ discard: true });
+      showCatches(rule);
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const elements = form.elements;
+      const patch = {
+        enabled: elements.enabled.checked,
+        dryRun: elements.dryRun.checked,
+        ...(elements.action ? { action: elements.action.value } : {}),
+        ...(elements.exemptStaff ? { exemptStaff: elements.exemptStaff.checked } : {}),
+        ...(elements.exemptBots ? { exemptBots: elements.exemptBots.checked } : {}),
+        ...(elements.exemptVerifiedEmail ? { exemptVerifiedEmail: elements.exemptVerifiedEmail.checked } : {}),
+        ...(elements.exemptAccountAgeDays ? { exemptAccountAgeDays: Number(elements.exemptAccountAgeDays.value) || 0 } : {}),
+        ...(elements.exemptUserIds ? { exemptUserIds: linesOf(elements.exemptUserIds.value) } : {}),
+        ...(elements.exemptGuildIds ? { exemptGuildIds: linesOf(elements.exemptGuildIds.value) } : {}),
+      };
+      const saved = await act($("button[type=submit]", form), () => api(`/admin/automod/rules/${rule.key}`, { method: "PATCH", body: patch }), "Rule saved");
+      if (!saved) return;
+      syncRuleForms(saved);
+      closeDrawer({ discard: true });
+      loadRules();
+    });
+  };
+  const loadRules = async () => {
+    try {
+      const { rules } = await api("/admin/automod/rules?days=7");
+      if (!rulesResults.isConnected) return;
+      ruleRows = rules;
+      rulesStatus.hidden = true;
+      mount(
+        rulesResults,
+        html`<div class="table-wrap">
+          <table class="automod-rules">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>State</th>
+                <th class="hide-sm">When it trips</th>
+                <th>Caught</th>
+                <th class="hide-sm">Dry run</th>
+                <th class="hide-sm">False positives</th>
+                <th><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rules.map(
+                (rule) => html`<tr data-rule="${rule.key}">
+                  <td>${POLICY_RULES[rule.key]?.[0] ?? rule.key}<span class="muted automod-sub">${exemptionSummary(rule)}</span></td>
+                  <td>${ruleState(rule)}</td>
+                  <td class="hide-sm">${ruleAction(rule)}</td>
+                  <td class="automod-num">${fmtNumber(rule.counts.hits)}<span class="automod-mobile-label"> caught in 7 days</span></td>
+                  <td class="automod-num hide-sm">${fmtNumber(rule.counts.dry_run)}</td>
+                  <td class="automod-num hide-sm">${fmtNumber(rule.counts.false_positives)}</td>
+                  <td>
+                    <div class="row automod-row-actions">
+                      <button class="btn small" type="button" data-rule-edit>${access.manage_users ? "Edit" : "View"}</button>
+                      ${rule.counts.hits ? html`<button class="btn small ghost" type="button" data-rule-catches>See catches</button>` : ""}
+                    </div>
+                  </td>
+                </tr>`,
+              )}
+            </tbody>
+          </table>
+        </div>`,
+      );
+      for (const button of $$("[data-rule-edit]", rulesResults))
+        button.addEventListener("click", () => openRule(ruleRows.find((rule) => rule.key === button.closest("tr").dataset.rule)));
+      for (const button of $$("[data-rule-catches]", rulesResults))
+        button.addEventListener("click", () => showCatches(ruleRows.find((rule) => rule.key === button.closest("tr").dataset.rule)));
+    } catch (error) {
+      if (!view.isConnected || error.status === 499 || error.status === 401) return;
+      rulesStatus.hidden = false;
+      rulesStatus.textContent = `Couldn't load the rules: ${error.message ?? error}`;
+    }
+  };
+  $("#automod-rules-refresh", view).addEventListener("click", loadRules);
+
+  const appealResults = $("#automod-appeals-results", view);
+  const appealStatus = $("#automod-appeals-status", view);
+  const appealTabs = $("#automod-appeal-tabs", view);
+  const loadAppeals = async () => {
+    const st = automodState.appeals;
+    mount(
+      appealTabs,
+      APPEAL_STATUSES.map(
+        ([key, label]) =>
+          html`<button class="btn small ${st.status === key ? "primary" : ""}" type="button" data-appeal-status="${key}" aria-pressed="${st.status === key}">${label}</button>`,
+      ),
+    );
+    for (const button of $$("[data-appeal-status]", appealTabs))
+      button.addEventListener("click", () => {
+        st.status = button.dataset.appealStatus;
+        st.offset = 0;
+        loadAppeals();
+      });
+    try {
+      const { appeals, total } = await api(`/admin/automod/appeals?${new URLSearchParams({ status: st.status, limit: st.limit, offset: st.offset })}`);
+      if (!appealResults.isConnected) return;
+      appealStatus.hidden = true;
+      mount(
+        appealResults,
+        appeals.length
+          ? html`<div class="table-wrap">
+                <table class="automod-appeals">
+                  <thead>
+                    <tr>
+                      <th>Sent</th>
+                      <th>Account</th>
+                      <th>Restriction</th>
+                      <th>Their message</th>
+                      <th><span class="visually-hidden">Decision</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${appeals.map(
+                      (appeal) => html`<tr data-id="${appeal.id}">
+                        <td>${fmtDate(appeal.created_at)}</td>
+                        <td>
+                          ${appeal.user
+                            ? html`<button class="link-button ident" type="button" data-open="${appeal.user_id}">${avatar(appeal.user)}<span><strong>${userName(appeal.user)}</strong><span class="muted">${userTag(appeal.user)}</span></span></button>`
+                            : html`<span class="muted">${appeal.username ? `@${appeal.username}` : appeal.user_id}</span>`}
+                        </td>
+                        <td>
+                          <span class="badge ${appeal.restriction === "held" ? "warn" : "danger"}">${RESTRICTIONS[appeal.restriction] ?? appeal.restriction}</span>
+                          ${appeal.status === "pending" && !appeal.still_restricted ? html`<span class="badge ok automod-sub">Already lifted</span>` : ""}
+                          <span class="muted automod-sub">${appeal.reason}</span>
+                        </td>
+                        <td><p class="automod-appeal-message">${appeal.message}</p></td>
+                        <td>
+                          ${appeal.status !== "pending"
+                            ? html`<span class="badge ${appeal.status === "accepted" ? "ok" : ""}">${appeal.status === "accepted" ? "Accepted" : "Denied"}</span>${appeal.resolved_by ? html`<span class="muted automod-sub">by ${userName(appeal.resolved_by)}, ${fmtDate(appeal.resolved_at)}</span>` : ""}`
+                            : access.moderate
+                              ? html`<div class="row automod-row-actions">
+                                  <button class="btn small primary" type="button" data-appeal-decision="accept">Accept and lift</button>
+                                  <button class="btn small" type="button" data-appeal-decision="deny">Deny</button>
+                                </div>`
+                              : html`<span class="badge warn">Waiting</span>`}
+                        </td>
+                      </tr>`,
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              ${pager(total, st)}`
+          : html`<div class="card empty">
+              ${st.status === "pending" ? "No appeals are waiting. Accounts that can't sign in can send one from the appeal page." : "No appeals here."}
+            </div>`,
+      );
+      for (const button of $$("[data-open]", appealResults)) button.addEventListener("click", () => openUser(button.dataset.open, loadAppeals));
+      for (const button of $$("[data-appeal-decision]", appealResults))
+        button.addEventListener("click", async () => {
+          const decision = button.dataset.appealDecision;
+          const done = await act(
+            button,
+            () => api(`/admin/automod/appeals/${button.closest("tr").dataset.id}`, { method: "POST", body: { decision } }),
+            decision === "accept" ? "Appeal accepted and restriction lifted" : "Appeal denied",
+          );
+          if (done === undefined) return;
+          loadAppeals();
+          loadStats();
+          loadRules();
+          loadLog();
+        });
+      bindPager(appealResults, total, st, loadAppeals);
+    } catch (error) {
+      if (!view.isConnected || error.status === 499 || error.status === 401) return;
+      appealStatus.hidden = false;
+      appealStatus.textContent = `Couldn't load appeals: ${error.message ?? error}`;
+    }
+  };
+  $("#automod-appeals-refresh", view).addEventListener("click", loadAppeals);
 
   $("#automod-raid-settings", view).addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1284,6 +1669,8 @@ async function renderAutomod(view) {
     if (st.action) params.set("action", st.action);
     if (st.reversed) params.set("reversed", st.reversed);
     if (st.user) params.set("user_id", st.user);
+    if (st.dryRun) params.set("dry_run", st.dryRun);
+    if (st.days) params.set("days", st.days);
     await logRequests.load(
       `/admin/automod/actions?${params}`,
       ({ actions, total }) => {
@@ -1322,7 +1709,7 @@ async function renderAutomod(view) {
                             <td>
                               ${automodActionBadge(entry)}
                               ${entry.reversed
-                                ? html`<span class="badge ok automod-sub">${entry.reversal === "not_a_match" ? "Not a match" : "Undone"}</span>`
+                                ? html`<span class="badge ok automod-sub">${{ not_a_match: "Not a match", false_positive: "False positive" }[entry.reversal] ?? "Undone"}</span>`
                                 : entry.confirmed_at
                                   ? html`<span class="badge automod-sub">Confirmed</span>`
                                   : ""}
@@ -1336,6 +1723,7 @@ async function renderAutomod(view) {
                                   : entry.confirmed_at
                                     ? ""
                                     : html`${["block", "log", "ban", "flag"].includes(entry.action) || !entry.user_id ? "" : html`<button class="btn small" type="button" data-reverse="undo">Undo</button>`}
+                                      <button class="btn small ghost" type="button" data-reverse="false_positive">False positive</button>
                                       ${NO_ALLOW_RULES.has(entry.rule) || RAID_RULES.has(entry.rule) ? "" : html`<button class="btn small ghost" type="button" data-reverse="not_a_match">Not a match</button>`}`}
                               </div>
                             </td>
@@ -1358,13 +1746,17 @@ async function renderAutomod(view) {
               reversal === "not_a_match"
                 ? "Add the matched word to the allow list and lift any suspension this caused? Deleted messages stay deleted."
                 : "Lift any suspension this caused and overturn its violation? Deleted messages stay deleted.";
-            if (!confirm(question)) return;
+            if (reversal !== "false_positive" && !confirm(question)) return;
             const done = await act(
               button,
               () => api(`/admin/automod/actions/${id}/reverse`, { method: "POST", body: { reversal } }),
-              reversal === "not_a_match" ? "Added to the allow list" : "Action undone",
+              { not_a_match: "Added to the allow list", false_positive: "Marked as a false positive and lifted" }[reversal] ?? "Action undone",
             );
-            if (done !== undefined) loadLog();
+            if (done !== undefined) {
+              loadLog();
+              loadStats();
+              loadRules();
+            }
           });
         bindPager(logResults, total, st, loadLog);
       },
@@ -1379,6 +1771,7 @@ async function renderAutomod(view) {
   $("#automod-rule", view).addEventListener("change", (event) => filterLog("rule", event.target.value));
   $("#automod-action", view).addEventListener("change", (event) => filterLog("action", event.target.value));
   $("#automod-reversed", view).addEventListener("change", (event) => filterLog("reversed", event.target.value));
+  $("#automod-dry-run", view).addEventListener("change", (event) => filterLog("dryRun", event.target.value));
   const searchUser = debounce((value) => filterLog("user", value));
   $("#automod-user", view).addEventListener("input", (event) => {
     logRequests.cancel();
@@ -1819,7 +2212,7 @@ async function renderAutomod(view) {
     if (!document.hidden) loadRaids();
   }, 15000);
 
-  await Promise.all([loadLog(), loadJoin(), loadRaids(), loadReview(), loadStats(), loadQuarantine()]);
+  await Promise.all([loadLog(), loadJoin(), loadRaids(), loadReview(), loadStats(), loadQuarantine(), loadRules(), loadAppeals()]);
 }
 
 TABS.automod = renderAutomod;

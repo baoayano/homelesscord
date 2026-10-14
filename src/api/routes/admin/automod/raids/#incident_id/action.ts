@@ -45,7 +45,7 @@ router.post(
         let messages_deleted = 0;
         let federation_blocked = 0;
         const ips_banned: string[] = [];
-        const ips_skipped: { ip: string; reason: "self" | "already_banned" }[] = [];
+        const ips_skipped: { ip: string; reason: "self" | "already_banned" | "shared" }[] = [];
         const ids = targets.map((user) => user.id);
         for (let start = 0; start < ids.length; start += BATCH) {
             const batch = targets.slice(start, start + BATCH);
@@ -87,6 +87,10 @@ router.post(
             for (const ip of ips) {
                 if (own && ipVariants(ip).includes(own)) {
                     ips_skipped.push({ ip, reason: "self" });
+                    continue;
+                }
+                if (InstanceBan.sharedAddress(ip)) {
+                    ips_skipped.push({ ip, reason: "shared" });
                     continue;
                 }
                 if (await InstanceBan.exists({ where: ipVariants(ip).map((variant) => ({ ip_address: variant, is_allowlisted: false })) })) {

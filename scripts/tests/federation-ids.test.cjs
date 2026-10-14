@@ -207,3 +207,10 @@ test("federation trust follows the registry, peers, blocks and protocol versions
     assert.equal(federationTrust({ ...base, id: "peer.example", allowUnlistedPeers: true, peers: ["peer.example"], peerProtocol: 1 }), null);
     assert.equal(federationTrust({ ...base, id: "bad.example", allowUnlistedPeers: true, peers: ["bad.example"], peerProtocol: 2 }), null);
 });
+
+test("the new owner of a group DM crosses instances as a canonical id", () => {
+    const out = rewriteOutgoing({ owner: user, name: "cats" }, new Map(), own, () => {});
+    assert.equal(out.owner, `@${user}@${own}`);
+    assert.ok(collectIncomingIds(out).has(`@${user}@${own}`));
+    assert.equal(rewriteOutgoing({ owner: true }, new Map(), own, () => {}).owner, true, "the owner flag of a guild stays a flag");
+});

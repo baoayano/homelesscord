@@ -117,7 +117,10 @@ export class AutomodAction extends BaseClass {
     reversed_by?: string | null;
 
     @Column({ type: "varchar", nullable: true })
-    reversal?: "undo" | "not_a_match" | null;
+    reversal?: "undo" | "not_a_match" | "false_positive" | null;
+
+    @Column({ type: "varchar", nullable: true })
+    would_action?: string | null;
 
     @Column({ type: "timestamptz", nullable: true })
     confirmed_at?: Date | null;

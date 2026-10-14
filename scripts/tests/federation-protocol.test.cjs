@@ -7,8 +7,11 @@ const {
     acceptRegistryDocument,
     announcePayload,
     announceRefusal,
+    announceStats,
     blockSets,
     buildDirectory,
+    contactHandles,
+    contactNames,
     effectivePeers,
     instanceIdFromUrl,
     isDocumentLive,
@@ -298,6 +301,32 @@ test("discovery lists and well-known documents must come from the instance they 
     assert.equal(parseWellKnown(wellKnown, "meow.example").discovery_url, "https://meow.example/.well-known/meowcord/discovery");
     assert.throws(() => parseWellKnown(wellKnown, "purr.example"), /names meow.example/);
     assert.throws(() => parseWellKnown({ ...wellKnown, url: "https://elsewhere.example" }, "meow.example"), /does not match/);
+});
+
+test("the announce payload carries at most 10 contact handles only when given", () => {
+    assert.deepEqual(contactNames([" Meow ", "meow", "purr.cat", "a", "bad name", "x..y", 7, null, "@nope"]), ["meow", "purr.cat"]);
+    assert.deepEqual(contactHandles(["meow", "purr"], "meow.example"), ["meow@meow.example", "purr@meow.example"]);
+    const many = Array.from({ length: 15 }, (_, index) => `admin${index}`);
+    assert.equal(contactHandles(many, "meow.example").length, 10);
+    const payload = announcePayload("meow.example", now, undefined, contactHandles(many, "meow.example"));
+    assert.deepEqual(Object.keys(payload), ["type", "id", "sent_at", "nonce", "contacts"]);
+    assert.equal(payload.contacts[0], "admin0@meow.example");
+    assert.equal(payload.contacts.length, 10);
+    assert.deepEqual(announcePayload("meow.example", now, undefined, []).contacts, []);
+    assert.equal("contacts" in announcePayload("meow.example", now), false);
+});
+
+test("the announce payload carries whole, clamped counts only when given", () => {
+    assert.deepEqual(announceStats({ users: 12.7, servers: -3, messages_24h: 5e12 }), { users: 12, servers: 0, messages_24h: 1_000_000_000 });
+    assert.deepEqual(announceStats({ users: "7", servers: Number.NaN }), { users: 7, servers: 0, messages_24h: 0 });
+    assert.equal(announceStats(undefined), undefined);
+    const payload = announcePayload("meow.example", now, undefined, ["meow@meow.example"], { users: 40, servers: 3, messages_24h: 900 });
+    assert.deepEqual(Object.keys(payload), ["type", "id", "sent_at", "nonce", "contacts", "stats"]);
+    assert.deepEqual(payload.stats, { users: 40, servers: 3, messages_24h: 900 });
+    assert.equal("stats" in announcePayload("meow.example", now, undefined, []), false);
+    const instance = keyPair();
+    const envelope = signEnvelope(payload, instance.privateKey, "meow.example");
+    assert.deepEqual(openEnvelope(envelope, instance.publicKey).payload.stats, payload.stats);
 });
 
 test("the announce payload is signed as the instance and has a fresh nonce", () => {

@@ -18,6 +18,7 @@ export async function publishUserMessage(opts: {
     attachments: MessageOptionAttachment[];
     permission?: Permissions;
     attachmentHashes?: (string | null)[];
+    authorship?: string;
 }) {
     const { channel, user_id, body, message_id, attachments, permission } = opts;
     const last_message_id = channel.last_message_id || null;
@@ -38,6 +39,7 @@ export async function publishUserMessage(opts: {
         { channel, permission, deferChannelUpdates: true },
     );
     Object.assign(message, { edited_timestamp: null });
+    if (opts.authorship) message.authorship = opts.authorship;
 
     if (message.guild_id) {
         if (!message.member) {

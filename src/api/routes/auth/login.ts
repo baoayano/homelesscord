@@ -13,8 +13,9 @@ import {
 } from "@spacebar/api/util";
 import { route } from "@spacebar/api/middlewares";
 import { User } from "@spacebar/database";
-import { Config, FieldErrors, generateToken } from "@spacebar/util";
+import { Config, FieldErrors, generateToken, isStaffAccount, loadStaffRoles } from "@spacebar/util";
 import { AccountStandingState, LoginSchema } from "@spacebar/schemas";
+import { requestOrigin } from "@spacebar/util/util/OpenGraph";
 
 const router: Router = Router({ mergeParams: true });
 
@@ -36,8 +37,6 @@ router.post(
         const { login, password, undelete } = req.body as LoginSchema;
 
         const config = Config.get();
-        await assertIpNotBanned(req.ip, "Sign-in from this network is blocked on this instance");
-
         const captcha = await checkCaptcha(config.login.requireCaptcha, captchaKeyFrom(req), "login");
         if (captcha) return res.status(400).json(captcha);
 
@@ -93,14 +92,16 @@ router.post(
         }
 
         await clearFailedLogins(user.id);
+        if (!isStaffAccount(user, await loadStaffRoles())) await assertIpNotBanned(req.ip, "Sign-in from this network is blocked on this instance");
 
+        const appealHint = ` To see why or send an appeal, go to ${requestOrigin(req)}/appeal.`;
         const refuse = (code: string, message: string) => {
             throw FieldErrors({ login: { code, message }, password: { code, message } });
         };
-        if (user.join_status === "pending") refuse("ACCOUNT_PENDING_APPROVAL", "Your account is waiting for a moderator to approve it. Try again once it's approved.");
+        if (user.join_status === "pending") refuse("ACCOUNT_PENDING_APPROVAL", `Your account is waiting for a moderator to approve it. Try again once it's approved.${appealHint}`);
         if (user.join_status === "rejected") refuse("ACCOUNT_NOT_APPROVED", "A moderator didn't approve this account.");
         if (user.suspended_until && new Date(user.suspended_until).getTime() > Date.now())
-            refuse("ACCOUNT_SUSPENDED", `This account is suspended until ${new Date(user.suspended_until).toUTCString()} for breaking the rules.`);
+            refuse("ACCOUNT_SUSPENDED", `This account is suspended until ${new Date(user.suspended_until).toUTCString()} for breaking the rules.${appealHint}`);
 
         if (!undelete && user.deleted)
             return res.status(400).json({
@@ -109,7 +110,7 @@ router.post(
             });
         if (user.account_standing === AccountStandingState.SUSPENDED || (user.disabled && (!undelete || isStaffDisabled(user.flags))))
             return res.status(400).json({
-                message: req.t("auth:login.ACCOUNT_DISABLED"),
+                message: `${req.t("auth:login.ACCOUNT_DISABLED")}${user.account_standing === AccountStandingState.SUSPENDED || isStaffDisabled(user.flags) ? appealHint : ""}`,
                 code: 20013,
             });
 

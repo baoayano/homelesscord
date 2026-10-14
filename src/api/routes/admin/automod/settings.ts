@@ -108,6 +108,10 @@ router.patch(
             const spam = automod.spam as unknown as Record<string, unknown>;
             for (const [key, value] of Object.entries(body.spam)) {
                 if (!(key in spam) || value === undefined) continue;
+                if (key === "ignoreLinkDomains") {
+                    automod.spam.ignoreLinkDomains = cleanList(value as string[], "Link domains spam rules ignore", 500, isDomain);
+                    continue;
+                }
                 if (typeof value === "object" && value) {
                     const rule = spam[key] as Record<string, unknown>;
                     for (const [field, setting] of Object.entries(value)) if (field in rule && setting !== undefined) rule[field] = setting;

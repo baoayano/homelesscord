@@ -71,17 +71,23 @@ const step = async (name, run) => {
     }
 };
 
-const register = async (name, email = `${name}@automodprobe.test`) => {
+const register = async (name, email = `${name}@automodprobe.test`, headers = {}) => {
     const password = randomBytes(12).toString("hex");
     const captcha_key = await solveCap({ origin, browser });
-    const response = await call("POST", "/auth/register", null, {
-        email,
-        username: name,
-        password,
-        date_of_birth: "2000-01-01",
-        consent: true,
-        ...(captcha_key ? { captcha_key } : {}),
-    });
+    const response = await request(
+        "POST",
+        "/auth/register",
+        null,
+        {
+            email,
+            username: name,
+            password,
+            date_of_birth: "2000-01-01",
+            consent: true,
+            ...(captcha_key ? { captcha_key } : {}),
+        },
+        { headers },
+    );
     return { name, email, password, response };
 };
 const account = async (name) => {
@@ -280,27 +286,90 @@ await step("rule stats count hits and reviews", async () => {
     assert.equal(typeof byRule.signup_bot.false_positive_rate, "number");
 });
 
+await step("a rule in dry run only logs, and a server on its exempt list skips it", async () => {
+    const rule = async (body, label) => ok(await call("PATCH", "/admin/automod/rules/scamLink", admin.token, body), label);
+    const before = original.policies.scamLink;
+    try {
+        const scam = () => say(h, `claim your skins https://steam-gift.xyz/${randomBytes(3).toString("hex")}`);
+        assert.equal((await rule({ dryRun: true }, "scam dry run")).policy.dryRun, true);
+        ok(await scam(), "a scam link passes in dry run");
+        const dry = (await logged("scam_link", h.id)).actions[0];
+        assert.equal(dry.action, "log");
+        assert.equal(dry.would_action, "delete");
+        const overview = ok(await call("GET", "/admin/automod/rules?days=7", admin.token), "rule overview");
+        assert.ok(overview.rules.find((entry) => entry.key === "scamLink").counts.dry_run >= 1, "the overview counts the dry run");
+        await rule({ dryRun: false, exemptGuildIds: [guild.id] }, "exempt the probe server");
+        const logsBefore = (await logged("scam_link", h.id)).total;
+        ok(await scam(), "an exempt server skips the rule");
+        assert.equal((await logged("scam_link", h.id)).total, logsBefore, "nothing is logged for an exempt server");
+        await rule({ exemptGuildIds: [] }, "clear the exemption");
+        assert.equal(refused(await scam(), "the rule acts again").code, 200000);
+        const bad = await call("PATCH", "/admin/automod/rules/scamLink", admin.token, { exemptUserIds: ["@someone"] });
+        assert.equal(bad.status, 400, "user exemptions must be IDs");
+    } finally {
+        await rule({ dryRun: before.dryRun, exemptGuildIds: before.exemptGuildIds, exemptUserIds: before.exemptUserIds }, "restore the scam rule");
+    }
+});
+
+await step("a suspended account sees why on the appeal page and an accepted appeal lifts it", async () => {
+    const word = `probeword${tag}`;
+    await patch({ wordLists: [...original.wordLists, { name: "Probe", terms: [word], action: "suspend", suspendDays: 1 }] }, "suspending word list");
+    const appellant = await account(`amappeal${tag}`);
+    ok(await call("POST", `/invites/${invite.code}`, appellant.token, {}), "appellant joins");
+    assert.equal(refused(await say(appellant, `hello ${word}`), "word list match").code, 200000);
+    const credentials = { login: appellant.email, password: appellant.password };
+    const signIn = await call("POST", "/auth/login", null, credentials);
+    assert.equal(fieldCode(signIn.data), "ACCOUNT_SUSPENDED");
+    assert.match(Object.values(signIn.data.errors)[0]._errors[0].message, /\/appeal\.$/);
+    assert.equal((await call("POST", "/auth/appeal", null, { ...credentials, password: "wrong-password" })).status, 400);
+    const status = ok(await call("POST", "/auth/appeal", null, credentials), "appeal status");
+    assert.equal(status.restriction, "suspended");
+    assert.match(status.reason, /blocked word lists/);
+    assert.equal(status.can_appeal, true);
+    const sent = await call("POST", "/auth/appeal", null, { ...credentials, message: "That was a typo, sorry." });
+    assert.equal(sent.status, 201);
+    assert.equal(sent.data.appeal.status, "pending");
+    assert.equal((await call("POST", "/auth/appeal", null, { ...credentials, message: "That was a typo, sorry." })).status, 200, "a retry returns the same appeal");
+    assert.equal(fieldCode((await call("POST", "/auth/appeal", null, { ...credentials, message: "a second one" })).data), "APPEAL_ALREADY_SENT");
+    const queue = ok(await call("GET", "/admin/automod/appeals", admin.token), "appeal queue");
+    const appeal = queue.appeals.find((entry) => entry.user_id === appellant.id);
+    assert.ok(appeal?.still_restricted, "the appeal is in the queue");
+    assert.equal((await call("POST", `/admin/automod/appeals/${appeal.id}`, admin.token, { decision: "accept" })).status, 204);
+    ok(await call("POST", "/auth/login", null, credentials), "the account can sign in again");
+    assert.equal((await logged("word", appellant.id)).actions[0].reversal, "false_positive");
+    assert.equal(ok(await call("POST", "/auth/appeal", null, credentials), "status after").restricted, false);
+    await patch({ wordLists: original.wordLists }, "restore word lists");
+});
+
 await step("accounts per address caps refuse signups and sign-ins past the cap", async () => {
-    const ip = (await db.query("SELECT registration_ip FROM users WHERE id = $1", [a.id])).rows[0].registration_ip;
-    assert.ok(ip, "registration_ip is recorded");
+    const loopback = ok(await call("GET", `/admin/automod/ip-caps?${new URLSearchParams({ ip: "::1" })}`, admin.token), "loopback lookup");
+    assert.equal(loopback.exempt, true, "loopback and private addresses never count");
+    const ip = `45.33.${randomBytes(1)[0]}.${1 + (randomBytes(1)[0] % 250)}`;
+    const from = { "x-forwarded-for": ip };
+    const first = await register(`amcapa${tag}`, undefined, from);
+    const second = await register(`amcapb${tag}`, undefined, from);
+    const tokens = [first, second].map((created) => ok(created.response, `register ${created.name}`).token);
+    await db.query("UPDATE sessions SET last_seen = now() - interval '1 minute' WHERE user_id IN (SELECT id FROM users WHERE username = ANY($1))", [[first.name, second.name]]);
+    for (const token of tokens) ok(await request("GET", "/users/@me", token, undefined, { headers: from }), "use the session from the address");
     const lookup = ok(await call("GET", `/admin/automod/ip-caps?${new URLSearchParams({ ip })}`, admin.token), "lookup");
-    assert.ok(lookup.registration.count >= members.length, "every probe account counts");
-    assert.ok(!lookup.registration.users.some((user) => user.id === admin.id), "operators don't count");
-    await patch({ registration: { maxAccountsPerIp: lookup.registration.count } }, "registration cap");
-    const capped = await register(`amcapped${tag}`);
+    assert.equal(lookup.exempt, false);
+    assert.equal(lookup.registration.count, 2, "both accounts count");
+    await patch({ registration: { maxAccountsPerIp: 2 } }, "registration cap");
+    const capped = await register(`amcapped${tag}`, undefined, from);
     assert.equal(fieldCode(capped.response.data), "TOO_MANY_ACCOUNTS_ON_IP");
-    await patch({ ipAllowList: [ip.includes(":") && !ip.startsWith("::ffff:") ? `${ip}/128` : `${ip.replace(/^::ffff:/, "")}/32`] }, "allow list");
-    ok((await register(`amallowed${tag}`)).response, "an exempt address can sign up");
+    await patch({ ipAllowList: [`${ip}/32`] }, "allow list");
+    ok((await register(`amallowed${tag}`, undefined, from)).response, "an exempt address can sign up");
     await patch({ ipAllowList: [], registration: { maxAccountsPerIp: 0 } }, "registration cap off");
     assert.ok((await logged("ip_account_limit")).actions.some((entry) => entry.source === "registration"));
 
     await patch({ login: { maxAccountsPerIp: 1 } }, "sign-in cap");
-    const login = await call("POST", "/auth/login", null, { login: a.email, password: a.password });
+    const login = await request("POST", "/auth/login", null, { login: first.email, password: first.password }, { headers: from });
     assert.equal(fieldCode(login.data), "TOO_MANY_ACCOUNTS_ON_IP");
-    ok(await call("POST", "/auth/login", null, { login: admin.email, password: admin.password }), "operators can always sign in");
+    ok(await request("POST", "/auth/login", null, { login: admin.email, password: admin.password }, { headers: from }), "staff can always sign in");
     await patch({ login: { maxAccountsPerIp: 0 } }, "sign-in cap off");
-    ok(await call("POST", "/auth/login", null, { login: a.email, password: a.password }), "sign-in works with the cap off");
-    assert.ok((await logged("ip_account_limit", a.id)).actions.some((entry) => entry.source === "login"));
+    ok(await request("POST", "/auth/login", null, { login: first.email, password: first.password }, { headers: from }), "sign-in works with the cap off");
+    const firstId = (await userId(first.name)).id;
+    assert.ok((await logged("ip_account_limit", firstId)).actions.some((entry) => entry.source === "login"));
 });
 
 await patch(
@@ -312,6 +381,7 @@ await patch(
         registration: { maxAccountsPerIp: original.registration.maxAccountsPerIp },
         login: original.login,
         ipAllowList: original.ipAllowList,
+        wordLists: original.wordLists,
     },
     "restore settings",
 );

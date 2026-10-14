@@ -139,6 +139,13 @@ describe("registry worker", () => {
         expect(replay.status).toBe(409);
     });
 
+    test("stores the counts an announce reports, once per hour", async () => {
+        expect((await announce(await signedAnnounce(instanceKey, fake.id, { stats: { users: 40, servers: 3, messages_24h: 900 } }))).status).toBe(202);
+        expect((await announce(await signedAnnounce(instanceKey, fake.id, { stats: { users: 41, servers: "x", messages_24h: 950 } }))).status).toBe(202);
+        const stats = await sql(`SELECT users, servers, messages_24h FROM instance_stats WHERE instance = '${fake.id}'`);
+        expect(stats).toEqual([{ users: 41, servers: null, messages_24h: 950 }]);
+    });
+
     test("refuses a signature from a key the well-known document doesn't publish", async () => {
         const other = await makeInstanceKey();
         const response = await announce(await signedAnnounce(other, fake.id));
@@ -167,8 +174,10 @@ describe("registry worker", () => {
             `UPDATE instances SET status = 'approved' WHERE id = '${fake.id}'; UPDATE discovery SET status = 'rejected', verified_at = NULL WHERE id = '@1002@${fake.id}'; INSERT INTO blocks (kind, id, reason, at) VALUES ('user', '@9@bad.example', 'spam', '2026-10-12T00:00:00.000Z')`,
         );
         const before = await registryDocument();
-        const response = await announce(await signedAnnounce(instanceKey, fake.id));
+        const response = await announce(await signedAnnounce(instanceKey, fake.id, { contacts: [`meow@${fake.id}`, "other@elsewhere.example.com"] }));
         expect(await response.json()).toEqual({ status: "active" });
+        const [contacts] = await sql(`SELECT handles FROM instance_contacts WHERE instance = '${fake.id}'`);
+        expect(JSON.parse(contacts.handles)).toEqual([`meow@${fake.id}`]);
         let payload = before;
         for (let i = 0; i < 20 && payload.sequence === before.sequence; i++) {
             await Bun.sleep(200);
@@ -187,6 +196,7 @@ describe("registry worker", () => {
         });
         expect(payload.discovery.map((guild) => guild.id)).toEqual([`@1001@${fake.id}`]);
         expect(payload.blocked.users).toEqual([{ id: "@9@bad.example", reason: "spam", at: "2026-10-12T00:00:00.000Z" }]);
+        expect(JSON.stringify(payload)).not.toContain("meow@");
     });
 
     test("holds a changed key for review on an approved instance", async () => {
@@ -238,6 +248,13 @@ describe("registry worker", () => {
         }
         const listed = payload.instances.find((instance) => instance.id === "meowcord-registry-test.example.com");
         expect(listed).toMatchObject({ name: "Listed by file", state: "listed", public_key: null, url: "https://meowcord-registry-test.example.com" });
+        let snapshots = [];
+        for (let i = 0; i < 30 && !snapshots.length; i++) {
+            snapshots = await sql("SELECT approved FROM registry_snapshots");
+            if (!snapshots.length) await Bun.sleep(300);
+        }
+        expect(snapshots).toHaveLength(1);
+        expect(snapshots[0].approved).toBeGreaterThan(0);
     });
 
     test("sends the admin to hrtID with PKCE", async () => {

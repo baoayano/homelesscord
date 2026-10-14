@@ -59,6 +59,7 @@ export const pickAutomodSettings = () => {
         verification: { ...automod.verification },
         explicitContent: { ...automod.explicitContent, terms: [...automod.explicitContent.terms], blockedHashes: [...automod.explicitContent.blockedHashes] },
         federation: { ...automod.federation },
+        policies: JSON.parse(JSON.stringify(automod.policies)) as typeof automod.policies,
     };
 };
 

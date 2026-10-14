@@ -1,19 +1,24 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In, Not } from "typeorm";
-import { Channel, FederationBlock, FederationPeer, FederationState, FederationVerifiedGuild, Guild, Invite } from "@spacebar/database";
+import { Channel, FederationBlock, FederationPeer, FederationState, FederationVerifiedGuild, Guild, Invite, Message, User } from "@spacebar/database";
 import { Random } from "@spacebar/extensions";
 import {
     acceptDiscoveryList,
     acceptRegistryDocument,
     announcePayload,
     announceRefusal,
+    announceStats,
     blockSets,
     brandImageUrls,
     buildDirectory,
     canonicalId,
     Config,
+    contactHandles,
+    contactNames,
     DirectoryPeer,
+    discoveryCategoryIds,
     DiscoveryGuild,
+    discoveryKeywords,
     effectivePeers,
     externalProxyUrl,
     FEDERATION_PROTOCOL,
@@ -25,13 +30,19 @@ import {
     isDocumentLive,
     isPrivateInstanceId,
     LocalBlockLists,
+    MAX_ANNOUNCE_CONTACTS,
     parseWellKnown,
     RegistrationState,
     RegistryDocument,
+    RemoteDiscoveryIndex,
+    rewriteMediaUrl,
     signEnvelope,
+    Snowflake,
     WellKnownDocument,
 } from "@spacebar/util";
 import { ChannelType } from "@spacebar/schemas";
+import { sqlArrayIncludes } from "@spacebar/database/Sql";
+import { federatedInstances, homeCdnBase } from "./federationMedia";
 import { ProcessLifecycle } from "../../../util/util/ProcessLifecycle";
 
 const STATE_ID = "instance";
@@ -192,14 +203,11 @@ const peerCandidates = async (document: RegistryDocument | null) => {
     const ownId = instanceId();
     const local = await localBlocks();
     const blocks = blockSets(document, local);
-    const listed =
-        federation.discovery.verification === "instance" && document
-            ? document.instances
-                  .filter(
-                      (instance) => (instance.state === "active" || instance.state === "listed") && instance.public_key && instance.id !== ownId && !blocks.instance(instance.id),
-                  )
-                  .map((instance) => ({ id: instance.id, url: instance.url, public_key: instance.public_key as string, listed: true }))
-            : [];
+    const listed = document
+        ? document.instances
+              .filter((instance) => (instance.state === "active" || instance.state === "listed") && instance.public_key && instance.id !== ownId && !blocks.instance(instance.id))
+              .map((instance) => ({ id: instance.id, url: instance.url, public_key: instance.public_key as string, listed: true }))
+        : [];
     const plainHttp = (id: string) => id.endsWith(":80") || (isPrivateInstanceId(id) && Config.get().security.allowPrivateNetworkRequests);
     const peers = effectivePeers(federation.peers, { allowUnlistedPeers: federation.allowUnlistedPeers, ownId, document, local }).map((id) => ({
         id,
@@ -249,6 +257,33 @@ export const refreshPeers = async () => {
     invalidateDirectory();
 };
 
+export const announceContacts = async (id: string) => {
+    const chosen = contactNames(Config.get().federation.contacts ?? []);
+    const query = User.createQueryBuilder("u")
+        .select(["u.id", "u.username"])
+        .where("u.deleted = false AND u.disabled = false AND u.bot = false AND u.system = false")
+        .andWhere("u.federated_instance IS NULL AND u.discriminator = :zero", { zero: "0" });
+    if (chosen.length) query.andWhere("u.username IN (:...chosen)", { chosen });
+    else query.andWhere("(u.rights & :operator) != 0", { operator: 1 });
+    const users = await query.orderBy("u.id", "ASC").limit(MAX_ANNOUNCE_CONTACTS).getMany();
+    const found = new Set(users.map((user) => user.username));
+    return contactHandles(chosen.length ? chosen.filter((name) => found.has(name)) : [...found], id);
+};
+
+export const announceStatsFor = async () => {
+    const since = String(BigInt(Date.now() - 24 * 60 * 60 * 1000 - Snowflake.EPOCH) << 22n);
+    const [users, servers, messages] = await Promise.all([
+        User.createQueryBuilder("u").where("u.deleted = false AND u.bot = false AND u.system = false AND u.federated_instance IS NULL").getCount(),
+        Guild.createQueryBuilder("g").where("g.federated_instance IS NULL").getCount(),
+        Message.createQueryBuilder("m")
+            .innerJoin(User, "author", "author.id = m.author_id")
+            .where("m.id > :since", { since })
+            .andWhere("author.federated_instance IS NULL")
+            .getCount(),
+    ]);
+    return announceStats({ users, servers, messages_24h: messages });
+};
+
 export const announce = (manual = false) => {
     if (announcing) return announcing;
     announcing = (async () => {
@@ -262,7 +297,18 @@ export const announce = (manual = false) => {
             return state.save();
         }
         try {
-            const envelope = signEnvelope(announcePayload(id as string), FederationKey.privateKey, id as string);
+            const contacts = await announceContacts(id as string).catch((error) => {
+                console.warn("[Federation] Couldn't list the announce contacts:", error);
+                return undefined;
+            });
+            const stats =
+                (federation.announceStats ?? true)
+                    ? await announceStatsFor().catch((error) => {
+                          console.warn("[Federation] Couldn't count the announce stats:", error);
+                          return undefined;
+                      })
+                    : undefined;
+            const envelope = signEnvelope(announcePayload(id as string, new Date(), undefined, contacts, stats), FederationKey.privateKey, id as string);
             const response = await fetchPublicUrl(
                 registryUrl("/v1/announce"),
                 { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(envelope) },
@@ -285,6 +331,7 @@ export const announce = (manual = false) => {
 let announceTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const announceSoon = (delayMs = 30_000) => {
+    invalidateSignedDiscoveryList();
     if (announceTimer) clearTimeout(announceTimer);
     announceTimer = setTimeout(() => {
         announceTimer = null;
@@ -317,31 +364,66 @@ export const directory = async () => {
     if (!federation.enabled) return { available: false as const, reason: "disabled" };
     const document = await liveDocument();
     if (!document) return { available: false as const, reason: "no_registry" };
-    const { peers, remoteGuilds } = await peerDirectory(document);
+    const { peers, remoteGuilds, rows } = await peerDirectory(document);
     const verifiedIds = new Set((await FederationVerifiedGuild.find()).map((row) => row.id));
-    const result = buildDirectory({ document, ownId: instanceId(), local: await localBlocks(), verification: federation.discovery.verification, peers, remoteGuilds, verifiedIds });
+    const listings = new Map(
+        rows.filter((row) => row.discovery && !row.error).map((row) => [row.id, new Set((JSON.parse(row.discovery as string) as DiscoveryGuild[]).map((guild) => guild.id))]),
+    );
+    const result = buildDirectory({
+        document,
+        ownId: instanceId(),
+        local: await localBlocks(),
+        verification: federation.discovery.verification,
+        peers,
+        remoteGuilds,
+        verifiedIds,
+        listings,
+    });
+    const instances = result.instances.map((instance) => ({
+        id: instance.id,
+        name: instance.name,
+        description: instance.description,
+        icon_url: proxiedImage(instance.icon_url),
+        url: instance.url,
+        registration: instance.registration,
+        state: instance.state,
+    }));
+    const instanceById = new Map(instances.map((instance) => [instance.id, instance]));
+    const mediaOrigins = new Map([...(await federatedInstances()).values()].map((instance) => [instance.url, instance.id]));
+    const cdn = homeCdnBase();
+    const guildIcon = (value: string | null) => {
+        if (!value) return null;
+        const rewritten = cdn ? rewriteMediaUrl(value, mediaOrigins, cdn) : value;
+        return rewritten === value ? proxiedImage(value) : rewritten;
+    };
+    const fromInstance = new Map(remoteGuilds.map((guild) => [guild.id, guild]));
+    const registryListed = new Set(document.discovery.map((guild) => guild.id));
+    const guilds = result.guilds.map((guild) => {
+        const own = fromInstance.get(guild.id);
+        const instance = instanceById.get(guild.instance);
+        return {
+            id: guild.id,
+            instance: guild.instance,
+            instance_name: instance?.name ?? guild.instance,
+            instance_icon_url: instance?.icon_url ?? null,
+            name: guild.name,
+            description: guild.description,
+            icon_url: guildIcon(guild.icon_url),
+            member_count: own?.member_count ?? guild.member_count,
+            presence_count: own?.presence_count ?? null,
+            keywords: guild.keywords ?? own?.keywords ?? [],
+            category_ids: guild.category_ids ?? own?.category_ids ?? [],
+            active_at: own?.active_at ?? null,
+            verified: registryListed.has(guild.id),
+            invite_url: guild.invite_url,
+        };
+    });
     return {
         available: true as const,
         verification: federation.discovery.verification,
-        instances: result.instances.map((instance) => ({
-            id: instance.id,
-            name: instance.name,
-            description: instance.description,
-            icon_url: proxiedImage(instance.icon_url),
-            url: instance.url,
-            registration: instance.registration,
-            state: instance.state,
-        })),
-        guilds: result.guilds.map((guild) => ({
-            id: guild.id,
-            instance: guild.instance,
-            instance_name: result.instances.find((instance) => instance.id === guild.instance)?.name ?? guild.instance,
-            name: guild.name,
-            description: guild.description,
-            icon_url: proxiedImage(guild.icon_url),
-            member_count: guild.member_count,
-            invite_url: guild.invite_url,
-        })),
+        instances,
+        guilds,
+        index: new RemoteDiscoveryIndex(guilds),
     };
 };
 
@@ -358,6 +440,21 @@ export const cachedDirectory = () => {
         value.catch(invalidateDirectory);
     }
     return directoryCache.value;
+};
+
+export const searchDirectory = async (options: { query?: unknown; categoryIds?: number[]; offset: number; limit: number }) => {
+    const found = await cachedDirectory();
+    if (!found.available) return found;
+    const { total, entries } = found.index.search(options);
+    return {
+        available: true as const,
+        verification: found.verification,
+        instances: found.instances,
+        guilds: entries,
+        total,
+        offset: options.offset,
+        limit: options.limit,
+    };
 };
 
 export const remoteDiscoveryCandidates = async () => {
@@ -391,11 +488,12 @@ export const ownDiscoveryGuilds = async () => {
     if (!url || !id) return [];
     const guilds = await Guild.find({
         where: { global_discovery: true, global_discovery_hidden: false, global_discovery_verified: true },
-        select: { id: true, name: true, description: true, icon: true, member_count: true },
+        select: { id: true, name: true, description: true, icon: true, member_count: true, primary_category_id: true, discovery_metadata: true },
         order: { member_count: "DESC" },
         take: 500,
     });
-    const invites = await permanentInvites(guilds.map((guild) => guild.id));
+    const ids = guilds.map((guild) => guild.id);
+    const [invites, online, activity] = await Promise.all([permanentInvites(ids), Guild.countOnlineMembersIn(ids), lastActivity(ids)]);
     const document = await currentDocument();
     const blocks = blockSets(document, await localBlocks());
     return guilds.flatMap((guild) => {
@@ -409,16 +507,48 @@ export const ownDiscoveryGuilds = async () => {
                 description: guild.description ?? "",
                 icon_url: guildIconUrl(guild),
                 member_count: guild.member_count ?? 0,
+                presence_count: Math.min(online.get(guild.id) ?? 0, guild.member_count ?? 0),
+                keywords: discoveryKeywords(guild.discovery_metadata?.keywords ?? []),
+                category_ids: discoveryCategoryIds([...(guild.primary_category_id != null ? [guild.primary_category_id] : []), ...(guild.discovery_metadata?.category_ids ?? [])]),
+                active_at: activity.get(guild.id) ?? null,
                 invite_url: `${url}/invite/${code}`,
             },
         ];
     });
 };
 
+const lastActivity = async (guildIds: string[]) => {
+    const activity = new Map<string, string>();
+    if (!guildIds.length) return activity;
+    const rows: { guild_id: string; last: string | null }[] = await Guild.query(
+        `SELECT guild_id, MAX(last_message_id) AS last FROM channels WHERE ${sqlArrayIncludes("guild_id", "$1")} AND last_message_id IS NOT NULL GROUP BY guild_id`,
+        [guildIds],
+    );
+    for (const row of rows) {
+        if (row.last == null) continue;
+        const hour = 60 * 60 * 1000;
+        activity.set(String(row.guild_id), new Date(Math.floor(Snowflake.deconstruct(String(row.last)).timestamp / hour) * hour).toISOString());
+    }
+    return activity;
+};
+
+let signedListCache: { at: number; id: string; value: Promise<ReturnType<typeof signEnvelope>> } | null = null;
+
 export const signedDiscoveryList = async () => {
     const id = instanceId();
     if (!id || !FederationKey.ready) return null;
-    return signEnvelope({ instance: id, issued_at: new Date().toISOString(), guilds: await ownDiscoveryGuilds() }, FederationKey.privateKey, id);
+    if (!signedListCache || signedListCache.id !== id || Date.now() - signedListCache.at > 60_000) {
+        const value = ownDiscoveryGuilds().then((guilds) => signEnvelope({ instance: id, issued_at: new Date().toISOString(), guilds }, FederationKey.privateKey, id));
+        signedListCache = { at: Date.now(), id, value };
+        value.catch(() => {
+            signedListCache = null;
+        });
+    }
+    return signedListCache.value;
+};
+
+export const invalidateSignedDiscoveryList = () => {
+    signedListCache = null;
 };
 
 export const ensurePermanentInvite = async (guild: Pick<Guild, "id" | "owner_id" | "system_channel_id">) => {

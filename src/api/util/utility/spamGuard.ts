@@ -8,9 +8,11 @@ import { ContactKind, escalateSpamAction, SpamDetector, SpamHit, SpamMessageRef,
 import { UserFlags } from "@spacebar/schemas";
 import { recordAutomodAction, revokeUserSessions } from "./instanceAutomod";
 import { recordIncident } from "./raidIncidents";
-import { describeScam, scamMatchFor } from "./scamGuard";
+import { describeScam, ownHosts, scamMatchFor } from "./scamGuard";
 import { reportToHomeInstance } from "./automodReports";
 import { emitMemberUpdate, recordMentionSpam, restoreRaidState } from "./safety";
+import { createdAtOf, exemptionFrom, PolicyAccount, rulePolicy } from "./automodPolicy";
+import { policyKeyOf } from "@spacebar/util/util/AutomodPolicy";
 
 export const spamDetector = new SpamDetector();
 
@@ -33,6 +35,17 @@ const describeHit = (hit: SpamHit) =>
     Object.entries(hit.detail)
         .map(([key, value]) => `${key.replace(/_/g, " ")} ${value}`)
         .join(", ");
+
+export const ENCRYPTED_PLACEHOLDER = "🔒 Encrypted message";
+
+export interface SpamAccount {
+    federated_instance?: string | null;
+    created_at?: Date | string | null;
+    verified?: boolean | null;
+    rights?: string | null;
+}
+
+export const accountCreatedAt = (user_id: string, account?: SpamAccount | null) => createdAtOf({ ...account, id: user_id });
 
 const isSystemUser = (user: Pick<User, "system" | "flags">) => !!user.system || (BigInt(user.flags ?? 0) & BigInt(UserFlags.FLAGS.SYSTEM)) !== 0n;
 
@@ -113,8 +126,10 @@ export async function applySpamAction(
     }
     const until = action === "suspend" ? new Date(Date.now() + Math.max(1, config.suspendHours) * 60 * 60 * 1000) : null;
     if (action === "suspend") await User.update({ id: user.id }, { suspended_until: until });
-    else await User.update({ id: user.id }, { disabled: true, flags: () => `flags | ${UserFlags.FLAGS.DISABLED}` });
-    await revokeUserSessions(user.id, action === "suspend" ? "Suspended by spam protection" : "Disabled by spam protection");
+    else if (action === "hold") {
+        if (!user.federated_instance) await User.update({ id: user.id }, { join_status: "pending" });
+    } else await User.update({ id: user.id }, { disabled: true, flags: () => `flags | ${UserFlags.FLAGS.DISABLED}` });
+    await revokeUserSessions(user.id, action === "suspend" ? "Suspended by automod" : action === "hold" ? "Held for review by automod" : "Disabled by automod");
     if (user.federated_instance) {
         await blockFederatedUser(user.id, opts.reason, opts.actor_id);
         return { taken: "federation_block", until };
@@ -132,8 +147,11 @@ export interface SpamCheck {
     bot?: boolean;
     system?: boolean;
     edit?: boolean;
+    encrypted?: boolean;
     attachments?: string[];
     source?: "friend_request" | "direct_message";
+    account?: SpamAccount | null;
+    knownRecipient?: boolean;
 }
 
 export async function checkSpam(check: SpamCheck) {
@@ -145,8 +163,9 @@ export async function checkSpam(check: SpamCheck) {
 
     const config = Config.get().automod.spam;
     const permission = check.permission;
-    const accountCreatedAt = Snowflake.deconstruct(check.user_id).timestamp;
-    const scam = check.bot ? null : scamMatchFor(check.content, accountCreatedAt);
+    const createdAt = accountCreatedAt(check.user_id, check.account);
+    const content = check.encrypted || check.content?.trim() === ENCRYPTED_PLACEHOLDER ? null : check.content;
+    const scam = check.bot ? null : scamMatchFor(content, createdAt);
     const scamHits: SpamHit[] = scam
         ? [{ rule: "scam_link", action: Config.get().automod.scam.action, users: [check.user_id], messages: [], repeat: false, detail: {}, term: describeScam(scam) }]
         : [];
@@ -156,22 +175,55 @@ export async function checkSpam(check: SpamCheck) {
             user_id: check.user_id,
             channel_id: check.channel.id,
             guild_id: check.channel.guild_id ?? null,
-            content: check.content,
-            accountCreatedAt,
+            content,
+            accountCreatedAt: createdAt,
             canMentionEveryone: !!permission?.has("MENTION_EVERYONE"),
             moderator: !!check.bot || !!permission?.has("MANAGE_GUILD"),
             dm: !check.channel.guild_id,
             edit: check.edit,
             attachments: check.attachments,
+            ignoredLinkHosts: [...(config.ignoreLinkDomains ?? []), ...ownHosts()],
+            knownRecipient: check.knownRecipient,
         },
         config,
     );
-    const hits = [...scamHits, ...detected];
+    const hits = await withPolicies([...scamHits, ...detected], check);
     if (!hits.length) return;
     await enforceSpamHits(hits, check).catch((error) => console.error("[Spam] couldn't act on spam", error));
-    if (scamHits.some((hit) => hit.action !== "log"))
+    const blocking = hits.filter((hit) => hit.action !== "log" && hit.users.includes(check.user_id));
+    if (blocking.some((hit) => hit.rule === "scam_link"))
         throw new ApiError("Your message was blocked because it links to a site that looks like a scam or phishing page.", 200000, 400);
-    if (hits.some((hit) => hit.action !== "log")) throw new ApiError("Your message was blocked by this instance's spam protection.", 200000, 400);
+    if (blocking.length) throw new ApiError("Your message was blocked by this instance's spam protection.", 200000, 400);
+}
+
+async function withPolicies(hits: SpamHit[], check: SpamCheck): Promise<SpamHit[]> {
+    if (!hits.length) return hits;
+    const others = [...new Set(hits.flatMap((hit) => hit.users))].filter((id) => id !== check.user_id);
+    const accounts: PolicyAccount[] = others.length
+        ? await User.find({ where: { id: In(others) }, select: { id: true, bot: true, verified: true, rights: true, federated_instance: true, created_at: true } })
+        : [];
+    const subjects = new Map<string, PolicyAccount>(accounts.map((account) => [account.id, account]));
+    subjects.set(check.user_id, { ...check.account, id: check.user_id, bot: !!check.bot });
+    const ruled: SpamHit[] = [];
+    for (const hit of hits) {
+        const key = policyKeyOf(hit.rule);
+        if (!key) {
+            ruled.push(hit);
+            continue;
+        }
+        const users: string[] = [];
+        for (const id of hit.users) if (!(await exemptionFrom(key, subjects.get(id) ?? { id }, check.channel.guild_id))) users.push(id);
+        if (!users.length) continue;
+        const dryRun = rulePolicy(key).dryRun && hit.action !== "log";
+        ruled.push({
+            ...hit,
+            users,
+            messages: hit.messages.filter((message) => users.includes(message.user_id)),
+            action: dryRun ? "log" : hit.action,
+            wouldAction: dryRun ? hit.action : hit.wouldAction,
+        });
+    }
+    return ruled;
 }
 
 const restrictionLogged = new Map<string, number>();
@@ -192,6 +244,7 @@ export interface ContactCheck {
     bot?: boolean;
     system?: boolean;
     federated?: boolean;
+    account?: SpamAccount | null;
 }
 
 export async function checkContactSpam(check: ContactCheck) {
@@ -204,42 +257,53 @@ export async function checkContactSpam(check: ContactCheck) {
 
     const config = Config.get().automod.spam;
     const now = Date.now();
-    const accountCreatedAt = Snowflake.deconstruct(check.user_id).timestamp;
+    const createdAt = accountCreatedAt(check.user_id, check.account);
     const dms = config.dms;
+    const subject = { ...check.account, id: check.user_id, bot: !!check.bot };
     if (
         check.kind === "dm" &&
         dms.enabled &&
         !check.federated &&
         dms.newAccountHours > 0 &&
         dms.newAccountDmsPerHour > 0 &&
-        now - accountCreatedAt < dms.newAccountHours * 60 * 60 * 1000 &&
+        now - createdAt < dms.newAccountHours * 60 * 60 * 1000 &&
         spamDetector.recentContacts(check.user_id, "dm", 60 * 60 * 1000, now) >= dms.newAccountDmsPerHour &&
-        !spamDetector.hasContact(check.user_id, "dm", check.target_id)
+        !spamDetector.hasContact(check.user_id, "dm", check.target_id) &&
+        !(await exemptionFrom("dmSpam", subject))
     ) {
+        const dryRun = rulePolicy("dmSpam").dryRun;
         if (logRestrictionOnce(`first-dms:${check.user_id}`))
             await recordAutomodAction({
                 user_id: check.user_id,
                 rule: "dm_spam",
                 term: `new account opened ${dms.newAccountDmsPerHour} DMs in an hour`,
                 source: "direct_message",
-                action: "block",
+                action: dryRun ? "log" : "block",
+                would_action: dryRun ? "block" : null,
             }).catch(() => undefined);
-        throw new ApiError(
-            `New accounts can start ${dms.newAccountDmsPerHour} new conversation${dms.newAccountDmsPerHour === 1 ? "" : "s"} an hour for their first ${dms.newAccountHours} hours. Try again later.`,
-            DiscordApiErrors.OPENING_DIRECT_MESSAGES_TOO_FAST.code,
-            429,
-        );
+        if (!dryRun)
+            throw new ApiError(
+                `New accounts can start ${dms.newAccountDmsPerHour} new conversation${dms.newAccountDmsPerHour === 1 ? "" : "s"} an hour for their first ${dms.newAccountHours} hours. Try again later.`,
+                DiscordApiErrors.OPENING_DIRECT_MESSAGES_TOO_FAST.code,
+                429,
+            );
     }
 
-    const hits = spamDetector.contact({ user_id: check.user_id, target_id: check.target_id, kind: check.kind, accountCreatedAt, at: now }, config);
-    if (!hits.length) return;
-    await enforceSpamHits(hits, {
+    const asCheck: SpamCheck = {
         user_id: check.user_id,
         channel: { id: "", guild_id: null },
         message_id: "",
         rights: check.rights,
+        bot: check.bot,
+        account: check.account,
         source: check.kind === "friend" ? "friend_request" : "direct_message",
-    }).catch((error) => console.error("[Spam] couldn't act on contact spam", error));
+    };
+    const hits = await withPolicies(
+        spamDetector.contact({ user_id: check.user_id, target_id: check.target_id, kind: check.kind, accountCreatedAt: createdAt, at: now }, config),
+        asCheck,
+    );
+    if (!hits.length) return;
+    await enforceSpamHits(hits, asCheck).catch((error) => console.error("[Spam] couldn't act on contact spam", error));
     if (hits.some((hit) => hit.action !== "log"))
         throw new ApiError(
             check.kind === "friend"
@@ -275,7 +339,10 @@ async function enforceSpamHits(hits: SpamHit[], check: SpamCheck) {
             if (strikes && strikes.hits >= config.escalateAfterStrikes) planned.set(id, escalateSpamAction(action));
         }
 
-    const deletable = fresh.flatMap((hit) => hit.messages).filter((ref) => ref.id !== check.message_id && (planned.get(ref.user_id) ?? "log") !== "log");
+    const deletable = fresh
+        .filter((hit) => !hit.wouldAction)
+        .flatMap((hit) => hit.messages)
+        .filter((ref) => ref.id !== check.message_id && (planned.get(ref.user_id) ?? "log") !== "log");
     const deletedBy = new Map<string, number>();
     if (deletable.length) {
         await deleteSpamMessages(deletable);
@@ -294,6 +361,23 @@ async function enforceSpamHits(hits: SpamHit[], check: SpamCheck) {
     for (const hit of fresh) {
         const users = hit.users.filter((id) => targets.has(id));
         if (!users.length) continue;
+        if (hit.wouldAction) {
+            for (const id of users)
+                await recordAutomodAction({
+                    user_id: id,
+                    username: targets.get(id)?.username,
+                    rule: hit.rule,
+                    term: describeHit(hit).slice(0, 200),
+                    source: check.source ?? (check.edit ? "message_edit" : check.channel.guild_id ? "message" : "direct_message"),
+                    action: "log",
+                    would_action: hit.wouldAction,
+                    text: check.content ?? "",
+                    guild_id: check.channel.guild_id ?? null,
+                    channel_id: check.channel.id || null,
+                    message_id: id === check.user_id && check.message_id ? check.message_id : null,
+                }).catch((error) => console.error("[Spam] couldn't log a dry run", error));
+            continue;
+        }
         const incident = await recordIncident({
             guild_id: check.channel.guild_id ?? null,
             kind: hit.rule,

@@ -59,6 +59,7 @@ import {
     TraceNode,
     TraceRoot,
     getApexExperiments,
+    getUserExperiments,
     getGuildExperiments,
 } from "@spacebar/util";
 import {
@@ -808,7 +809,7 @@ export async function onIdentify(this: WebSocket, data: Payload) {
                         consented: !!preferences?.account_preferences?.consents?.personalization,
                     },
                 },
-                experiments: [],
+                experiments: getUserExperiments(this.user_id),
                 guild_join_requests: guild_join_requests.map((request) => request.toJSON("self")),
                 connected_accounts: [],
                 guild_experiments: [],

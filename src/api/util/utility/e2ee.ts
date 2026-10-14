@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { NextFunction, Request, Response } from "express";
 import { EntityManager, In, IsNull, Not } from "typeorm";
-import { Attachment, Channel, E2eeDevice, E2eeIdentity, E2eeKeyBackup, Message, Recipient, Relationship, Session, User } from "@spacebar/database";
+import { Attachment, Channel, E2eeDevice, E2eeIdentity, E2eeKeyBackup, FormerRecipient, Message, Recipient, Relationship, Session, User } from "@spacebar/database";
 import { ApiError, CANONICAL, Config, emitEvent, Event, MessageFlags } from "@spacebar/util";
 import { ChannelType, E2eeDeviceResponse, E2eeDeviceStatus, E2eeEnvelope, E2eeUserKeysResponse, MessageType } from "@spacebar/schemas";
 import { MessageOptions } from "@spacebar/util/dtos/MessageOptions";
@@ -11,6 +11,7 @@ import { canonicalOf, localIds } from "./federationIds";
 
 export const E2EE_FALLBACK_CONTENT = "🔒 Encrypted message";
 export const E2EE_ALGORITHM = "x25519-hpke-aes256gcm-ed25519";
+export const E2EE_MAX_MENTIONS = 100;
 export const e2eeLimits = () => Config.get().limits.e2ee;
 
 export const E2eeErrors = {
@@ -277,11 +278,12 @@ export async function sharesE2eeContext(userId: string, others: string[]) {
     relationships.forEach((r) => allowed.add(r.to_id));
     const mine = await Recipient.find({ where: { user_id: userId }, select: { channel_id: true } });
     if (mine.length) {
-        const shared = await Recipient.find({
-            where: { channel_id: In(mine.map((r) => r.channel_id)), user_id: In(targets) },
-            select: { user_id: true },
-        });
-        shared.forEach((r) => allowed.add(r.user_id));
+        const where = { channel_id: In(mine.map((r) => r.channel_id)), user_id: In(targets) };
+        const [current, former] = await Promise.all([
+            Recipient.find({ where, select: { user_id: true } }),
+            FormerRecipient.find({ where, select: { channel_id: true, user_id: true } }),
+        ]);
+        [...current, ...former].forEach((r) => allowed.add(r.user_id));
     }
     return allowed;
 }
@@ -303,6 +305,10 @@ const isEnvelope = (value: unknown): value is E2eeEnvelope => {
             return !!decodeKey(entry.enc, 32) && typeof entry.wrapped === "string" && b64url.test(entry.wrapped);
         });
         if (!valid) return false;
+    }
+    if (env.mentions !== undefined) {
+        if (!Array.isArray(env.mentions) || !env.mentions.length || env.mentions.length > E2EE_MAX_MENTIONS) return false;
+        if (!env.mentions.every(userId) || new Set(env.mentions).size !== env.mentions.length) return false;
     }
     const seen = new Set<string>();
     return env.keys.every((key) => {
@@ -374,9 +380,15 @@ export async function applyE2eeToMessage(opts: MessageOptions, channel: Channel,
     const editing = !!opts.edited_timestamp;
     if (envelope.mid !== undefined && (!editing || !opts.id || envelope.mid !== (envelope.v === 2 ? await canonicalOf(opts.id) : opts.id))) throw E2eeErrors.INVALID_ENVELOPE;
 
+    const canonical =
+        envelope.v === 2
+            ? await localIds([...envelope.keys.map((k) => k.user_id), ...(envelope.backup ?? []).map((b) => b.user_id), ...(envelope.mentions ?? [])], { create: false })
+            : null;
+    const localUser = (id: string) => (canonical ? (canonical.get(id) ?? null) : id);
+    const mentioned = (envelope.mentions ?? []).map(localUser);
+    if (mentioned.some((id) => !id || id === opts.author_id || !memberIds.includes(id))) throw E2eeErrors.INVALID_ENVELOPE;
+
     if (!editing || envelope.mid !== undefined) {
-        const canonical = envelope.v === 2 ? await localIds([...envelope.keys.map((k) => k.user_id), ...(envelope.backup ?? []).map((b) => b.user_id)], { create: false }) : null;
-        const localUser = (id: string) => (canonical ? (canonical.get(id) ?? null) : id);
         if (envelope.backup?.some((b) => !memberIds.includes(localUser(b.user_id) ?? ""))) throw E2eeErrors.INVALID_ENVELOPE;
         const check = async (force: boolean) => {
             const devices = await e2eeDevicesOf([...new Set([opts.author_id as string, ...memberIds])], { force, channel_id: channel.id });
@@ -395,6 +407,10 @@ export async function applyE2eeToMessage(opts: MessageOptions, channel: Channel,
         if (failure && federated) failure = await check(true);
         if (failure) throw failure;
     }
+
+    const allowed = opts.allowed_mentions;
+    const pinged = (mentioned as string[]).filter((id) => !allowed || allowed.parse?.includes("users") || allowed.users?.includes(id));
+    if (pinged.length) message.mentions = await User.find({ where: { id: In(pinged) } });
 
     opts.content = E2EE_FALLBACK_CONTENT;
     opts.embeds = [];

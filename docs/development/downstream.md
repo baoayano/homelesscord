@@ -77,6 +77,16 @@ The 2026-10-14 update merges 9 upstream commits through `48719bd`. It makes forg
 
 The rapid update passes the server build, lint, 33 focused security and gateway tests, and 151 API parity checks with 1 provider skip on a fresh SQLite database at port 3002. The request query audit finds 530 values and 0 unsafe queries. The full unit run encounters WebKit host dependency validation failures in this environment; a representative WebKit test passes when validation is bypassed using the already installed local libraries. Full local and federation encryption browser suites are not repeated within this update's requested 4 minute window. OpenAPI is regenerated on main without changing its output. The owner's server on port 3001 remains under the owner's control.
 
+## Update through 268f0f7
+
+The 2026-10-14 update merges 83 upstream commits through `268f0f7`. It adds ranked and paged Discovery search, cross-instance group DM ownership and icons, signed message authorship, remote profile badges, admin charts and search, safer address bans, AutoMod dry runs and exemptions, and account appeals. Encryption preserves old group messages after members leave, signs mention lists and explains when a member has no keys. Ten new migrations cover both PostgreSQL and SQLite.
+
+The merge keeps Nitro registration date initialization next to the new private remote badge column. Native badge management, all nine Nitro assets and permanent Pride remain available. Federation exports the visible home catalog in saved order, including the free Nitro tier. Hidden Staff and eligible hidden Nitro are omitted without exporting private settings. The existing remote profile refresh interval is 60 seconds; a fresh handle lookup also updates the cached badges.
+
+Verification passes the server build, lint, 1614 unit tests with 31 optional skips, 34 focused downstream badge checks, 156 API parity checks with 1 provider skip, 207 federation API checks, 73 federation attack checks, 45 registry unit tests and all 4 local D1 migrations. The fresh PostgreSQL instance applies all migrations, and the SQLite migration regression passes. Required and enabled client patches match build 633029. Firefox verifies the Nitro hover card, all nine asset digests and native directory opening with mouse, Enter and Space. OpenAPI is regenerated on main after integration. Port 3001 remains under the owner's control.
+
+Both complete encryption browser suites pass. The local suite covers former group members, signed mentions, members without keys, password backups, recovery, device approval and failure isolation. The cross-instance suite covers messages and edits, attachments in both directions, mentions, group DMs, safety numbers, fresh-browser history and verified reports. The previous federation voice transition limitation remains recorded; this update changes no voice gateway or SFU code. The registry Worker integration limitation remains separate from the passing registry unit and local migration checks.
+
 ## Downstream features
 
 Place client behavior in a dedicated Equicord plugin and follow [client-patches.md](client-patches.md). Server features use cohesive modules with small changes at their integration points. There is no general server plugin loader. Preserve required encryption and Pride behavior and keep paid capabilities free.

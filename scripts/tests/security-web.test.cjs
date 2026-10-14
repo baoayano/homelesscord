@@ -112,7 +112,8 @@ test("only the instance's own origins get credentialed cors responses", () => {
 
 test("requests from other origins don't propagate instance bans or use the ban fingerprint cookie", () => {
     const authentication = fs.readFileSync("src/api/middlewares/Authentication.ts", "utf8");
-    assert.match(authentication, /fingerprint: foreignOrigin \? undefined : req\.fingerprint/);
+    assert.match(authentication, /fingerprint: foreignOrigin \|\| !sentFingerprint \? undefined : req\.fingerprint/);
+    assert.match(authentication, /includes\(`__sb_sessid=\$\{req\.fingerprint\}`\)/, "a fingerprint made up for a request without the cookie never matches or spreads a ban");
     assert.match(authentication, /propagateBans: !foreignOrigin/);
     const token = fs.readFileSync("src/util/util/Token.ts", "utf8");
     assert.equal(token.match(/propagateBan: opts\?\.propagateBans \?\? true/g)?.length, 2);

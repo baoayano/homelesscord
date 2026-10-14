@@ -328,7 +328,7 @@ export async function initRateLimits(app: Router) {
     app.use(["/auth/logout", "/auth/sessions", "/messages"], rateLimit({ onlyWrites: true, ...routes.user }));
     app.use("/phone-verifications", rateLimit({ onlyWrites: true, ...routes.auth.phone }));
     app.use("/auth/login", rateLimit(routes.auth.login));
-    app.use(["/auth/mfa", "/mfa/finish", "/auth/conditional", "/auth/passwordless", "/auth/forgot", "/auth/reset", "/auth/verify"], rateLimit(routes.auth.login));
+    app.use(["/auth/appeal", "/auth/mfa", "/mfa/finish", "/auth/conditional", "/auth/passwordless", "/auth/forgot", "/auth/reset", "/auth/verify"], rateLimit(routes.auth.login));
     app.use("/auth/register", rateLimit({ onlyIp: true, success: true, ...routes.auth.register }));
     app.get("/auth/pride-badges", rateLimit({ bucket: "auth/pride-badges", onlyIp: true, count: 30, window: 60 }));
     app.get("/auth/instance-invite", rateLimit({ bucket: "auth/instance-invite", onlyIp: true, count: 30, window: 60 }));
@@ -367,7 +367,7 @@ export const topLevelRouteLimits: RouteLimit[] = [
     { paths: ["/_spacebar/api"], count: 60, window: 30 },
     { paths: ["/__development"], onlyIp: true, count: 15, window: 30 },
     { paths: ["/widget"], onlyIp: true, count: 30, window: 30 },
-    { paths: ["/admin", "/developers", "/status", "/guidelines", "/privacy", "/terms", "/tos"], onlyIp: true, count: 60, window: 30 },
+    { paths: ["/admin", "/appeal", "/developers", "/status", "/guidelines", "/privacy", "/terms", "/tos"], onlyIp: true, count: 60, window: 30 },
     { paths: ["/"], method: "get", onlyIp: true, count: 60, window: 30 },
 ];
 

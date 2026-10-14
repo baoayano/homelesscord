@@ -243,8 +243,9 @@ test("every admin route names a right, and writes never use a read-only right", 
     for (const { name, text } of adminRoutes()) {
         for (const { method, right } of handlers(text)) {
             count++;
-            if (name === "index.ts") {
-                assert.equal(right, null, "the overview checks access itself");
+            if (name === "index.ts" || name === "stats/timeseries.ts") {
+                assert.equal(right, null, "the overview and its charts check access themselves");
+                assert.match(text, /rights\.any\(\[\.\.\.ADMIN_PANEL_RIGHTS\]\)/);
                 continue;
             }
             assert.ok(right, `${name} ${method}`);

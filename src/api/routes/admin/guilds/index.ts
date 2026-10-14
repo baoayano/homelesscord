@@ -31,6 +31,19 @@ const paginationQuery = (value: unknown, name: string, fallback: number): number
     return Number(text);
 };
 
+const GUILD_SORTS: Record<string, [string, "ASC" | "DESC"][]> = {
+    newest: [["guild.id", "DESC"]],
+    oldest: [["guild.id", "ASC"]],
+    name: [
+        ["guild.name", "ASC"],
+        ["guild.id", "ASC"],
+    ],
+    members: [
+        ["member_count", "DESC"],
+        ["guild.id", "DESC"],
+    ],
+};
+
 router.get(
     "/",
     route({
@@ -44,6 +57,7 @@ router.get(
                 required: false,
                 description: "local (default) lists servers hosted here, remote lists mirrors of servers on other instances, all lists both. An exact id search ignores it",
             },
+            sort: { type: "string", required: false, description: "newest (default), oldest, name or members" },
             limit: { type: "number", required: false },
             offset: { type: "number", required: false },
         },
@@ -51,6 +65,8 @@ router.get(
     async (req: Request, res: Response) => {
         const q = scalarQuery(req.query.q, "q", "").trim();
         if (q.length > 256) throw new HTTPError("q must be no longer than 256 characters", 400);
+        const sort = scalarQuery(req.query.sort, "sort", "newest");
+        if (!Object.hasOwn(GUILD_SORTS, sort)) throw new HTTPError("sort must be newest, oldest, name or members", 400);
         const limit = Math.min(Math.max(paginationQuery(req.query.limit, "limit", 50), 1), 100);
         const offset = paginationQuery(req.query.offset, "offset", 0);
         const origin = parseOrigin(req.query.origin);
@@ -59,9 +75,11 @@ router.get(
         const query = Guild.createQueryBuilder("guild")
             .select(["guild.id", "guild.name", "guild.icon", "guild.owner_id", "guild.features", "guild.description", "guild.profile", "guild.federated_instance"])
             .addSelect((sub) => sub.select("COUNT(*)", "count").from(Member, "member").where("member.guild_id = guild.id"), "member_count")
-            .orderBy("guild.id", "DESC")
             .limit(limit)
             .offset(offset);
+        const [[firstColumn, firstOrder], ...tieBreaks] = GUILD_SORTS[sort];
+        query.orderBy(firstColumn, firstOrder);
+        for (const [column, order] of tieBreaks) query.addOrderBy(column, order);
 
         const exactId = /^\d{15,20}$/.test(q);
         if (exactId) query.where("guild.id = :id", { id: q });

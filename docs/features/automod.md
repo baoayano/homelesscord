@@ -18,14 +18,20 @@ The matcher is in `src/util/util/SlurMatcher.ts`. It builds the term from a patt
 
 Turning `automod.slurs.enabled` off disables the rule for messages and names. Usernames that match the blocked name words are still refused.
 
+`automod.slurs.action` is `suspend` by default, which does all of the above. It can also be `log`, `delete`, `timeout`, `hold` or `disable`, which refuse the message and take that action instead, the same as the spam rules below. Only `suspend` records a violation and wipes messages.
+
 ## Word lists
 
 `automod.wordLists` holds extra lists. Each list has a `name`, `terms` (up to 500), an `action` and `suspendDays`:
 
 | Action    | What happens                                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `log`     | The match is logged and the message goes through.                                                                                     |
 | `delete`  | The message is refused and logged. The account is untouched.                                                                          |
+| `timeout` | The message is refused and the account is timed out in that server, or muted on the instance outside a server, like the spam rules. |
+| `hold`    | The message is refused and the account goes back to waiting for approval, like the spam rules.                                      |
 | `suspend` | The message is refused, the account is suspended for `suspendDays` and a violation is recorded. The user's other messages are kept. |
+| `disable` | The message is refused and the account is disabled, like the spam rules.                                                            |
 | `name`    | Only usernames, display names, nicknames and server, channel and thread names are refused. Messages pass.                           |
 
 Every list also applies to names. A term matches as a whole word with the same folding and leetspeak as the slur rule, so `ass` matches "@$$" and "a s s" but not "class". A `*` at the start or end of a term allows longer words on that side, so `scam*` matches "scammer".
@@ -67,7 +73,7 @@ These sit on top of the route rate limits, which allow 2 successful registration
 - `automod.registration.maxAccountsPerIp` counts accounts whose `registration_ip` is in the group and that aren't deleted or disabled. Accounts waiting for approval and rejected accounts count. When the count has reached the cap, the signup fails with a `TOO_MANY_ACCOUNTS_ON_IP` field error on the username and email. Signups with a registration token skip it, like the daily limit.
 - `automod.login.maxAccountsPerIp` counts other accounts with a session whose `last_seen_ip` is in the group and that was used in the last `automod.login.sessionActiveDays` (30) days. A sign-in fails with a `TOO_MANY_ACCOUNTS_ON_IP` field error on the login and password when that count has reached the cap. The account's own sessions don't count, so someone who is already signed in from the address can sign in again. A new session only gets an address once its token is used for a request, so a session that was never used doesn't count. This cap is off by default because schools, offices and mobile carriers put many people behind one address.
 
-Operators never count toward either cap and can always sign in. `automod.ipAllowList` holds addresses and CIDR ranges, such as `192.0.2.0/24` or `2001:db8::/48`, that both caps skip. Refusals are logged with rule `ip_account_limit`, source `registration` or `login` and a term like "3 accounts on 2001:db8:1:2::/64, limit 3", at most once every 10 minutes per address and account.
+Staff, meaning operators and accounts with a staff role, never count toward either cap and can always sign in. The daily signup limit also skips Cloudflare, private and allow-listed addresses, the same as the caps. `automod.ipAllowList` holds addresses and CIDR ranges, such as `192.0.2.0/24` or `2001:db8::/48`, that both caps skip. Refusals are logged with rule `ip_account_limit`, source `registration` or `login` and a term like "3 accounts on 2001:db8:1:2::/64, limit 3", at most once every 10 minutes per address and account.
 
 The Automod page has a lookup that lists who counts toward both caps for one address, and links to Users, IP addresses, which lists every address with its account count.
 
@@ -87,7 +93,16 @@ The Automod page has a lookup that lists who counts toward both caps for one add
 | `dm_spam`                            | An account opens DMs with 10 people, sends 10 friend requests, or sends the same DM text of 8 or more characters into 4 DM channels within 10 minutes. | timeout        |
 | `scam_link`                          | A message links to a scam or phishing site. See Scam and phishing links below.                                                              | delete         |
 
-Members who can manage the server never count toward permitted @everyone pings, mention spam or the channel limit of the flood rule, and @everyone in a DM is ignored. Edits count only toward the @everyone and mention rules. "The same text" is compared after NFKC folding, lowercasing, removing invisible characters, mentions, numbers and punctuation, reducing links to their host, joining spaced out letters and collapsing repeated letters. Two texts with the same set of 3 or more words of 3 or more letters also match.
+Members who can manage the server never count toward permitted @everyone pings, mention spam or the channel limit of the flood rule, and @everyone in a DM is ignored. Server moderators also skip the one account in several channels part of the repeated content rule, so an announcement posted in 3 channels passes. Edits count only toward the @everyone and mention rules. "The same text" is compared after NFKC folding, lowercasing, removing invisible characters, mentions, numbers and punctuation, reducing links to their host, joining spaced out letters and collapsing repeated letters. A message that is only links keeps the full link instead, so 5 people sharing different YouTube videos don't match. Two texts with the same set of 3 or more words of 3 or more letters also match. An end-to-end encrypted message counts only toward the flood rule and the file rules, because the server sees the `🔒 Encrypted message` placeholder instead of its text. The placeholder never counts as text, even on a message that arrives without the encrypted flag.
+
+These cases are left alone on purpose, because they used to catch ordinary people:
+
+- Links to the domains in `automod.spam.ignoreLinkDomains` (tenor.com, giphy.com and klipy.com by default) and to this instance's own hosts don't count toward link spam and aren't compared as repeated content. Invites always count.
+- `@everyone` inside an email address like `someone@here.com` and mentions inside code spans and code blocks don't count.
+- Plain text with no link, invite or mention only counts as repeated content or a new account burst when it shows up in 2 or more channels, or when the accounts posted it more times than there are accounts. A server's verification phrase or "hi" typed once by each new member in one channel passes, and a raid that repeats it still trips.
+- The flood rule's channel limit counts channels in one server, so saying hi in 5 servers joined from Discovery, or replying to 5 DMs, passes.
+- The same DM text rule skips DMs to friends, so "happy new year" to 4 friends passes.
+- Accounts from other instances are aged by their `created_at` on their home instance, not by when this instance first saw them.
 
 Repeated files are compared by SHA-256. The message route hashes uploaded files in memory while it handles them, and the CDN writes `cloud_attachments.content_hash` when a file uploaded through the attachment flow arrives, so nothing reads a file again later. Only the hash stays in memory for the window.
 
@@ -100,10 +115,11 @@ The actions, from weakest to strongest:
 - `log` writes the automod log and lets the message through.
 - `delete` refuses the message with error 200000 and deletes the earlier messages that counted toward the rule with one `MESSAGE_DELETE_BULK` per channel.
 - `timeout` also sets the member's `communication_disabled_until` in that server for `automod.spam.timeoutMinutes` (60). Server owners are never timed out in their own server, and the message is only deleted. Spam in DMs mutes the account on the whole instance instead, stored in `rate_limits` as `spam-mute:<id>` so a restart keeps it.
+- `hold` also puts a local account back to `join_status = "pending"` and signs it out, so it waits in Join requests like a held signup until a moderator approves or rejects it.
 - `suspend` also sets `suspended_until` for `automod.spam.suspendHours` (24).
 - `disable` also disables the account.
 
-Every hit records a strike in `rate_limits` as `spam-strikes:<id>`. After `escalateAfterStrikes` (3) strikes within `strikeWindowHours` (24), each further hit moves the action one step up, stopping at suspend. When the account is from another instance, suspend and disable also add a user `FederationBlock`, the same block as the Federation admin page, so that instance can no longer relay it here. Undo in the log lifts timeouts, instance mutes, suspensions, disables and these federation blocks.
+Every hit records a strike in `rate_limits` as `spam-strikes:<id>`. After `escalateAfterStrikes` (3) strikes within `strikeWindowHours` (24), each further hit moves the action one step up, stopping at suspend. Timeout and hold both step up to suspend. When the account is from another instance, suspend and disable also add a user `FederationBlock`, the same block as the Federation admin page, so that instance can no longer relay it here. Undo in the log lifts timeouts, instance mutes, suspensions, disables and these federation blocks.
 
 ## Scam and phishing links
 
@@ -186,12 +202,39 @@ The home instance accepts it when `automod.federation.acceptReports` is on, the 
 `src/api/util/utility/safety.ts` watches each server.
 
 - A join raid is 15 joins within 120 seconds, 8 joins from accounts younger than 24 hours, or 10 joins through one invite. It sets `raid_detected_at`, pauses invites for 60 minutes through `invites_disabled_until` unless invites are already paused for longer, and adds later joiners to the same incident.
-- A DM raid is 10 members starting DMs with other members within 300 seconds. It sets `dm_spam_detected_at` and `dms_disabled_until` for 60 minutes.
+- A DM raid is 10 members starting DMs with other members within 300 seconds. Members who can kick, ban, time out or manage the server don't count, so moderators messaging members don't pause DMs. It sets `dm_spam_detected_at` and `dms_disabled_until` for 60 minutes.
 - A mention raid is 3 accounts tripping `mention_spam` or `everyone_spam` in one server within 300 seconds. It sends `AUTO_MODERATION_MENTION_RAID_DETECTION`, and Discord's "clear" button ends it.
 
 Every raid posts Discord's raid alert to the safety alerts channel when the server has one, at most once an hour per kind, and writes the automod log. Discord's "Pause invites" and "Disable DMs" buttons call `PUT /guilds/:id/incident-actions`, which sets or clears the same fields. Joins through an invite and through registration with an invite are refused while invites are paused, and new DMs between members are refused while DMs are paused. "Report false alarm" clears the alert and ends the incident.
 
 Spam hits and raids are grouped into incidents in the `raid_incidents` table, one per server and kind. An incident is live until 10 minutes pass without a new event, or until someone ends it. Raids in progress and mention raids are reloaded from that table after a restart.
+
+## Rule switches, dry runs and exemptions
+
+`automod.policies` holds one entry for each of 20 rules: `everyoneSpam`, `mentionSpam`, `flood`, `duplicate`, `linkSpam`, `newAccountBurst`, `duplicateAttachment`, `dmSpam`, `scamLink`, `slurs`, `wordLists`, `quarantine`, `verificationLevel`, `ipAccountLimit`, `ipLimit`, `signupBot`, `explicitContent`, `joinRaid`, `mentionRaid` and `dmRaid`. `src/util/util/AutomodPolicy.ts` maps each one to the rule names it writes in the log. Each entry has these fields:
+
+| Field                  | Default                         | Meaning                                                                                              |
+| ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `enabled`              | true                            | The switch for rules that have no `enabled` of their own: word lists, accounts per address, the daily signup limit and the 3 raid rules. The others keep their own switch. |
+| `dryRun`               | false                           | Log what the rule would do with `would_action` set and the action `log`, and act on nobody.          |
+| `exemptStaff`          | true for spam and raid rules    | Skip operators and accounts with a staff role.                                                       |
+| `exemptBots`           | true for spam, scam, quarantine and verification | Skip bot accounts.                                                                  |
+| `exemptVerifiedEmail`  | false                           | Skip accounts with a verified email. Accounts from other instances never count as verified.         |
+| `exemptAccountAgeDays` | 0                               | Skip accounts older than this many days, 0 checks everyone. The spam rules keep their own age setting instead. |
+| `exemptUserIds`        | `[]`                            | User IDs to skip, up to 500.                                                                         |
+| `exemptGuildIds`       | `[]`                            | Server IDs to skip, up to 500.                                                                       |
+
+The defaults match what automod did before the policies existed, so an upgrade changes nothing. In a dry run the message goes through, nothing is deleted, no strike or incident is recorded, and raid rules log one `raid_alert` an hour per server instead of pausing invites or DMs. A dry run of signup scoring logs the hold or refusal it would have made and lets the account in.
+
+`GET /api/v9/admin/automod/rules` lists every rule with its switch, action, policy and what it caught over `days` (7): hits, dry runs, hits a moderator undid or marked as a false positive, and confirmed hits. `PATCH /api/v9/admin/automod/rules/:key` changes one rule and needs `MANAGE_USERS`. It takes the policy fields plus `action` for rules that have one, refuses an action the rule doesn't support and refuses list entries that aren't IDs.
+
+## Appeals
+
+An account that can't sign in because it is suspended, held for review or disabled by staff or automod gets a sign-in error that ends with "To see why or send an appeal, go to <instance>/appeal." The page at `/appeal` asks for the email or username and password and calls `POST /api/v9/auth/appeal`. That route checks the password the same way sign-in does, counts wrong passwords toward the account lock and shares the sign-in rate limit. Without `message` it returns the restriction, the reason built from the newest automod action behind it, when it ends and any appeal already sent. With `message`, up to 1,000 characters, it sends the appeal.
+
+Each account can send one appeal per restriction. The restriction is keyed by the automod action behind it, or by the suspension end when a moderator set it by hand, so a later suspension can be appealed again. Sending the same message twice, such as a retry on a slow connection, returns the first appeal. A different second message gets an `APPEAL_ALREADY_SENT` field error. Accounts from other instances can't use the page, because their password lives on their home instance.
+
+Appeals are stored in `automod_appeals` and listed in the Appeals section of the Automod page. Accepting one lifts the restriction, approves a held account, re-enables a disabled one, marks the automod action behind it as a false positive and overturns its violation. Denying keeps the restriction. The person sees the decision the next time they open the page. Two moderators deciding the same appeal at once can't both act on it, because the first decision claims the row.
 
 ## Server AutoMod rules
 
@@ -207,12 +250,14 @@ When someone reports an encrypted message and the report carries that message's 
 
 The Automod page has these sections:
 
-- Counts of actions in the last 24 hours and 7 days by rule, accounts waiting for approval, accounts suspended right now and live incidents.
-- The review queue, which lists everything automod did in the last 24 hours that nobody has undone or confirmed yet, leaving out log-only entries. Confirm marks the entry confirmed. Undo reverses it like Undo in the log. Confirming a held signup rejects the account and signs it out, and undoing one approves it. A confirmed entry can't be undone from the queue.
-- Rule stats for the last 30 days: hits, log-only hits, confirmed, undone and not a match per rule, and the false positive rate, which is undone hits divided by confirmed plus undone hits. It stays empty for a rule until someone reviews one of its hits.
+- Counts of actions in the last 24 hours and 7 days by rule, accounts waiting for approval, accounts suspended right now, appeals waiting and live incidents.
+- The review queue, which lists everything automod did in the last 24 hours that nobody has undone or confirmed yet, leaving out log-only entries. Confirm marks the entry confirmed. Undo reverses it like Undo in the log. False positive reverses it the same way in one click and records it as a false positive.
+- Appeals, with tabs for waiting, accepted and denied appeals. Each row shows the account, the restriction, the reason the person saw, their message, and Accept and lift or Deny.
+- Rules, a table of all 20 rules with their state (on, off or dry run), action, exemptions and the hits, dry runs and false positives of the last 7 days. Edit opens a drawer with the switch, the action, dry run and the exemptions the rule supports. See catches filters the log to that rule's last 7 days. Confirming a held signup rejects the account and signs it out, and undoing one approves it. A confirmed entry can't be undone from the queue.
+- Rule stats for the last 30 days: hits, log-only hits, dry runs, confirmed, undone, false positives and not a match per rule, and the false positive rate, which is undone hits divided by confirmed plus undone hits. It stays empty for a rule until someone reviews one of its hits.
 - Raids, which refreshes every 15 seconds. It lists live incidents, the incidents of the last 7 days 10 per page and the 25 accounts caught most often by spam and raid rules this week. Opening an incident shows every account in it. Delete messages, Suspend, Disable and Ban IP addresses act on the selected accounts, or on all of them when none are selected, after a confirmation that names the count. Each run is written to the automod log with source `admin` and to the incident's history.
 - Spam rules and Raid detection forms with every setting from the sections above.
-- The log, newest first, 25 per page, filtered by rule, action, reversed state and user ID or username. Each row shows the time, the user, the rule or word list, where it happened, the action with the suspension end and wiped message count, and the masked excerpt. Rows have Open user, Undo and Not a match. Undo lifts the suspension if it is still the one this entry set, marks the violation as invalidated and marks the entry reversed. Not a match does the same and adds the matched text to the allow list. Deleted messages stay deleted.
+- The log, newest first, 25 per page, filtered by rule, action, dry runs only, reversed state and user ID or username. Each row shows the time, the user, the rule or word list, where it happened, the action with the suspension end and wiped message count, or a Dry run badge with what the rule would have done, and the masked excerpt. Rows have Open user, Undo, False positive and Not a match. False positive asks for no confirmation. Undo lifts the suspension if it is still the one this entry set, marks the violation as invalidated and marks the entry reversed. Not a match does the same and adds the matched text to the allow list. Deleted messages stay deleted.
 - Join requests with status tabs, low-effort badges and bulk approve and reject.
 - A test box that runs text through the word lists, names, scam links for new and older accounts, mention counts, the quarantine and explicit file names, and optionally checks an email, a username against recent signups and an address against the allow list, without acting on anyone.
 - Separate forms for scam links with the remote list status, the quarantine with its account list, server verification and explicit media, the slur rule, word lists, the allow list, blocked name words, signups, signup scoring, accounts per address with the address lookup, sign-in protection and federation. Each one saves only its own section through `PATCH /api/v9/admin/automod/settings`.
@@ -229,10 +274,13 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | `GET /`                                    | Settings, counts, pending and suspended account totals.                                   |
 | `PATCH /settings`                          | Save one or more of `slurs`, `wordLists`, `allowList`, `identityBlockedTerms`, `registration`, `login`, `spam`, `raids`, `scam`, `signup`, `quarantine`, `verification`, `explicitContent`, `federation`, `ipAllowList`. |
 | `POST /test`                               | `{ text, email?, username?, ip? }`, returns what each rule would do.                      |
-| `GET /actions`                             | The log. Query `rule`, `action`, `user_id`, `reversed=yes or no`, `review=yes`, `limit`, `offset`. `review=yes` is the review queue. |
-| `POST /actions/:id/reverse`                | `{ reversal: "undo" or "not_a_match" }`.                                                  |
+| `GET /actions`                             | The log. Query `rule`, `action`, `user_id`, `reversed=yes or no`, `review=yes`, `dry_run=yes`, `days`, `limit`, `offset`. `review=yes` is the review queue. Rows carry `would_action` for dry runs. |
+| `POST /actions/:id/reverse`                | `{ reversal: "undo", "not_a_match" or "false_positive" }`.                                  |
+| `GET /rules`, `PATCH /rules/:key`          | Every rule with its policy and counts over `days` (7), and change one rule. See Rule switches. |
+| `GET /appeals`                             | Appeals by `status` (`pending` by default, `accepted`, `denied`, `all`), `limit`, `offset`. |
+| `POST /appeals/:id`                        | `{ decision: "accept" or "deny" }`. Needs `MODERATE_USERS`.                                |
 | `POST /actions/:id/confirm`                | Confirm an entry. Confirming a hold rejects the account.                                  |
-| `GET /stats`                               | Hits and reviews per rule over `days` (30).                                               |
+| `GET /stats`                               | Hits, dry runs and reviews per rule over `days` (30), and `pending_appeals`.              |
 | `GET /quarantine`, `POST /quarantine`      | Accounts in quarantine, and `{ user_ids }` to clear them early.                           |
 | `GET /scam-list`, `POST /scam-list`        | The remote scam list status, and fetch it now.                                            |
 | `GET /ip-caps`                             | `ip` query, returns the address group, whether it is exempt, and the accounts counted toward each cap. |
@@ -250,6 +298,7 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | Key                                         | Default | Meaning                                                    |
 | ------------------------------------------- | ------- | ---------------------------------------------------------- |
 | `automod.slurs.enabled`                     | true    | The slur rule.                                             |
+| `automod.slurs.action`                      | suspend | What a match does.                                         |
 | `automod.slurs.includeSoftA`                | false   | Also act on the soft-A spelling.                           |
 | `automod.slurs.suspendDays`                 | 7       | Suspension length.                                         |
 | `automod.slurs.deleteAllMessages`           | true    | Wipe the user's messages.                                  |
@@ -294,6 +343,8 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | `register.joinReason.maxLength`             | 1000    | Longest answer.                                            |
 | `register.requireApproval`                  | false   | Hold new accounts for a moderator.                         |
 | `automod.spam.<rule>`                       | on      | `everyone`, `mentions`, `flood`, `duplicates`, `links` and `burst`, with the thresholds and actions in Spam rules. |
+| `automod.spam.ignoreLinkDomains`            | tenor.com, giphy.com, klipy.com | Link domains the spam rules ignore. |
+| `automod.policies.<rule>`                   | see Rule switches | Switch, dry run and exemptions per rule.         |
 | `automod.spam.timeoutMinutes`               | 60      | Timeout and instance mute length.                          |
 | `automod.spam.suspendHours`                 | 24      | Suspension length.                                         |
 | `automod.spam.escalateAfterStrikes`         | 3       | Strikes before the action steps up, 0 is off.              |
@@ -306,9 +357,9 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | `guild.safety.dmRaidPauseDmsMinutes`        | 60      | DM pause after a DM raid, 0 only alerts.                   |
 | `guild.safety.mentionRaidThreshold`         | 3       | Mention spammers in `mentionRaidWindowSeconds` (300).      |
 
-The database stores `automod.wordLists`, `automod.allowList`, `automod.ipAllowList` and the domain, word and hash lists above as whole lists, so removing an entry removes it.
+The database stores `automod.wordLists`, `automod.allowList`, `automod.ipAllowList`, `automod.spam.ignoreLinkDomains`, every policy's `exemptUserIds` and `exemptGuildIds` and the domain, word and hash lists above as whole lists, so removing an entry removes it.
 
-The `1792809163527-AutomodReview` migration adds `automod_actions.confirmed_at`, `automod_actions.confirmed_by`, an index on `automod_actions (rule, created_at)` for the stats, and `cloud_attachments.content_hash`.
+The `1792809163527-AutomodReview` migration adds `automod_actions.confirmed_at`, `automod_actions.confirmed_by`, an index on `automod_actions (rule, created_at)` for the stats, and `cloud_attachments.content_hash`. `1793004718526-AutomodDryRun` adds `automod_actions.would_action`, and `1793012395748-AutomodAppeals` creates `automod_appeals` with a unique index on the account and restriction.
 
 ## Testing
 
@@ -318,6 +369,8 @@ The `1792809163527-AutomodReview` migration adds `automod_actions.confirmed_at`,
 
 `bun test scripts/tests/automod-rules.test.cjs` covers the scam matcher with real scam domains and false positives on github.com, discord.com/channels, the instance's own links, the brands' real sites and fan sites, edit distance edges, the remote list parser, repeated files across accounts and channels with older accounts reposting, DM opens and friend requests at their limits, the same DM text, signup scoring at each threshold, email domain lists, quarantine at its window edge, verification levels, the explicit media filter, address grouping and CIDR ranges, both address caps with operators and the allow list, the migration and the route wiring.
 
-`PORT=3800 AUTOMOD_PROBE_DATABASE=<db> bun scripts/dev/automod-probe.mjs` runs against a server on a database you created and refuses any other. It registers an admin and 7 accounts, then checks a scam link and real links, the same file from three accounts through both upload paths and the stored hash, DM opens and friend requests, the new account DM limit, a held signup confirmed and another undone from the review queue, a denied email domain, the quarantine and clearing it, a server verification level, the explicit media filter, the test box, rule stats and both address caps with the allow list and an operator sign-in. It restores the settings when it ends. `scripts/dev/federation-probe.mjs` checks that a scam link from an account on the other instance is refused, logged and filed as a report on its home instance.
+`bun test scripts/tests/automod-policies.test.cjs` covers the policy defaults, every exemption kind, dry runs of word lists, the quarantine and signup scoring, word lists that time out or hold, the slur action, the rules routes and the dry run migration. `bun test scripts/tests/automod-appeals.test.cjs` covers which restriction applies, the reason text, one appeal per restriction with retries, accepting and denying, a second decision on the same appeal, the migration, the rate limit and the sign-in error text. The tests whose names start with "false positive:" in `spam-detection.test.cjs` and `automod-rules.test.cjs` cover each case in the list under Spam rules.
+
+`PORT=3800 AUTOMOD_PROBE_DATABASE=<db> bun scripts/dev/automod-probe.mjs` runs against a server on a database you created and refuses any other. It registers an admin and 7 accounts, then checks a scam link and real links, the same file from three accounts through both upload paths and the stored hash, DM opens and friend requests, the new account DM limit, a held signup confirmed and another undone from the review queue, a denied email domain, the quarantine and clearing it, a server verification level, the explicit media filter, the test box, rule stats, a scam rule in dry run and with an exempt server, a suspended account that sends an appeal from the appeal page and gets it accepted, and both address caps with the allow list and a staff sign-in. The caps run from a public address sent in `X-Forwarded-For`, because loopback and private addresses never count toward them. It restores the settings when it ends. `scripts/dev/federation-probe.mjs` checks that a scam link from an account on the other instance is refused, logged and filed as a report on its home instance.
 
 `PORT=3300 RAID_PROBE_DATABASE=<db> bun scripts/dev/raid-probe.mjs` runs against a server on a database you created and refuses any other. It registers an admin and 9 raiders, then checks a join raid through one invite, Discord's pause and resume invite buttons, the disable DMs button, a mention raid and its clear button, an @everyone wave, a flood across 5 channels, a server keyword rule, and the admin raid routes including an IP ban. It restores the spam and raid settings when it ends.

@@ -27,7 +27,7 @@ const deviceId = crypto.createHash("sha256").update(Buffer.from(signingKey, "bas
 
 const canonical = { [channelId]: "@1000@host.test", [authorId]: "@777@home.test", [messageId]: "@3000@host.test", 5000: "@5000@host.test" };
 
-const seal = (payload, contentKey = crypto.randomBytes(32), v = 1, mid = undefined) => {
+const seal = (payload, contentKey = crypto.randomBytes(32), v = 1, mid = undefined, mentions = undefined) => {
     const iv = crypto.randomBytes(12);
     const bind = mid ? `m:${mid}` : `n:${nonce}`;
     const [channel, author, reader] = v === 2 ? [canonical[channelId], canonical[authorId], canonical[5000]] : [channelId, authorId, "5000"];
@@ -42,6 +42,7 @@ const seal = (payload, contentKey = crypto.randomBytes(32), v = 1, mid = undefin
         iv: iv.toString("base64url"),
         ct,
         keys: [{ user_id: reader, device_id: "zz", prekey_id: 1, enc: "e", wrapped: "w" }],
+        ...(mentions && { mentions }),
     };
     const signed = JSON.stringify([
         "fosscord-e2ee/v1/sig",
@@ -55,6 +56,7 @@ const seal = (payload, contentKey = crypto.randomBytes(32), v = 1, mid = undefin
         envelope.iv,
         envelope.ct,
         envelope.keys.map((k) => [k.user_id, k.device_id, k.prekey_id, k.enc, k.wrapped]),
+        ...(mentions ? [{ mentions: [...mentions].sort() }] : []),
     ]);
     return { envelope: { ...envelope, sig: crypto.sign(null, Buffer.from(signed), signer.privateKey).toString("base64url") }, contentKey };
 };
@@ -145,6 +147,14 @@ test("a shared content key opens the reported message and the signature is check
     assert.equal(snapshot.encrypted.verified, true);
     assert.deepEqual([...snapshot.encrypted.files], ["photo.png"]);
     assert.equal(snapshot.attachments.length, 0);
+});
+
+test("the mention list of an encrypted message is covered by its signature", async () => {
+    const { envelope, contentKey } = seal({ content: "hi <@5000>" }, undefined, 1, undefined, ["5000"]);
+    const snapshot = await harness(envelope)(contentKey.toString("base64url"));
+    assert.equal(snapshot.encrypted.verified, true, snapshot.encrypted.reason);
+    const changed = await harness({ ...envelope, mentions: ["5000", "6000"] })(contentKey.toString("base64url"));
+    assert.equal(changed.encrypted.verified, false, "a mention list changed after signing fails the check");
 });
 
 test("reports without a key, with a wrong key or with a forged signature stay unverified", async () => {

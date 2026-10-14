@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import crypto, { KeyObject } from "node:crypto";
 import { isIP } from "node:net";
+import { discoveryCategoryIds, discoveryKeywords } from "../DiscoverySearch";
 
 export const FEDERATION_PROTOCOL = 2;
 export const REGISTRY_KEY_ID = "registry-1";
@@ -46,6 +47,10 @@ export interface DiscoveryGuild {
     member_count: number;
     invite_url: string;
     verified_at?: string | null;
+    keywords?: string[];
+    category_ids?: number[];
+    presence_count?: number;
+    active_at?: string | null;
 }
 
 export interface RegistryDocument {
@@ -222,15 +227,21 @@ export const cleanDiscoveryGuild = (entry: unknown, instance?: string): Discover
     const invite = optionalUrl(raw.invite_url);
     if (!invite || instanceIdFromUrl(invite) !== owner) return null;
     const members = Number(raw.member_count);
+    const memberCount = Number.isSafeInteger(members) && members > 0 ? members : 0;
+    const online = Number(raw.presence_count);
     return {
         id: raw.id as string,
         instance: owner,
         name: text(raw.name, 100) || "Unnamed server",
         description: text(raw.description, 300),
         icon_url: optionalUrl(raw.icon_url),
-        member_count: Number.isSafeInteger(members) && members > 0 ? members : 0,
+        member_count: memberCount,
         invite_url: invite,
         ...(raw.verified_at !== undefined && { verified_at: time(raw.verified_at) }),
+        ...(Array.isArray(raw.keywords) && { keywords: discoveryKeywords(raw.keywords) }),
+        ...(Array.isArray(raw.category_ids) && { category_ids: discoveryCategoryIds(raw.category_ids) }),
+        ...(raw.presence_count !== undefined && { presence_count: Number.isSafeInteger(online) && online > 0 ? Math.min(online, memberCount) : 0 }),
+        ...(raw.active_at !== undefined && { active_at: time(raw.active_at) }),
     };
 };
 
@@ -294,11 +305,44 @@ export const parseWellKnown = (value: unknown, expectedId: string) => {
     };
 };
 
-export const announcePayload = (id: string, now = new Date(), nonce: Uint8Array = crypto.randomBytes(16)) => ({
+export const MAX_ANNOUNCE_CONTACTS = 10;
+
+export const contactNames = (usernames: unknown[]) =>
+    [
+        ...new Set(
+            usernames
+                .filter((name): name is string => typeof name === "string")
+                .map((name) => name.trim().toLowerCase())
+                .filter((name) => name.length >= 2 && name.length <= 32 && /^[a-z0-9_.]+$/.test(name) && !name.includes("..")),
+        ),
+    ].slice(0, MAX_ANNOUNCE_CONTACTS);
+
+export const contactHandles = (usernames: unknown[], id: string) => contactNames(usernames).map((name) => `${name}@${id}`);
+
+export const MAX_ANNOUNCE_STAT = 1_000_000_000;
+
+export interface AnnounceStats {
+    users: number;
+    servers: number;
+    messages_24h: number;
+}
+
+export const announceStats = (raw: Partial<Record<keyof AnnounceStats, unknown>> | null | undefined): AnnounceStats | undefined => {
+    if (!raw) return undefined;
+    const clamp = (value: unknown) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.min(MAX_ANNOUNCE_STAT, Math.max(0, Math.floor(number))) : 0;
+    };
+    return { users: clamp(raw.users), servers: clamp(raw.servers), messages_24h: clamp(raw.messages_24h) };
+};
+
+export const announcePayload = (id: string, now = new Date(), nonce: Uint8Array = crypto.randomBytes(16), contacts?: string[], stats?: AnnounceStats) => ({
     type: "announce" as const,
     id,
     sent_at: now.toISOString(),
     nonce: toBase64Url(nonce),
+    ...(contacts ? { contacts: contacts.slice(0, MAX_ANNOUNCE_CONTACTS) } : {}),
+    ...(stats ? { stats: announceStats(stats) } : {}),
 });
 
 export const blockSets = (document: Pick<RegistryDocument, "blocked" | "instances"> | null | undefined, local: LocalBlockLists) => {
@@ -348,6 +392,7 @@ export const buildDirectory = (options: {
     peers?: DirectoryPeer[];
     remoteGuilds?: DiscoveryGuild[];
     verifiedIds?: Set<string>;
+    listings?: Map<string, Set<string>>;
 }) => {
     const { document, ownId, local, verification } = options;
     const blocks = blockSets(document, local);
@@ -364,6 +409,7 @@ export const buildDirectory = (options: {
     const seen = new Set<string>();
     const guilds = candidates.filter((guild) => {
         if (seen.has(guild.id) || guild.instance === ownId || !known.has(guild.instance) || blocks.guild(guild.id)) return false;
+        if (options.listings?.get(guild.instance)?.has(guild.id) === false) return false;
         seen.add(guild.id);
         return true;
     });

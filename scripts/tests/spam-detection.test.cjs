@@ -321,7 +321,19 @@ class ApiError extends Error {
     }
 }
 
-function spamGuardFixture(users, spamConfig = new AutomodSpamConfiguration()) {
+function policyModule(policies = {}, staff = []) {
+    return load("src/api/util/utility/automodPolicy.ts", {
+        "@spacebar/util": {
+            Config: { get: () => ({ automod: { policies: { ...new AutomodConfiguration().policies, ...policies } } }) },
+            loadStaffRoles: async () => ({ staff: new Set(staff) }),
+            isStaffAccount: (user, snap) => snap.staff.has(user.id),
+            Snowflake: { deconstruct: (id) => ({ timestamp: Number((BigInt(id) >> 22n) + EPOCH) }) },
+        },
+        "@spacebar/util/util/AutomodPolicy": require("../../src/util/util/AutomodPolicy.ts"),
+    });
+}
+
+function spamGuardFixture(users, spamConfig = new AutomodSpamConfiguration(), { policies = {}, staff = [] } = {}) {
     const calls = {
         userUpdates: [],
         memberUpdates: [],
@@ -409,7 +421,9 @@ function spamGuardFixture(users, spamConfig = new AutomodSpamConfiguration()) {
                 return { id: `incident-${calls.incidents.length}` };
             },
         },
-        "./scamGuard": { scamMatchFor: () => null, describeScam: () => "" },
+        "./scamGuard": { scamMatchFor: () => null, describeScam: () => "", ownHosts: () => ["meow.example"] },
+        "./automodPolicy": policyModule(policies, staff),
+        "@spacebar/util/util/AutomodPolicy": require("../../src/util/util/AutomodPolicy.ts"),
         "./automodReports": { reportToHomeInstance: async (user, entry) => calls.reports.push([user.id, entry.rule]) },
         "./safety": {
             emitMemberUpdate: async () => undefined,
@@ -526,7 +540,7 @@ test("operators and system accounts are never checked", async () => {
     assert.equal(calls.logs.length, 0);
 });
 
-function safetyFixture(safety = new SafetyConfiguration(), guild = {}) {
+function safetyFixture(safety = new SafetyConfiguration(), guild = {}, { users = [], moderators = [], policies = {} } = {}) {
     const calls = { guildUpdates: [], posted: [], incidents: [], logs: [], events: [], ended: [] };
     const stored = { id: "g1", features: ["COMMUNITY"], safety_alerts_channel_id: "alerts", incidents_data: null, ...guild };
     const database = {
@@ -548,7 +562,7 @@ function safetyFixture(safety = new SafetyConfiguration(), guild = {}) {
             }),
         },
         RaidIncident: { update: async () => undefined, find: async () => [] },
-        User: {},
+        User: { findOne: async ({ where }) => users.find((user) => user.id === where.id) ?? null },
     };
     const safetyModule = load("src/api/util/utility/safety.ts", {
         typeorm,
@@ -557,6 +571,7 @@ function safetyFixture(safety = new SafetyConfiguration(), guild = {}) {
             Config: { get: () => ({ guild: { safety } }) },
             DiscordApiErrors: {},
             emitEvent: async (event) => calls.events.push(event),
+            getPermission: async (user_id) => ({ has: (flag) => moderators.includes(user_id) && flag === "KICK_MEMBERS" }),
             Snowflake: {
                 generate: () => "777",
                 deconstruct: (id) => ({ timestamp: Number((BigInt(id) >> 22n) + EPOCH) }),
@@ -575,6 +590,7 @@ function safetyFixture(safety = new SafetyConfiguration(), guild = {}) {
             endOpenIncidents: async (guild_id, kind, by) => calls.ended.push([guild_id, kind, by]),
         },
         "./systemAccounts": { getSystemAccount: async () => ({ id: "official" }) },
+        "./automodPolicy": policyModule(policies),
         "@spacebar/util/util/GuildVerification": require("../../src/util/util/GuildVerification.ts"),
         "@spacebar/util/util/RestrictionError": require("../../src/util/util/RestrictionError.ts"),
     });
@@ -692,4 +708,167 @@ test("incidents group events while live and a cleared incident is never reopened
     assert.notEqual(fresh.id, first.id);
     assert.ok(first.ended_at, "the cleared incident stays ended");
     assert.equal(incidents.incidentLive({ ended_at: null, last_event_at: new Date(Date.now() - 11 * 60 * 1000) }), false);
+});
+
+test("encrypted DMs from several new accounts never count as a burst because the server only sees the placeholder", async () => {
+    const users = Array.from({ length: 6 }, (_, i) => ({ id: snowflake(Date.now() - 1000 - i), username: `new${i}`, rights: "0" }));
+    const { guard, calls } = spamGuardFixture(users);
+    for (const [i, user] of users.entries())
+        await guard.checkSpam({
+            user_id: user.id,
+            channel: { id: `dm${i}`, guild_id: null },
+            content: "🔒 Encrypted message",
+            encrypted: true,
+            message_id: snowflake(Date.now()),
+        });
+    assert.equal(calls.logs.length, 0);
+    assert.equal(calls.userUpdates.length, 0);
+
+    const plain = spamGuardFixture(users);
+    const outcomes = [];
+    for (const [i, user] of users.slice(0, 4).entries())
+        outcomes.push(
+            await plain.guard
+                .checkSpam({ user_id: user.id, channel: { id: `c${i}`, guild_id: "g1" }, content: "selling cheap accounts dm me", message_id: snowflake(Date.now()) })
+                .catch((error) => error),
+        );
+    assert.ok(outcomes[3] instanceof Error);
+    assert.ok(plain.calls.logs.some((entry) => entry.rule === "new_account_burst"));
+});
+
+test("the message routes tell the spam check when a message is encrypted", () => {
+    for (const route of ["channels/#channel_id/messages/index.ts", "channels/#channel_id/messages/#message_id/index.ts"])
+        assert.match(fs.readFileSync(path.join(__dirname, "../../src/api/routes", route), "utf8"), /encrypted: !!body\.encrypted/, route);
+});
+
+test("false positive: GIF picker links and the instance's own links never count as links or repeated content", () => {
+    const detector = new SpamDetector();
+    const cfg = config();
+    const ignored = [...cfg.ignoreLinkDomains, "meow.example"];
+    const outcomes = Array.from({ length: 6 }, (_, i) =>
+        sender(detector, cfg, account(0), { channel_id: `80${i}`, ignoredLinkHosts: ignored })(`https://tenor.com/view/cat-dance-gif-${1000 + i}`, { gap: 1000 * (i + 1) }),
+    );
+    for (const hits of outcomes) assert.deepEqual(hits, []);
+    const linker = sender(new SpamDetector(), cfg, account(0), { ignoredLinkHosts: ignored });
+    for (let i = 0; i < 6; i++) assert.deepEqual(linker(`see https://meow.example/channels/1/2/${300 + i} and https://media.tenor.com/x${i}.gif`, { gap: 5000 }), []);
+    const inviter = sender(new SpamDetector(), cfg, account(0), { ignoredLinkHosts: ignored });
+    inviter("https://meow.example/invite/abc");
+    assert.deepEqual(rules(inviter("https://meow.example/invite/def", { gap: 2000 })), ["link_spam"]);
+});
+
+test("false positive: different bare links to the same site from several accounts are not repeated content", () => {
+    const detector = new SpamDetector();
+    const cfg = config();
+    const videos = ["dQw4w9WgXcQ", "kJQP7kiw5Fk", "9bZkp7q19f0", "OPf0YbXqDm0", "fJ9rUzIMcZQ"];
+    const outcomes = videos.map((video, i) => sender(detector, cfg, account(0), { channel_id: `81${i % 2}` })(`https://www.youtube.com/watch?v=${video}`, { gap: 1000 * (i + 1) }));
+    for (const hits of outcomes) assert.deepEqual(hits, []);
+    assert.notEqual(spamFingerprint("https://youtu.be/abcDEF").exact, spamFingerprint("https://youtu.be/ghiJKL").exact);
+    assert.equal(spamFingerprint("free nitro https://scam.example/a1").exact, spamFingerprint("free nitro https://scam.example/zz9").exact);
+});
+
+test("false positive: saying hi in several servers or answering several DMs is not a flood", () => {
+    const cfg = config();
+    const joiner = sender(new SpamDetector(), cfg, account(0));
+    for (let i = 0; i < 8; i++) assert.deepEqual(joiner("hi everyone!", { guild_id: `9${i}`, channel_id: `90${i}`, gap: 2000 }), []);
+    const replier = sender(new SpamDetector(), cfg, account(0), { dm: true, guild_id: null });
+    const replies = ["sure", "yes please", "on my way", "lol same", "thanks!", "tomorrow works", "no worries", "sounds good"];
+    for (const [i, reply] of replies.entries()) assert.deepEqual(replier(reply, { channel_id: `91${i}`, gap: 2000 }), [], `reply ${i}`);
+});
+
+test("false positive: the same DM to friends never counts as a DM blast, the same DM to strangers still does", () => {
+    const cfg = config();
+    const friendly = sender(new SpamDetector(), cfg, account(0), { dm: true, guild_id: null, knownRecipient: true });
+    for (let i = 0; i < 8; i++) assert.deepEqual(friendly("happy new year!!", { channel_id: `95${i}`, gap: 3000 }), []);
+    const blaster = sender(new SpamDetector(), cfg, account(0), { dm: true, guild_id: null });
+    for (let i = 0; i < 3; i++) assert.deepEqual(blaster("happy new year!!", { channel_id: `96${i}`, gap: 3000 }), []);
+    assert.deepEqual(rules(blaster("happy new year!!", { channel_id: "969", gap: 3000 })), ["dm_spam"]);
+    assert.match(
+        fs.readFileSync(path.join(__dirname, "../../src/api/routes/channels/#channel_id/messages/index.ts"), "utf8"),
+        /knownRecipient: channel\.type === ChannelType\.DM && !dmViaGuilds\.length/,
+    );
+});
+
+test("false positive: the same short phrase typed once by many accounts in one channel is not spam", () => {
+    const detector = new SpamDetector();
+    const cfg = config();
+    const phrase = "I have read and agree to the rules of this server";
+    for (let i = 0; i < 8; i++) assert.deepEqual(sender(detector, cfg, account(0), { channel_id: "920" })(phrase, { gap: 1000 * (i + 1) }), [], `account ${i}`);
+    const greeters = new SpamDetector();
+    for (let i = 0; i < 8; i++) assert.deepEqual(sender(greeters, cfg, account(0), { channel_id: "921" })("hi everyone", { gap: 1000 * (i + 1) }), [], `greeter ${i}`);
+
+    const raid = new SpamDetector();
+    const raiders = Array.from({ length: 4 }, () => sender(raid, cfg, account(0), { channel_id: "922" }));
+    let hits = [];
+    for (const send of raiders) hits = send("this server is dead lol", { gap: 1000 });
+    assert.deepEqual(hits, []);
+    hits = raiders[0]("this server is dead lol", { gap: 1000 });
+    assert.deepEqual(rules(hits), ["new_account_burst"]);
+});
+
+test("false positive: email addresses and code spans don't count as @everyone or mentions", () => {
+    const send = sender(new SpamDetector(), config(), account());
+    for (let i = 0; i < 4; i++) assert.deepEqual(send("write to me at someone@here.com"), []);
+    for (let i = 0; i < 4; i++) assert.deepEqual(send("type `@everyone` to ping, it needs the permission"), []);
+    assert.equal(countSpamMentions("```\n<@1> <@2> <@3>\n``` and <@4>"), 1);
+});
+
+test("false positive: a moderator posting one announcement in several channels is not repeated content", () => {
+    const send = sender(new SpamDetector(), config(), account(400), { moderator: true });
+    const text = "Server maintenance tonight at 20:00 UTC, expect a short downtime";
+    for (let i = 0; i < 4; i++) assert.deepEqual(send(text, { channel_id: `93${i}`, gap: 5000 }), []);
+});
+
+test("false positive: accounts from other instances are as old as their remote account, not their shadow", async () => {
+    const shadow = { id: snowflake(Date.now() - 1000), username: "veteran@remote.example", rights: "0", federated_instance: "remote.example" };
+    const { guard, calls } = spamGuardFixture([shadow]);
+    const remote = { federated_instance: "remote.example", created_at: new Date(Date.now() - 900 * DAY) };
+    for (let i = 0; i < 6; i++)
+        await guard.checkSpam({
+            user_id: shadow.id,
+            account: remote,
+            channel: { id: "c1", guild_id: "g1" },
+            content: `look https://site${i}.example/page`,
+            message_id: snowflake(Date.now()),
+        });
+    assert.equal(calls.logs.length, 0);
+    assert.equal(guard.accountCreatedAt(shadow.id, remote), remote.created_at.getTime());
+    assert.equal(guard.accountCreatedAt(shadow.id, { federated_instance: "remote.example", created_at: "not a date" }), Number((BigInt(shadow.id) >> 22n) + EPOCH));
+    assert.equal(guard.accountCreatedAt(shadow.id, null), Number((BigInt(shadow.id) >> 22n) + EPOCH));
+});
+
+test("false positive: the encrypted placeholder never counts as text even when the encrypted flag is missing", async () => {
+    const users = Array.from({ length: 6 }, (_, i) => ({ id: snowflake(Date.now() - 1000 - i), username: `new${i}`, rights: "0" }));
+    const { guard, calls } = spamGuardFixture(users);
+    for (const [i, user] of users.entries())
+        await guard.checkSpam({ user_id: user.id, channel: { id: `c${i}`, guild_id: "g1" }, content: guard.ENCRYPTED_PLACEHOLDER, message_id: snowflake(Date.now()) });
+    assert.equal(calls.logs.length, 0);
+    const e2ee = fs.readFileSync(path.join(__dirname, "../../src/api/util/utility/e2ee.ts"), "utf8");
+    assert.ok(e2ee.includes(`E2EE_FALLBACK_CONTENT = "${guard.ENCRYPTED_PLACEHOLDER}"`));
+});
+
+test("false positive: remote accounts joining are counted by their real age in join raids", async () => {
+    const remote = Array.from({ length: 10 }, () => ({ id: snowflake(Date.now() - 1000), federated_instance: "remote.example", created_at: new Date(Date.now() - 500 * DAY) }));
+    const { safety, stored } = safetyFixture(new SafetyConfiguration(), {}, { users: remote });
+    for (const [i, user] of remote.entries()) await safety.recordGuildJoin("g1", user.id, `remote${i}`);
+    assert.equal(stored.incidents_data, null);
+});
+
+test("false positive: a server moderator messaging many members is not a DM raid", async () => {
+    const safetyConfig = new SafetyConfiguration();
+    safetyConfig.dmRaidThreshold = 3;
+    const { safety, stored } = safetyFixture(safetyConfig, {}, { moderators: ["mod"] });
+    for (let i = 0; i < 6; i++) await safety.recordGuildMemberDm(["g1"], "mod", `member${i}`);
+    assert.equal(stored.incidents_data, null);
+});
+
+test("the message and contact routes pass the account so remote accounts keep their real age", () => {
+    for (const route of [
+        "channels/#channel_id/messages/index.ts",
+        "channels/#channel_id/messages/#message_id/index.ts",
+        "channels/#channel_id/threads.ts",
+        "users/@me/channels.ts",
+        "users/@me/relationships.ts",
+    ])
+        assert.match(fs.readFileSync(path.join(__dirname, "../../src/api/routes", route), "utf8"), /account: req\.user/, route);
+    assert.match(fs.readFileSync(path.join(__dirname, "../../src/util/util/Token.ts"), "utf8"), /"created_at",/);
 });

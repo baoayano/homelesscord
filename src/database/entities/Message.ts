@@ -293,6 +293,9 @@ export class Message extends BaseClass {
     @Column({ type: "jsonb", nullable: true })
     encrypted?: E2eeEnvelope | null;
 
+    @Column({ type: "text", nullable: true, select: false })
+    authorship?: string | null;
+
     @Column({ type: "jsonb", nullable: true })
     soundboard_sounds?: MessageSoundboardSound[] | null;
 
@@ -390,6 +393,7 @@ export class Message extends BaseClass {
 
             author_id: undefined,
             member_id: undefined,
+            authorship: undefined,
             username: undefined,
             avatar: undefined,
             webhook_id: this.webhook_id ?? undefined,

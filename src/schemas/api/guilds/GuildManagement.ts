@@ -143,4 +143,5 @@ export interface GuildDiscoveryMetadata {
     reasons_to_join: { reason: string; emoji_id?: string | null; emoji_name?: string | null }[];
     social_links: string[] | null;
     about: string | null;
+    category_ids?: number[];
 }

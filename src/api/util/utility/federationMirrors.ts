@@ -330,7 +330,7 @@ export async function deleteMirrorGuild(guild_id: string) {
     for (const channel of channels) invalidateMirror(`channel:${channel.id}`);
 }
 
-export async function upsertMirrorPrivateChannel(raw: Raw, instance: string, recipients: string[]) {
+export async function upsertMirrorPrivateChannel(raw: Raw, instance: string, recipients: string[], closed: string[] = []) {
     const id = await upsertMirrorChannel({ ...raw, guild_id: undefined }, instance, null);
     if (!id) return null;
     const current = await Recipient.find({ where: { channel_id: id } });
@@ -338,7 +338,7 @@ export async function upsertMirrorPrivateChannel(raw: Raw, instance: string, rec
     for (const row of current) if (!wanted.has(row.user_id)) await Recipient.delete({ id: row.id });
     for (const user_id of wanted)
         if (!current.some((row) => row.user_id === user_id) && (await User.exists({ where: { id: user_id } })))
-            await Recipient.create({ channel_id: id, user_id, closed: false }).save();
+            await Recipient.create({ channel_id: id, user_id, closed: closed.includes(user_id) }).save();
     return id;
 }
 

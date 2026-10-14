@@ -115,7 +115,7 @@ test("frames count toward a limit before they are decoded", async () => {
 });
 
 test("forwarded addresses are only read from trusted proxies", () => {
-    const { clientAddress } = loadModule("src/gateway/util/ClientAddress.ts", {});
+    const { clientAddress } = loadModule("src/gateway/util/ClientAddress.ts", { "../../util/util/networking/Cloudflare": require("../../src/util/util/networking/Cloudflare.ts") });
     const request = (address, headers) => ({ socket: { remoteAddress: address }, headers });
     assert.equal(clientAddress(request("203.0.113.9", { "x-forwarded-for": "198.51.100.1" }), "X-Forwarded-For"), "203.0.113.9");
     assert.equal(clientAddress(request("::ffff:172.18.0.1", { "x-forwarded-for": "198.51.100.1" }), "X-Forwarded-For"), "198.51.100.1");

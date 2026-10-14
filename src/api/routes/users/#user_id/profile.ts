@@ -97,8 +97,9 @@ router.get("/", route({ responses: { 200: { body: "UserProfileResponse" } } }), 
         : null;
 
     const badges = [];
-    if (user.badge_ids?.length) badges.push(...(await Badge.find({ where: { id: In(user.badge_ids) } })));
-    const badgeRole = user.badge_ids?.includes(STAFF_BADGE_ID) ? null : staffBadgeRole(user.id, await loadStaffRoles());
+    const badgeIds = (user.badge_ids ?? []).filter((id) => !user.federated_instance || id !== STAFF_BADGE_ID);
+    if (badgeIds.length) badges.push(...(await Badge.find({ where: { id: In(badgeIds) } })));
+    const badgeRole = user.federated_instance || user.badge_ids?.includes(STAFF_BADGE_ID) ? null : staffBadgeRole(user.id, await loadStaffRoles());
     if (badgeRole) {
         const staffBadge = await ensureStaffBadge();
         badges.unshift(Badge.create({ id: `staff-role-${badgeRole.id}`, description: `${instanceName()} ${badgeRole.name}`, icon: staffBadge.icon, link: staffBadge.link }));

@@ -4,7 +4,7 @@ Meowcord is a self-hosted server that speaks Discord's REST API, gateway and voi
 
 Read [README.md](README.md) for setup, [CONTRIBUTING.MD](CONTRIBUTING.MD) for conventions, [docs/development/client-patches.md](docs/development/client-patches.md) before touching the client and [docs/features/e2ee.md](docs/features/e2ee.md) before touching encryption. [docs/development/parity.md](docs/development/parity.md) lists every Discord feature and its state, and [docs/development/work-backlog.md](docs/development/work-backlog.md) is the task queue. [docs/README.md](docs/README.md) indexes the rest. Update all of these as you go.
 
-The required FosscordBadgeManagement plugin uses the native directory and customization popover. Badge management stores private preferences separately from badge ownership. Staff may be hidden; Nitro may be hidden only under server-assigned treatment 1 of `2026-08-badge-management`. Visible Staff and Nitro remain first and second. Pride cannot be hidden. See [docs/features/badge-management.md](docs/features/badge-management.md).
+The required FosscordBadgeManagement plugin uses the native directory and customization popover. Badge management stores private preferences separately from badge ownership. Staff may be hidden; Nitro may be hidden only under server-assigned treatment 1 of `2026-08-badge-management`. Staff and Nitro start first and second and follow saved order. Federation exports only visible badges in that order. Pride cannot be hidden. See [docs/features/badge-management.md](docs/features/badge-management.md).
 
 ## Architecture
 

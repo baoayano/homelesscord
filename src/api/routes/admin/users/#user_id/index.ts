@@ -121,7 +121,7 @@ router.get(
                     accounts: byIp.get(entry.ip)?.accounts ?? 1,
                     ban_id: byIp.get(entry.ip)?.ban_id ?? null,
                 })),
-            instance_bans: bans.map((b) => ({ id: b.id, reason: b.reason, created_at: b.created_at })),
+            instance_bans: bans.map((b) => ({ id: b.id, reason: b.reason, created_at: b.created_at, spread: b.is_from_other_instance_ban, ip: b.ip_address ?? null })),
             canonical: federated?.canonical ?? null,
         });
     },

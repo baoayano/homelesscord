@@ -5,6 +5,7 @@ import { AuditLog, Channel, Guild, Member } from "@spacebar/database";
 import { ApiError, DiscordApiErrors, FieldErrors, GuildUpdateEvent, Permissions, emitEvent, getPermission, getRights, handleFile } from "@spacebar/util";
 import { AuditLogEvents, GuildCreateResponse, GuildUpdateSchema } from "@spacebar/schemas";
 import { bulkActionJoinRequests, enforceNameAutomod, isApplyGuild, noteRightsBypass } from "@spacebar/api/util";
+import { reindexDiscoverySoon } from "@spacebar/api/util/handlers/Discovery";
 
 const router = Router({ mergeParams: true });
 
@@ -264,6 +265,7 @@ router.patch(
             await manager.save(guild);
         });
 
+        reindexDiscoverySoon(guild_id);
         const changes = AuditLog.diff(auditBefore, guild, auditKeys);
         if (changes.length)
             await AuditLog.log({

@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { AUTHORSHIP_FIELD, AUTHORSHIP_STATE_FIELD, contentDigest, openAuthorship, signAuthorship } from "../../src/util/util/federation/Authorship.ts";
 import { signRequest } from "../../src/util/util/federation/Protocol.ts";
 
 const require = createRequire(import.meta.url);
@@ -24,6 +25,9 @@ ROGUE.id = `localhost:${ROGUE.port}`;
 ROGUE.origin = `http://localhost:${ROGUE.port}`;
 const UNLISTED = `localhost:${base + 4}`;
 const THIRD = "third.example";
+const PEER = { port: base + 5 };
+PEER.id = `localhost:${PEER.port}`;
+PEER.origin = `http://localhost:${PEER.port}`;
 const runDir = process.env.ATTACK_DIR || path.join(tmpdir(), "meowcord-federation-attack-probe");
 const LIMITS = { guildsPerInstance: 4, newObjectsPerRequest: 200, objectsPerInstance: 5000, shadowsPerInstance: 1000, inboxEventsPerInstance: 100000 };
 
@@ -51,11 +55,16 @@ const rc = (n) => `@${1300000000000000000n + BigInt(n)}@${ROGUE.id}`;
 const localOf = (canonical) => psql(`SELECT local_id FROM federated_objects WHERE canonical = ${quote(canonical)}`);
 
 const rogueKey = generateKeyPairSync("ed25519");
+const peerKey = generateKeyPairSync("ed25519");
 const unlistedKey = generateKeyPairSync("ed25519");
 const registryKey = generateKeyPairSync("ed25519");
 const rawKey = (key) => key.publicKey.export({ format: "jwk" }).x;
 
 const rogueSeen = [];
+const rogueRelays = [];
+let rogueRelayAnswer = null;
+let rogueJoinAnswer = null;
+let rogueProfileAnswer = null;
 let voiceReplyIp = "10.0.0.5";
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
@@ -82,10 +91,63 @@ const registry = createServer((req, res) => {
     res.end(JSON.stringify({ payload: payload.toString("base64url"), signature: sign(null, payload, registryKey.privateKey).toString("base64url"), key_id: "registry-1" }));
 });
 
-const rogue = createServer((req, res) => {
+const wellKnown = (instance, key) =>
+    JSON.stringify({
+        protocol: 2,
+        software: "meowcord",
+        version: "rogue",
+        id: instance.id,
+        url: instance.origin,
+        name: instance.id,
+        description: "",
+        icon_url: null,
+        public_key: rawKey(key),
+        registration: "open",
+        federation: { enabled: true, accepts_unlisted: true },
+    });
+
+const peer = createServer((req, res) => {
+    req.resume();
+    if (new URL(req.url, PEER.origin).pathname === "/.well-known/meowcord") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(wellKnown(PEER, peerKey));
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end('{"code":"not_found","error":"peer"}');
+});
+
+const readBody = (req) =>
+    new Promise((resolve) => {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+            try {
+                resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "null"));
+            } catch {
+                resolve(null);
+            }
+        });
+    });
+
+const rogue = createServer(async (req, res) => {
     rogueSeen.push(`${req.method} ${req.url}`);
     const url = new URL(req.url, ROGUE.origin);
+    if ((url.pathname === "/federation/v2/relay" && rogueRelayAnswer) || (url.pathname === "/federation/v2/join" && rogueJoinAnswer)) {
+        const request = await readBody(req);
+        if (url.pathname === "/federation/v2/relay") rogueRelays.push(request);
+        const answer = url.pathname === "/federation/v2/join" ? rogueJoinAnswer(request) : rogueRelayAnswer(request);
+        res.writeHead(answer ? 200 : 404, { "content-type": "application/json" });
+        return res.end(JSON.stringify(answer ?? { code: "not_found", error: "rogue" }));
+    }
     req.resume();
+    if (url.pathname.startsWith("/federation/v2/users/") && rogueProfileAnswer) {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify(rogueProfileAnswer()));
+    }
+    if (/^\/badge-icons\/[A-Za-z0-9_-]+\.png$/.test(url.pathname)) {
+        res.writeHead(200, { "content-type": "image/png" });
+        return res.end(PNG);
+    }
     if (url.pathname === "/.well-known/meowcord") {
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(
@@ -153,7 +215,7 @@ async function startTarget() {
                 enabled: true,
                 announce: false,
                 allowUnlistedPeers: true,
-                peers: [ROGUE.id],
+                peers: [ROGUE.id, PEER.id],
                 registry: { url: `http://localhost:${registryPort}`, publicKey: rawKey(registryKey) },
                 limits: LIMITS,
             },
@@ -336,6 +398,7 @@ function voiceAttempt(ip, identify) {
 async function main() {
     await listen(registry, registryPort);
     await listen(rogue, ROGUE.port);
+    await listen(peer, PEER.port);
     await startTarget();
 
     const alice = await register("alice");
@@ -557,6 +620,347 @@ async function main() {
     aliceGateway.close();
     bobGateway.close();
 
+    console.log("\nmessage authorship");
+    {
+        const EPOCH = 1420070400000n;
+        let sequence = 0;
+        const fresh = () => `@${((BigInt(Date.now()) - EPOCH) << 22n) + BigInt(++sequence)}@${ROGUE.id}`;
+        const targetKey = (await call("GET", `${T.origin}/.well-known/meowcord`)).body?.public_key;
+        const messages = new Map();
+        let history = [];
+        let tamperCurrent = false;
+        const wireMessage = (fields) => ({
+            type: 0,
+            channel_id: rogueText,
+            guild_id: rogueGuild,
+            content: "",
+            embeds: [],
+            attachments: [],
+            mentions: [],
+            mention_roles: [],
+            pinned: false,
+            tts: false,
+            mention_everyone: false,
+            flags: 0,
+            edited_timestamp: null,
+            timestamp: new Date().toISOString(),
+            ...fields,
+        });
+        rogueJoinAnswer = (request) => ({
+            invite: { code: "authorship", guild: { id: rogueGuild, name: "Rogue" }, channel: { id: rogueText, type: 0, name: "general" } },
+            snapshot: {
+                guild: {
+                    id: rogueGuild,
+                    name: "Rogue",
+                    owner_id: rogueUser.id,
+                    roles: [{ id: rogueGuild, name: "@everyone", permissions: "3072", position: 0 }],
+                    channels: [
+                        { id: rogueText, type: 0, name: "general", guild_id: rogueGuild },
+                        { id: rogueVoiceChannel, type: 2, name: "voice", guild_id: rogueGuild },
+                    ],
+                },
+                members: [{ user: { ...rogueUser }, roles: [] }],
+                member: { user: { id: request.actor }, roles: [] },
+            },
+        });
+        rogueRelayAnswer = (request) => {
+            const segments = String(request?.path ?? "")
+                .split("/")
+                .map((segment) => decodeURIComponent(segment));
+            const id = segments[4];
+            if (segments[1] !== "channels" || segments[3] !== "messages") return { status: 404, body: { message: "rogue", code: 0 }, headers: {} };
+            if (request.method === "POST" && !id) {
+                const message = wireMessage({
+                    id: fresh(),
+                    author: { id: request.actor, username: "alice", discriminator: "0" },
+                    content: request.body?.content ?? "",
+                    nonce: request.body?.nonce,
+                    [AUTHORSHIP_FIELD]: request.authorship,
+                });
+                messages.set(message.id, message);
+                return { status: 200, body: message, headers: {} };
+            }
+            if (request.method === "GET" && id) {
+                const message = messages.get(id);
+                if (!message) return { status: 404, body: { message: "Unknown Message", code: 10008 }, headers: {} };
+                return { status: 200, body: tamperCurrent ? { ...message, content: "tampered by the host" } : message, headers: {} };
+            }
+            if (request.method === "PATCH" && id && messages.has(id)) {
+                const message = {
+                    ...messages.get(id),
+                    content: request.body?.content ?? "",
+                    edited_timestamp: new Date().toISOString(),
+                    [AUTHORSHIP_FIELD]: request.authorship,
+                };
+                messages.set(id, message);
+                return { status: 200, body: message, headers: {} };
+            }
+            if (request.method === "GET") return { status: 200, body: history, headers: {} };
+            return { status: 404, body: { message: "rogue", code: 0 }, headers: {} };
+        };
+        const joined = await call("POST", `/federation/invites/${ROGUE.id}/authorship`, alice.token);
+        const textChannel = localOf(rogueText);
+        check(
+            "setup: a local user joined a server on the rogue",
+            joined.status === 200 && count(`SELECT count(*) FROM members WHERE guild_id = ${quote(mirrorGuild)} AND id = ${quote(alice.id)}`) === 1,
+            `${joined.status} ${JSON.stringify(joined.body).slice(0, 200)}`,
+        );
+        const watcher = gateway(alice);
+        await watcher.ready;
+        const say = (event, data) => inbox([{ event, channel_id: rogueText, guild_id: rogueGuild, recipients: [tc(alice.id)], data }]);
+        const shown = (content, type = "MESSAGE_CREATE") => watcher.events.filter((event) => event.t === type && event.d?.content === content);
+
+        const sent = await call("POST", `/channels/${textChannel}/messages`, alice.token, { content: "hello from alice" });
+        const created = rogueRelays.find((request) => request?.method === "POST" && /\/messages$/.test(request.path));
+        const statement = created?.authorship ? openAuthorship(created.authorship, targetKey) : null;
+        check(
+            "the home signs what its user sends to another instance",
+            !!statement &&
+                statement.author === tc(alice.id) &&
+                statement.channel === rogueText &&
+                statement.message === null &&
+                statement.nonce === String(created.body?.nonce) &&
+                statement.content === contentDigest(created.body),
+            JSON.stringify(statement ?? created ?? null).slice(0, 240),
+        );
+        check(
+            "the answer to a genuine message shows its author",
+            sent.status === 200 && sent.body?.author?.id === alice.id,
+            `${sent.status} ${JSON.stringify(sent.body).slice(0, 240)}`,
+        );
+        const genuine = [...messages.values()][0];
+        const carol = `@${(BigInt(Date.now()) - EPOCH) << 22n}@${PEER.id}`;
+        const forgedSigned = wireMessage({ id: fresh(), author: { id: tc(alice.id), username: "alice" }, content: "forged with the rogue's key" });
+        forgedSigned[AUTHORSHIP_FIELD] = signAuthorship({ author: tc(alice.id), channel: rogueText }, forgedSigned, rogueKey.privateKey);
+        const genuineCarol = wireMessage({ id: fresh(), author: { id: carol, username: "carol" }, content: "carol really said this" });
+        genuineCarol[AUTHORSHIP_FIELD] = signAuthorship({ author: carol, channel: rogueText }, genuineCarol, peerKey.privateKey);
+        await say("MESSAGE_CREATE", genuine);
+        await say("MESSAGE_CREATE", { ...genuine, id: fresh() });
+        await say("MESSAGE_CREATE", wireMessage({ id: fresh(), author: { id: tc(alice.id), username: "alice" }, content: "forged without a statement" }));
+        await say("MESSAGE_CREATE", forgedSigned);
+        await say(
+            "MESSAGE_CREATE",
+            wireMessage({ id: fresh(), author: genuine.author, nonce: genuine.nonce, content: "forged with a replayed statement", [AUTHORSHIP_FIELD]: genuine[AUTHORSHIP_FIELD] }),
+        );
+        await say("MESSAGE_CREATE", wireMessage({ id: fresh(), author: { id: carol, username: "carol" }, content: "forged as a user of a third instance" }));
+        await say("MESSAGE_CREATE", genuineCarol);
+        await sleep(2000);
+        const carolLocal = localOf(carol);
+        const echoed = shown("hello from alice");
+        check(
+            "a genuine relayed message still shows under its author",
+            echoed.length >= 1 && echoed[0].d.author?.id === alice.id && echoed[0].d[AUTHORSHIP_STATE_FIELD] === "verified",
+            JSON.stringify(echoed[0]?.d ?? null).slice(0, 240),
+        );
+        check("a genuine statement can't be reused for a second message", echoed.length === 1, `${echoed.length} copies`);
+        check(
+            "a forged MESSAGE_CREATE claiming a local author isn't shown as that author",
+            !shown("forged without a statement").length && !shown("forged with the rogue's key").length,
+            watcher.events.map((event) => event.t).join(","),
+        );
+        check("a genuine statement can't be replayed onto other text", !shown("forged with a replayed statement").length);
+        check("a forged MESSAGE_CREATE claiming a user of a third instance isn't shown as that user", !shown("forged as a user of a third instance").length);
+        check(
+            "a message a third instance signed for its user shows under that user",
+            !!carolLocal && shown("carol really said this")[0]?.d.author?.id === carolLocal,
+            JSON.stringify(shown("carol really said this")[0]?.d?.author ?? null),
+        );
+
+        const edit = await call("PATCH", `/channels/${textChannel}/messages/${sent.body?.id}`, alice.token, { content: "edited by alice" });
+        const patch = rogueRelays.find((request) => request?.method === "PATCH");
+        const editStatement = patch?.authorship ? openAuthorship(patch.authorship, targetKey) : null;
+        check(
+            "an edit carries a new statement for that message",
+            edit.status === 200 && !!editStatement && editStatement.message === genuine.id && editStatement.content === contentDigest({ ...genuine, content: "edited by alice" }),
+            `${edit.status} ${JSON.stringify(editStatement ?? edit.body).slice(0, 240)}`,
+        );
+        const current = messages.get(genuine.id);
+        await say("MESSAGE_UPDATE", { ...current, content: "edited by mallory", [AUTHORSHIP_FIELD]: genuine[AUTHORSHIP_FIELD] });
+        await say("MESSAGE_UPDATE", { ...current, content: "edited by mallory again" });
+        await say("MESSAGE_UPDATE", { id: current.id, channel_id: rogueText, guild_id: rogueGuild, content: "edited without an author" });
+        await say("MESSAGE_UPDATE", current);
+        await sleep(2000);
+        check(
+            "an edit with a stale statement is refused",
+            !shown("edited by mallory", "MESSAGE_UPDATE").length &&
+                !shown("edited by mallory again", "MESSAGE_UPDATE").length &&
+                !shown("edited without an author", "MESSAGE_UPDATE").length,
+        );
+        check("a genuine edit still shows under its author", shown("edited by alice", "MESSAGE_UPDATE")[0]?.d.author?.id === alice.id);
+        tamperCurrent = true;
+        const refusedEdit = await call("PATCH", `/channels/${textChannel}/messages/${sent.body?.id}`, alice.token, { content: "edit on a tampered copy" });
+        tamperCurrent = false;
+        check(
+            "the home won't sign an edit on top of a version the host changed",
+            refusedEdit.status === 409 && !rogueRelays.some((request) => request?.method === "PATCH" && request.body?.content === "edit on a tampered copy"),
+            `${refusedEdit.status} ${JSON.stringify(refusedEdit.body)}`,
+        );
+
+        history = [
+            wireMessage({ id: fresh(), author: { ...rogueUser }, content: "the host's own user" }),
+            wireMessage({ id: fresh(), author: { id: tc(alice.id), username: "alice" }, content: "forged history entry" }),
+            wireMessage({ id: fresh(), author: { id: carol, username: "carol" }, content: "forged third instance history entry" }),
+            messages.get(genuine.id),
+            genuineCarol,
+            wireMessage({ id: rc(400), author: { id: tc(alice.id), username: "alice" }, content: "from before signed authorship" }),
+            wireMessage({
+                id: fresh(),
+                type: 19,
+                author: { ...rogueUser },
+                content: "a reply",
+                message_reference: { message_id: rc(401), channel_id: rogueText },
+                referenced_message: wireMessage({ id: fresh(), author: { id: tc(alice.id), username: "alice" }, content: "forged quoted message" }),
+            }),
+        ];
+        const page = await call("GET", `/channels/${textChannel}/messages?limit=50`, alice.token);
+        const entry = (content) => (Array.isArray(page.body) ? page.body : []).find((message) => message.content === content);
+        check(
+            "a forged history entry claiming a local author isn't shown as that author",
+            page.status === 200 &&
+                !!entry("forged history entry") &&
+                entry("forged history entry").author?.id !== alice.id &&
+                entry("forged history entry")[AUTHORSHIP_STATE_FIELD] === "unverified",
+            `${page.status} ${JSON.stringify(entry("forged history entry") ?? page.body).slice(0, 240)}`,
+        );
+        check(
+            "a forged history entry claiming a third instance's user isn't shown as that user",
+            !!entry("forged third instance history entry") && entry("forged third instance history entry").author?.id !== carolLocal,
+        );
+        check("a forged quoted message in a reply isn't shown as the local user", !!entry("a reply") && entry("a reply").referenced_message?.author?.id !== alice.id);
+        check(
+            "genuine history entries keep their authors",
+            entry("edited by alice")?.author?.id === alice.id &&
+                entry("carol really said this")?.author?.id === carolLocal &&
+                entry("the host's own user")?.author?.id === localOf(rogueUser.id),
+            JSON.stringify(page.body).slice(0, 300),
+        );
+        check(
+            "history from before signed authorship stays readable",
+            entry("from before signed authorship")?.author?.id === alice.id && entry("from before signed authorship")[AUTHORSHIP_STATE_FIELD] === "legacy",
+        );
+        watcher.close();
+        rogueRelayAnswer = null;
+        rogueJoinAnswer = null;
+    }
+
+    console.log("\nprofile badges");
+    {
+        const mallory = localOf(rogueUser.id);
+        const STAFF_ART = "5e74e9b61934fc1f67c65515d1f7e60d";
+        const icon = (hash) => `${ROGUE.origin}/badge-icons/${hash}.png`;
+        const hidden = [0x202e, 0x2066, 0x200b, 0x0, 0x7, 0x2028, 0xfeff].map((code) => String.fromCharCode(code)).join("");
+        const zeroWidth = String.fromCharCode(0x200b);
+        rogueProfileAnswer = () => ({
+            ...rogueUser,
+            public_flags: 1 | (1 << 28),
+            badges: [
+                { id: "staff", description: `${T.id} Staff`, icon: icon("abc") },
+                { id: "1", description: "Staff", icon: icon(STAFF_ART) },
+                { id: "staff-role-1", description: "Staff", icon: icon("abc") },
+                { id: "8000000000000000006", description: "Transgender", icon: icon("abc") },
+                { id: "badge-official", description: "Official Meowcord Staff", icon: icon("abc") },
+                { id: "badge-zw", description: `Meow St${zeroWidth}aff`, icon: icon("abc") },
+                { id: "badge-cool-art", description: "Cool person", icon: icon(STAFF_ART) },
+                { id: "badge-track", description: "Pixel", icon: "https://tracker.example/pixel.png" },
+                { id: "badge-query", description: "Pixel two", icon: `${icon("abc")}?u=${alice.id}` },
+                { id: "badge-long", description: `${"Long ".repeat(1000)}${hidden}`, icon: icon("abc") },
+                { id: "badge-link", description: `Click${hidden}me`, icon: icon("abc"), link: "https://evil.example/" },
+                { id: "pride-fake", description: "Not a flag", pride_flag: "transgender", icon: "https://tracker.example/flag.png" },
+                ...Array.from({ length: 40 }, (_, i) => ({ id: `badge-filler-${i}`, description: `Filler ${i}`, icon: icon(`filler${i}`) })),
+            ],
+        });
+        const answer = await call("GET", `/users/${mallory}/remote-badges`, alice.token);
+        const badges = answer.body?.badges ?? [];
+        const stored = JSON.parse(psql(`SELECT COALESCE(remote_badges::text, '[]') FROM users WHERE id = ${quote(mallory)}`) || "[]");
+        const ids = stored.map((badge) => badge.id);
+        check(
+            "the home's badges are stored on the shadow",
+            answer.status === 200 && answer.body?.instance === ROGUE.id && stored.length > 0,
+            `${answer.status} ${JSON.stringify(answer.body).slice(0, 300)}`,
+        );
+        check(
+            "a home can't reuse this instance's staff, system or pride badge ids",
+            !["staff", "1", "staff-role-1", "8000000000000000006"].some((id) => ids.includes(id)),
+            JSON.stringify(ids),
+        );
+        const staff = badges.filter((badge) => badge.kind === "staff");
+        check(
+            "a home's staff claims show as staff of the home with no icon, hidden characters included",
+            ids.includes("badge-official") &&
+                ids.includes("badge-zw") &&
+                staff.length === 2 &&
+                staff.every((badge) => badge.icon_url === null && badge.label === `Staff on ${ROGUE.id}`),
+            JSON.stringify(staff),
+        );
+        check("a badge drawn with this instance's staff art is dropped", !ids.includes("badge-cool-art"), JSON.stringify(ids));
+        check("badge icons off the home's origin or with a query string are dropped", !ids.includes("badge-track") && !ids.includes("badge-query"), JSON.stringify(ids));
+        check(
+            "every badge icon loads from this instance, never from the home or a tracker",
+            badges.every((badge) => badge.icon_url === null || badge.icon_url.startsWith(`${T.origin}/`)) && !JSON.stringify(badges).includes("tracker.example"),
+            JSON.stringify(badges.map((badge) => badge.icon_url)),
+        );
+        const long = stored.find((badge) => badge.id === "badge-long");
+        const visible = (text) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(text);
+        check(
+            "huge or hidden text is cut to 100 characters with no control or bidi characters",
+            !!long && [...long.description].length <= 100 && stored.every((badge) => visible(badge.description)) && badges.every((badge) => visible(badge.description)),
+            JSON.stringify(long),
+        );
+        check(
+            "links on remote badges are dropped",
+            !JSON.stringify(stored).includes("evil.example") && stored.every((badge) => !("link" in badge)),
+            JSON.stringify(stored).slice(0, 200),
+        );
+        check("at most 12 remote badges are kept", stored.length === 12 && badges.length === 12, String(stored.length));
+        const flag = badges.find((badge) => badge.kind === "pride");
+        check(
+            "a pride flag claim is drawn from this instance's own flag art and name",
+            flag?.icon_url === `${T.origin}/badge-icons/pride_transgender.png` && flag.description === `Transgender · ${ROGUE.id}`,
+            JSON.stringify(flag),
+        );
+        const proxied = badges.find((badge) => badge.kind === "badge");
+        const before = rogueSeen.filter((line) => line.includes("/badge-icons/")).length;
+        const fetched = proxied ? await fetch(proxied.icon_url) : null;
+        check(
+            "a remote badge icon goes through this instance's media proxy",
+            fetched?.status === 200 &&
+                proxied.icon_url.startsWith(`${T.origin}/federation-media/${ROGUE.id}/badge-icons/`) &&
+                rogueSeen.filter((line) => line.includes("/badge-icons/")).length > before,
+            `${fetched?.status} ${proxied?.icon_url}`,
+        );
+        check(
+            "remote badges grant no flags and no rights",
+            psql(`SELECT public_flags || ' ' || (rights = (SELECT rights FROM users WHERE id = ${quote(bob.id)})) FROM users WHERE id = ${quote(mallory)}`) === "0 true",
+            psql(`SELECT public_flags || ' ' || rights FROM users WHERE id = ${quote(mallory)}`),
+        );
+        rogueRelayAnswer = (request) =>
+            String(request?.path ?? "").endsWith("/profile")
+                ? {
+                      status: 200,
+                      body: {
+                          user: { ...rogueUser },
+                          connected_accounts: [],
+                          badges: [
+                              { id: "1", description: `${T.id} Staff`, icon: STAFF_ART },
+                              { id: "staff-role-1", description: "Staff", icon: STAFF_ART },
+                              { id: "certified_moderator", description: "Moderator Programs Alumni", icon: "fee1624003e2fee35cb398e125dc479b" },
+                          ],
+                          guild_badges: [{ id: "x", description: "Guild staff", icon: STAFF_ART }],
+                          user_profile: {},
+                      },
+                      headers: {},
+                  }
+                : null;
+        const profile = await call("GET", `/users/${mallory}/profile`, alice.token);
+        check(
+            "a home's own profile badges never reach this instance's badge row",
+            profile.status === 200 && Array.isArray(profile.body?.badges) && profile.body.badges.length === 0 && profile.body.guild_badges?.length === 0,
+            `${profile.status} ${JSON.stringify(profile.body).slice(0, 300)}`,
+        );
+        rogueRelayAnswer = null;
+        rogueProfileAnswer = null;
+    }
+
     console.log("\nend-to-end encryption");
     const dm = localOf(rogueDm);
     await inbox([
@@ -655,6 +1059,7 @@ try {
     await stopTarget();
     registry.close();
     rogue.close();
+    peer.close();
     rogueVoice.close();
     if (args.has("--drop")) {
         spawnSync("dropdb", [...pg, "--if-exists", T.db], { stdio: "inherit" });

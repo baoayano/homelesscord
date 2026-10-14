@@ -41,6 +41,31 @@ export default definePlugin({
             },
         },
         {
+            find: "https://cdn.discordapp.com/assets/media_channel/",
+            all: true,
+            noWarn: true,
+            replacement: {
+                match: /https:\/\/cdn\.discordapp\.com\/assets\/media_channel\//g,
+                replace: () => `${location.protocol}//${(window as any).GLOBAL_ENV?.CDN_HOST || location.host}/media_channel/`,
+            },
+        },
+        {
+            find: "https://cdn.discordapp.com/embed/avatars/",
+            all: true,
+            noWarn: true,
+            replacement: {
+                match: /https:\/\/cdn\.discordapp\.com\/embed\/avatars\//g,
+                replace: () => `${location.protocol}//${(window as any).GLOBAL_ENV?.CDN_HOST || location.host}/embed/avatars/`,
+            },
+        },
+        {
+            find: "https://cdn.discordapp.com/avatars/302407541994946561/",
+            replacement: {
+                match: /https:\/\/cdn\.discordapp\.com\/avatars\/(\d+)\/[0-9a-f]+\.webp\?size=80/g,
+                replace: (_, id: string) => `${location.protocol}//${(window as any).GLOBAL_ENV?.CDN_HOST || location.host}/embed/avatars/${Number(BigInt(id) % 6n)}.png`,
+            },
+        },
+        {
             find: "media.giphy.com/media/1TOSaJsWtnhe0/giphy.gif",
             all: true,
             replacement: {

@@ -114,7 +114,7 @@ async function renderStaffRoles(view) {
   );
   $("#new-staff-role", view).addEventListener("click", () => openStaffRole(data, null, refresh));
   for (const row of $$("tr[data-role]", view))
-    row.addEventListener("click", (event) => {
+    onRowOpen(row, (event) => {
       if (event.target.closest("button")) return;
       openStaffRole(
         data,
@@ -313,7 +313,7 @@ function openStaffRole(data, role, refresh) {
 
   $("#staff-role-delete", body)?.addEventListener("click", async (event) => {
     const who = role.members.length ? ` ${role.members.length} ${role.members.length === 1 ? "person loses" : "people lose"} it and its rights.` : "";
-    if (!confirm(`Delete the "${role.name}" role?${who}`)) return;
+    if (!await confirmDialog({ title: `Delete the "${role.name}" role?`, message: who.trim(), confirm: "Delete role" })) return;
     const done = await act(event.currentTarget, () => api(`/admin/staff/roles/${role.id}`, { method: "DELETE" }), "Role deleted");
     if (done !== undefined) {
       closeDrawer();
@@ -322,12 +322,31 @@ function openStaffRole(data, role, refresh) {
   });
 }
 
+const AUDIT_TARGET_LABELS = {
+  report: "Report",
+  automod_action: "Automod action",
+  raid: "Raid incident",
+  violation: "Violation",
+  role: "Role",
+  ban: "Ban",
+  channel: "Channel",
+  message: "Message",
+};
+
 const auditUser = (user, id) =>
   user?.username
-    ? html`<span class="ident">${avatar(user)}<span><strong>${userName(user)}</strong></span></span>`
+    ? html`<button class="link-button ident" type="button" data-audit-user="${user.id}">${avatar(user)}<span><strong>${userName(user)}</strong></span></button>`
     : id
-      ? html`<code>${id}</code>`
-      : html`<span class="muted">—</span>`;
+      ? html`<button class="link-button" type="button" data-audit-user="${id}"><code>${id}</code></button>`
+      : html`<span class="muted">None</span>`;
+
+const auditTarget = (entry) => {
+  if (!entry.target_id) return html`<span class="muted">None</span>`;
+  if (entry.target_type === "user") return auditUser(entry.target, entry.target_id);
+  if (entry.target_type === "guild")
+    return html`<button class="link-button ident" type="button" data-audit-guild="${entry.target_id}">${guildIcon(entry.target_guild ?? { id: entry.target_id, name: "?" })}<span><strong>${entry.target_guild?.name ?? "Deleted server"}</strong><span class="muted">Server</span></span></button>`;
+  return html`<span class="stack" style="gap:2px"><span class="muted">${AUDIT_TARGET_LABELS[entry.target_type] ?? "Target"}</span><code>${entry.target_id}</code></span>`;
+};
 
 const auditValue = (value) => {
   if (value === undefined) return "";
@@ -411,7 +430,7 @@ async function renderStaffAudit(view) {
                         <strong>${STAFF_AUDIT_LABELS[entry.action] ?? entry.action}</strong>
                         <div class="muted">${entry.area}</div>
                       </td>
-                      <td class="hide-sm">${auditUser(entry.target, entry.target_id)}</td>
+                      <td class="hide-sm">${auditTarget(entry)}</td>
                       <td class="hide-sm">${auditDetails(entry)}</td>
                     </tr>`,
                   )}
@@ -421,6 +440,8 @@ async function renderStaffAudit(view) {
             ${hasMore ? html`<div class="pager"><span class="muted">${fmtNumber(entries.length)} shown</span><button class="btn" type="button" id="audit-more">Load older</button></div>` : ""}`
         : html`<div class="card empty">No staff actions match these filters.</div>`,
     );
+    for (const button of $$("[data-audit-user]", results)) button.addEventListener("click", () => openUser(button.dataset.auditUser));
+    for (const button of $$("[data-audit-guild]", results)) button.addEventListener("click", () => openGuild(button.dataset.auditGuild));
     $("#audit-more", results)?.addEventListener("click", async (event) => {
       const page = await act(event.currentTarget, () => query(entries.at(-1).id));
       if (!page) return;

@@ -7,3 +7,5 @@ export * from "./Voice";
 export * from "./Relay";
 export * from "./Limits";
 export * from "./HostErrors";
+export * from "./Authorship";
+export * from "./Badges";

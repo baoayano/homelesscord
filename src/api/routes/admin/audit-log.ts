@@ -3,7 +3,7 @@ import { Request, Response, Router } from "express";
 import { In } from "typeorm";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
-import { AuditLog, User } from "@spacebar/database";
+import { AuditLog, Guild, User } from "@spacebar/database";
 import { sqlJsonText } from "@spacebar/database/Sql";
 import { Snowflake } from "@spacebar/util";
 import { AuditLogEvents } from "@spacebar/schemas";
@@ -34,6 +34,30 @@ const timeBound = (value: unknown, name: string) => {
     const time = new Date(raw).getTime();
     if (Number.isNaN(time)) throw new HTTPError(`${name} must be a date`, 400);
     return ((BigInt(Math.max(time, Snowflake.EPOCH)) - BigInt(Snowflake.EPOCH)) << 22n).toString();
+};
+
+const TARGET_TYPES: Record<string, string> = {
+    user_id: "user",
+    member_id: "user",
+    guild_id: "guild",
+    report_id: "report",
+    action_id: "automod_action",
+    incident_id: "raid",
+    violation_id: "violation",
+    role_id: "role",
+    ban_id: "ban",
+    channel_id: "channel",
+    message_id: "message",
+};
+
+export const auditTargetType = (targetId: string | null | undefined, params: string | undefined, isUser: boolean) => {
+    if (!targetId) return null;
+    const named = (params ?? "")
+        .split(",")
+        .map((pair) => pair.split("="))
+        .find(([, value]) => value === targetId)?.[0];
+    if (named && TARGET_TYPES[named]) return TARGET_TYPES[named];
+    return isUser ? "user" : null;
 };
 
 const summary = (user?: User) =>
@@ -88,11 +112,19 @@ router.get(
             ? await User.find({ where: { id: In(userIds) }, select: { id: true, username: true, discriminator: true, global_name: true, avatar: true } })
             : [];
         const byId = new Map(users.map((user) => [String(user.id), user]));
+        const typed = page.map((row) => {
+            const options = (row.options ?? {}) as Record<string, string | undefined>;
+            const targetId = row.target_id ? String(row.target_id) : null;
+            return { row, options, targetId, targetType: auditTargetType(targetId, options.params, !!targetId && byId.has(targetId)) };
+        });
+        const guildIds = [...new Set(typed.filter((entry) => entry.targetType === "guild").map((entry) => entry.targetId as string))];
+        const guilds = guildIds.length ? await Guild.find({ where: { id: In(guildIds) }, select: { id: true, name: true, icon: true } }) : [];
+        const guildById = new Map(guilds.map((guild) => [String(guild.id), guild]));
 
         res.json({
-            entries: page.map((row) => {
-                const options = (row.options ?? {}) as Record<string, string | undefined>;
+            entries: typed.map(({ row, options, targetId, targetType }) => {
                 const [legacyAction, legacyArea] = LEGACY_ACTIONS[row.action_type] ?? [];
+                const guild = targetType === "guild" && targetId ? guildById.get(targetId) : undefined;
                 return {
                     id: String(row.id),
                     created_at: new Date(Snowflake.timestampOf(String(row.id))).toISOString(),
@@ -100,8 +132,10 @@ router.get(
                     action: options.action ?? legacyAction ?? String(row.action_type),
                     area: options.area ?? legacyArea ?? "other",
                     actor: summary(byId.get(String(row.user_id))) ?? (row.user_id ? { id: String(row.user_id) } : null),
-                    target_id: row.target_id ? String(row.target_id) : null,
-                    target: row.target_id ? summary(byId.get(String(row.target_id))) : null,
+                    target_id: targetId,
+                    target_type: targetType,
+                    target: targetType === "user" && targetId ? summary(byId.get(targetId)) : null,
+                    target_guild: guild ? { id: String(guild.id), name: guild.name, icon: guild.icon ?? null } : null,
                     options,
                     changes: row.changes ?? [],
                     reason: row.reason ?? null,

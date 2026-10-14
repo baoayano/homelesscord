@@ -145,6 +145,7 @@ async function renderFederation(view) {
           <div class="stack">
             ${toggle("enabled", s.enabled, "Take part in federation", "Fetches the registry every 5 minutes, publishes this instance's discovery list and shows the Other instances tab in Discovery.")}
             ${toggle("announce", s.announce, "Tell the registry about this instance once a day", "Sends a signed hello when the server starts and every 24 hours. Addresses like localhost or private IPs are never sent.")}
+            ${toggle("announceStats", s.announceStats, "Send user, server and message counts with each announce", "The registry admins see how many local users and servers this instance has and how many messages were sent in the last 24 hours. The counts are never published.")}
             ${toggle("allowUnlistedPeers", s.allowUnlistedPeers, "Show peers that aren't in the registry", "Instances in the peer list below appear in Discovery even when the registry hasn't approved them. Registry and local blocks still apply.")}
           </div>
           <div class="form-grid" style="margin-top:16px">
@@ -170,6 +171,10 @@ async function renderFederation(view) {
             <label class="span"
               >Peers<span class="hint">Instance ids such as meow.example, one per line. Used only when showing unlisted peers is on.</span
               ><textarea name="peers" rows="3" spellcheck="false">${s.peers.join("\n")}</textarea>
+            </label>
+            <label class="span"
+              >Registry contacts<span class="hint">Local usernames, one per line, at most 10. The registry admins see them privately and can add them to a group DM with the admins of every instance. Leave it empty to send every account with the operator right.</span
+              ><textarea name="contacts" rows="3" spellcheck="false" autocomplete="off">${(s.contacts ?? []).join("\n")}</textarea>
             </label>
           </div>
           ${overview.peers.length
@@ -206,6 +211,7 @@ async function renderFederation(view) {
           <dl class="federation-facts">
             <div><dt>Last sent</dt><dd>${fmtDate(status.announce.at)}</dd></div>
             <div><dt>Result</dt><dd>${status.announce.status ? badge(FEDERATION_ANNOUNCE_STATUS, status.announce.status) : html`<span class="muted">Never sent</span>`}</dd></div>
+            <div><dt>Contacts sent</dt><dd class="federation-id">${instance.contacts?.length ? instance.contacts.join(", ") : html`<span class="muted">None</span>`}</dd></div>
           </dl>
           ${status.announce.error ? html`<p class="muted">${status.announce.error}</p>` : ""}
           <div class="form-actions">
@@ -505,6 +511,7 @@ async function renderFederation(view) {
     const body = {
       enabled: elements.enabled.checked,
       announce: elements.announce.checked,
+      announceStats: elements.announceStats.checked,
       allowUnlistedPeers: elements.allowUnlistedPeers.checked,
       registryUrl: elements.registryUrl.value.trim(),
       registryPublicKey: elements.registryPublicKey.value.trim(),
@@ -512,6 +519,10 @@ async function renderFederation(view) {
       peers: elements.peers.value
         .split("\n")
         .map((line) => line.trim().toLowerCase())
+        .filter(Boolean),
+      contacts: elements.contacts.value
+        .split("\n")
+        .map((line) => line.trim().toLowerCase().replace(/^@/, ""))
         .filter(Boolean),
     };
     const saved = await act($("button[type=submit]", form), () => api("/admin/federation/settings", { method: "PATCH", body }), "Federation settings saved");

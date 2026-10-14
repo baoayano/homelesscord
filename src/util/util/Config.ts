@@ -6,6 +6,7 @@ import { ConfigEntity } from "../../database/entities";
 import { JsonValue } from "@protobuf-ts/runtime";
 import { bold, red, redBright } from "picocolors";
 import { DEFAULT_INSTANCE_NAME } from "../config/types/ClientConfiguration";
+import { AUTOMOD_POLICY_KEYS } from "../config/types/AutomodConfiguration";
 
 // TODO: yaml instead of json
 const overridePath = process.env.CONFIG_PATH ?? "";
@@ -131,12 +132,14 @@ function replaceStaleDefaults(config: ConfigValue) {
 const AUTOMOD_STRING_LISTS = [
     "automod.allowList",
     "automod.ipAllowList",
+    "automod.spam.ignoreLinkDomains",
     "automod.scam.extraDomains",
     "automod.scam.allowDomains",
     "automod.signup.deniedEmailDomains",
     "automod.signup.allowedEmailDomains",
     "automod.explicitContent.terms",
     "automod.explicitContent.blockedHashes",
+    ...AUTOMOD_POLICY_KEYS.flatMap((key) => [`automod.policies.${key}.exemptUserIds`, `automod.policies.${key}.exemptGuildIds`]),
 ];
 
 const readPath = (value: unknown, path: string) => path.split(".").reduce<unknown>((obj, key) => (obj as Record<string, unknown> | undefined)?.[key], value);

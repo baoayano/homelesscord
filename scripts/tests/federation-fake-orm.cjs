@@ -82,14 +82,27 @@ function entity(name, keys = ["id"]) {
 
 const transpile = (file) => ts.transpileModule(fs.readFileSync(file, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
-const load = (file, imports) => {
+const passThroughAuthorship = {
+    acceptRelayAuthorship: async () => null,
+    attachStoredAuthorship: async (value) => value,
+    authoredRelay: () => null,
+    guardIncoming: async () => ({ top: null, refused: 0 }),
+    homeAuthorship: async () => null,
+    reportAuthorshipMismatch: async () => undefined,
+};
+
+const authorshipExports = () => require("../../src/util/util/federation/Authorship.ts");
+
+const load = (file, imports, globals = {}) => {
     const module = { exports: {} };
+    const resolved = { "./federationAuthorship": passThroughAuthorship, ...imports };
+    if (resolved["@spacebar/util"]) resolved["@spacebar/util"] = { ...authorshipExports(), Snowflake: { generate: () => String(Date.now()) }, ...resolved["@spacebar/util"] };
     vm.runInNewContext(transpile(file), {
         module,
         exports: module.exports,
         require: (name) => {
-            if (!(name in imports)) throw new Error(`unexpected import ${name} in ${file}`);
-            return imports[name];
+            if (!(name in resolved)) throw new Error(`unexpected import ${name} in ${file}`);
+            return resolved[name];
         },
         console,
         URL,
@@ -113,6 +126,7 @@ const load = (file, imports) => {
         clearTimeout,
         setInterval,
         clearInterval,
+        ...globals,
     });
     return module.exports;
 };

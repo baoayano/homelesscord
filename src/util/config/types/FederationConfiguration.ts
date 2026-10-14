@@ -28,8 +28,10 @@ export class FederationConfiguration {
     enabled: boolean = true;
     registry: FederationRegistryConfiguration = new FederationRegistryConfiguration();
     announce: boolean = true;
+    announceStats: boolean = true;
     allowUnlistedPeers: boolean = false;
     peers: string[] = [];
+    contacts: string[] = [];
     discovery: FederationDiscoveryConfiguration = new FederationDiscoveryConfiguration();
     media: FederationMediaConfiguration = new FederationMediaConfiguration();
     limits: FederationLimitsConfiguration = new FederationLimitsConfiguration();

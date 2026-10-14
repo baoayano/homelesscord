@@ -15,11 +15,16 @@ export interface AdminFederationSettingsSchema {
      */
     registryPublicKey?: string;
     announce?: boolean;
+    announceStats?: boolean;
     allowUnlistedPeers?: boolean;
     /**
      * @maxItems 200
      */
     peers?: string[];
+    /**
+     * @maxItems 10
+     */
+    contacts?: string[];
     verification?: "registry" | "instance";
 }
 

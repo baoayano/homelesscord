@@ -1,8 +1,24 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In, LessThan } from "typeorm";
 import { Channel, FederationDelivery, FederationInboxEvent, FederationOutboxEvent, Guild, Member, Recipient, Relationship, Role, Session, User } from "@spacebar/database";
-import { RelationshipType } from "@spacebar/schemas";
-import { broadcastPresence, Config, emitEvent, Event, EVENT, FederationRequestError, getPermission, parseCanonicalId, SNOWFLAKE } from "@spacebar/util";
+import { ChannelType, RelationshipType } from "@spacebar/schemas";
+import {
+    applyAuthorshipPlaceholders,
+    broadcastPresence,
+    carriesAuthoredFields,
+    Config,
+    DmChannelDTO,
+    emitEvent,
+    Event,
+    EVENT,
+    FederationRequestError,
+    getPermission,
+    getUserPresence,
+    isWireMessage,
+    parseCanonicalId,
+    PRESENCE_STALE_AFTER_MS,
+    SNOWFLAKE,
+} from "@spacebar/util";
 import { ProcessLifecycle } from "../../../util/util/ProcessLifecycle";
 import { canonicalOf, fromWire, toWire } from "./federationIds";
 import { buildSnapshot } from "./federationHost";
@@ -26,6 +42,7 @@ import { addMentions, dispatchMessagePush, getMentionedUsers, PushMessage } from
 import { ownInstance, signedFetch, trustFor } from "./federationNetwork";
 import { quotaAdded, trimInboxEvents } from "./federationQuota";
 import { upsertShadows } from "./federationShadows";
+import { attachStoredAuthorship, guardIncoming } from "./federationAuthorship";
 import { applyRemoteCall, applyRemoteStream, applyRemoteVoiceState, applyVoiceServerUpdate, parseStreamKey } from "./federationVoice";
 
 type Raw = Record<string, unknown>;
@@ -90,6 +107,7 @@ const USER_EVENTS = new Set<string>([
     "CHANNEL_E2EE_UPDATE",
     ...STREAM_EVENTS,
 ]);
+const MESSAGE_EVENTS = new Set(["MESSAGE_CREATE", "MESSAGE_UPDATE"]);
 const ACCEPTED = new Set<string>([...GUILD_EVENTS, ...CHANNEL_EVENTS, ...USER_EVENTS, "GUILD_CREATE", "VOICE_STATE_UPDATE"]);
 
 const BATCH = 100;
@@ -97,6 +115,7 @@ const MAX_QUEUE = 10_000;
 const RETRY_FOR = 24 * 60 * 60 * 1000;
 const CACHE_TTL = 30_000;
 const PRESENCE_SESSION_TTL = 30 * 60 * 1000;
+const PRESENCE_REFRESH = 10 * 60 * 1000;
 const SEEN_FOR = 48 * 60 * 60 * 1000;
 
 const isObject = (value: unknown): value is Raw => !!value && typeof value === "object" && !Array.isArray(value);
@@ -305,13 +324,41 @@ const group = (users: { id: string; instance: string }[]) => {
 
 async function send(byInstance: Map<string, string[]>, event: string, data: unknown, refs: { guild_id?: string | null; channel_id?: string | null }) {
     if (!byInstance.size) return;
-    const wireData = await toWire(data);
+    const wireData = MESSAGE_EVENTS.has(event) ? await attachStoredAuthorship(await toWire(data)) : await toWire(data);
     const guild_id = refs.guild_id ? await canonicalOf(refs.guild_id) : undefined;
     const channel_id = refs.channel_id ? await canonicalOf(refs.channel_id) : undefined;
     for (const [instance, users] of byInstance) {
         if (!(await trustFor(instance).catch(() => null))) continue;
         const recipients = await Promise.all(users.map((id) => canonicalOf(id)));
         await enqueue(instance, { event, data: wireData, ...(guild_id && { guild_id }), ...(channel_id && { channel_id }), recipients });
+    }
+}
+
+export async function sharePresence(instance: string, user_ids: string[]) {
+    const local = user_ids.length ? await User.find({ where: { id: In(user_ids) }, select: { id: true, federated_instance: true } }) : [];
+    for (const user of local.filter((row) => !row.federated_instance)) {
+        const presence = await getUserPresence(user.id);
+        await send(
+            new Map([[instance, []]]),
+            "PRESENCE_UPDATE",
+            { user: { id: user.id }, status: presence.status, activities: presence.activities, client_status: presence.client_status },
+            {},
+        );
+    }
+}
+
+export async function announcePrivateChannel(channel_id: string) {
+    const channel = await Channel.findOne({ where: { id: channel_id }, relations: { recipients: true } });
+    if (!channel || channel.federated_instance || channel.guild_id || channel.type !== ChannelType.DM) return;
+    const recipients = channel.recipients ?? [];
+    const users = await User.find({ where: { id: In(recipients.map((row) => row.user_id)) }, select: { id: true, federated_instance: true } });
+    const local = users.filter((user) => !user.federated_instance).map((user) => user.id);
+    for (const user of users) {
+        const row = recipients.find((recipient) => recipient.user_id === user.id);
+        if (!user.federated_instance || !row?.closed || !(await trustFor(user.federated_instance).catch(() => null))) continue;
+        const dto = await DmChannelDTO.from(channel, [user.id]);
+        await send(new Map([[user.federated_instance, [user.id]]]), "CHANNEL_CREATE", { ...dto, meowcord_closed: true }, { channel_id });
+        await sharePresence(user.federated_instance, local);
     }
 }
 
@@ -337,6 +384,8 @@ async function routeUserEvent(payload: Payload) {
         await send(new Map(instances.map((instance) => [instance, []])), "PRESENCE_UPDATE", presence, {});
         return;
     }
+    if (!target.federated_instance && payload.event === "CHANNEL_CREATE" && typeof data.id === "string" && Number(data.type) === ChannelType.DM)
+        return announcePrivateChannel(data.id);
     if (!target.federated_instance || !USER_EVENTS.has(payload.event)) return;
     if (payload.event.startsWith("E2EE_")) {
         const subject = typeof data.user_id === "string" ? await User.findOne({ where: { id: data.user_id }, select: { id: true, federated_instance: true } }) : null;
@@ -360,6 +409,10 @@ async function routeUserEvent(payload: Payload) {
         guild_id: payload.event.startsWith("GUILD_") ? (data.id as string) : undefined,
         channel_id: channel,
     });
+    if (payload.event === "CHANNEL_CREATE" && channel && !data.guild_id) {
+        const others = (await Recipient.find({ where: { channel_id: channel }, select: { id: true, user_id: true } })).map((row) => row.user_id);
+        await sharePresence(target.federated_instance, others);
+    }
 }
 
 async function routeGuildEvent(payload: Payload, guild_id: string) {
@@ -400,7 +453,6 @@ async function routeChannelEvent(payload: Payload, channel_id: string) {
         .select(["recipient.user_id AS id", "user.federated_instance AS instance"])
         .where("recipient.channel_id = :channel_id", { channel_id })
         .andWhere("user.federated_instance IS NOT NULL")
-        .andWhere("recipient.closed = :closed", { closed: false })
         .getRawMany<{ id: string; instance: string }>();
     await send(group(recipients.map((row) => ({ id: String(row.id), instance: String(row.instance) }))), payload.event, payload.data, { channel_id });
 }
@@ -481,10 +533,12 @@ async function knowing(subject: string, recipients: string[]) {
     return recipients.filter((id) => known.has(id));
 }
 
-async function mayJoinPrivateChannel(local: string, senders: string[]) {
-    const relationships = await Relationship.find({ where: { from_id: local, to_id: In(senders) }, select: { id: true, type: true } });
-    if (relationships.some((row) => row.type === RelationshipType.BLOCKED)) return false;
-    if (relationships.some((row) => [RelationshipType.FRIEND, RelationshipType.INCOMING_REQUEST, RelationshipType.OUTGOING_REQUEST].includes(row.type))) return true;
+async function mayJoinPrivateChannel(local: string, senders: string[], members: string[]) {
+    const relationships = await Relationship.find({ where: { from_id: local, to_id: In([...senders, ...members]) }, select: { id: true, to_id: true, type: true } });
+    if (relationships.some((row) => row.type === RelationshipType.BLOCKED && senders.includes(row.to_id))) return false;
+    if (relationships.some((row) => row.type === RelationshipType.FRIEND && members.includes(row.to_id))) return true;
+    const toSenders = relationships.filter((row) => senders.includes(row.to_id));
+    if (toSenders.some((row) => [RelationshipType.FRIEND, RelationshipType.INCOMING_REQUEST, RelationshipType.OUTGOING_REQUEST].includes(row.type))) return true;
     const guilds = (await Member.find({ where: { id: local }, select: { index: true, guild_id: true } })).map((row) => row.guild_id);
     return guilds.length > 0 && (await Member.exists({ where: { guild_id: In(guilds), id: In(senders) } }));
 }
@@ -497,7 +551,7 @@ export async function admissibleRecipients(sender: string, channel_id: string | 
     if (!senders.length) return null;
     const existing = new Set(channel_id ? (await Recipient.find({ where: { channel_id }, select: { id: true, user_id: true } })).map((row) => row.user_id) : []);
     const admitted: string[] = [];
-    for (const user of users) if (user.federated_instance || existing.has(user.id) || (await mayJoinPrivateChannel(user.id, senders))) admitted.push(user.id);
+    for (const user of users) if (user.federated_instance || existing.has(user.id) || (await mayJoinPrivateChannel(user.id, senders, [...existing]))) admitted.push(user.id);
     return admitted;
 }
 
@@ -517,8 +571,10 @@ async function applyRelationship(event: string, data: Raw, recipients: string[],
             await emitLocal("RELATIONSHIP_REMOVE", { id: other, type: own?.type ?? RelationshipType.NONE }, { user_id });
             continue;
         }
-        const type = Number(data.type);
+        const requested = Number(data.type);
         if (own?.type === RelationshipType.BLOCKED) continue;
+        const crossed = requested === RelationshipType.INCOMING_REQUEST && own?.type === RelationshipType.OUTGOING_REQUEST;
+        const type = crossed ? RelationshipType.FRIEND : requested;
         const set = async (row: Relationship | null, from_id: string, to_id: string, next: RelationshipType) => {
             if (row) {
                 row.type = next;
@@ -537,6 +593,8 @@ async function applyRelationship(event: string, data: Raw, recipients: string[],
         } else continue;
         const saved = await Relationship.findOneOrFail({ where: { from_id: user_id, to_id: other }, relations: { to: true } });
         await emitLocal("RELATIONSHIP_ADD", { ...saved.toPublicRelationship(), should_notify: type === RelationshipType.INCOMING_REQUEST }, { user_id });
+        if (crossed) await send(new Map([[sender, [other]]]), "RELATIONSHIP_ADD", { id: user_id, type: RelationshipType.FRIEND }, {});
+        if (type === RelationshipType.FRIEND) await sharePresence(sender, [user_id]);
     }
     knownBy.clear();
 }
@@ -634,9 +692,15 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
             if (existing && existing !== sender) return;
             const admitted = await admissibleRecipients(sender, existing ? channel_id : null, [...others, ...recipients]);
             if (!admitted) return;
-            const id = await upsertMirrorPrivateChannel(data, sender, admitted);
+            const quiet = event === "CHANNEL_CREATE" && data.meowcord_closed === true;
+            const targets = recipients.filter((user) => admitted.includes(user));
+            const { meowcord_closed: _, ...channel } = data;
+            const id = await upsertMirrorPrivateChannel(channel, sender, admitted, quiet ? targets : []);
             if (!id) return;
-            for (const user_id of recipients.filter((user) => admitted.includes(user))) await emitLocal(event, data, { user_id });
+            if (!existing) await sharePresence(sender, targets);
+            if (quiet) return;
+            if (event === "CHANNEL_CREATE" && targets.length) await Recipient.update({ channel_id: id, user_id: In(targets) }, { closed: false });
+            for (const user_id of targets) await emitLocal(event, channel, { user_id });
             return;
         }
         case "CHANNEL_DELETE": {
@@ -646,6 +710,14 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
                 await Channel.delete({ id, federated_instance: sender });
                 invalidateMirror(`channel:${id}`);
                 return emitLocal(event, data, { guild_id });
+            }
+            const mirror = await Channel.findOne({ where: { id }, select: { id: true, type: true } });
+            if (mirror?.type === ChannelType.DM) {
+                for (const user_id of await presentIn(recipients, { channel_id: id })) {
+                    await Recipient.update({ channel_id: id, user_id }, { closed: true });
+                    await emitLocal(event, data, { user_id });
+                }
+                return;
             }
             for (const user_id of await presentIn(recipients, { channel_id: id })) {
                 await Recipient.delete({ channel_id: id, user_id });
@@ -730,10 +802,24 @@ async function applyEvent(sender: string, wire: WireEvent, data: Raw, refs: { gu
             if (!channel_id || (await mirrorInstance("channel", channel_id)) !== sender) return;
             if (event === "MESSAGE_CREATE" && typeof data.id === "string") await Channel.update({ id: channel_id }, { last_message_id: data.id });
             const present = await presentIn(recipients, { channel_id });
-            for (const user_id of present) await emitLocal(event, data, { user_id });
+            const shown = await reopenPrivateMirror(channel_id, present, event === "MESSAGE_CREATE");
+            for (const user_id of shown) await emitLocal(event, data, { user_id });
             if (event === "MESSAGE_CREATE") await notifyMentions(channel_id, data, present);
         }
     }
+}
+
+async function reopenPrivateMirror(channel_id: string, present: string[], reopen: boolean) {
+    if (!present.length) return present;
+    const channel = await Channel.findOne({ where: { id: channel_id }, relations: { recipients: true } });
+    if (channel?.type !== ChannelType.DM) return present;
+    const closed = new Set((channel.recipients ?? []).filter((row) => row.closed && present.includes(row.user_id)).map((row) => row.user_id));
+    if (!closed.size) return present;
+    if (!reopen) return present.filter((user_id) => !closed.has(user_id));
+    await Recipient.update({ channel_id, user_id: In([...closed]) }, { closed: false });
+    const dto = await DmChannelDTO.from(channel);
+    for (const user_id of closed) await emitLocal("CHANNEL_CREATE", dto.excludedRecipients([user_id]), { user_id });
+    return present;
 }
 
 const EPHEMERAL = 1 << 6;
@@ -761,7 +847,17 @@ async function notifyMentions(channel_id: string, data: Raw, recipients: string[
     );
 }
 
+const retryNowThatItAnswers = (instance: string) => {
+    const queue = queues.get(instance);
+    if (!queue?.failures || !queue.queued || queue.sending || stopping) return;
+    clearTimeout(queue.timer);
+    queue.timer = undefined;
+    queue.failures = 0;
+    schedule(instance, 0);
+};
+
 export async function handleInbox(sender: string, body: Raw) {
+    retryNowThatItAnswers(sender);
     const own = ownInstance();
     const events = Array.isArray(body.events) ? body.events : null;
     if (!events) throw new FederationRequestError("bad_request", "events must be an array", 400);
@@ -798,7 +894,18 @@ export async function handleInbox(sender: string, body: Raw) {
             }
         }
         try {
-            const data = (await fromWire(isObject(wire.data) ? wire.data : {}, sender, upsertShadows)) as Raw;
+            const raw = isObject(wire.data) ? wire.data : {};
+            if (MESSAGE_EVENTS.has(wire.event) && !isWireMessage(raw) && (wire.event === "MESSAGE_CREATE" || carriesAuthoredFields(raw))) {
+                console.warn(`[Federation] ${sender} sent ${wire.event} with message text but no author, so it isn't shown`);
+                applied++;
+                continue;
+            }
+            const guard = await guardIncoming(raw, sender, wire.event === "MESSAGE_CREATE");
+            if (MESSAGE_EVENTS.has(wire.event) && guard.top === "unverified") {
+                applied++;
+                continue;
+            }
+            const data = applyAuthorshipPlaceholders((await fromWire(raw, sender, upsertShadows)) as Raw);
             const refs = (await fromWire({ guild_id: wire.guild_id ?? null, channel_id: wire.channel_id ?? null }, sender)) as {
                 guild_id: string | null;
                 channel_id: string | null;
@@ -814,6 +921,27 @@ export async function handleInbox(sender: string, body: Raw) {
     return { applied };
 }
 
+export async function refreshPresences(now = Date.now()) {
+    if (stopping || !Config.get().federation.enabled) return 0;
+    const rows = await Session.createQueryBuilder("session")
+        .innerJoin(User, "user", "user.id = session.user_id")
+        .select("DISTINCT session.user_id", "user_id")
+        .where("user.federated_instance IS NULL")
+        .andWhere("session.is_admin_session = :admin", { admin: false })
+        .andWhere("session.status NOT IN (:...hidden)", { hidden: ["offline", "invisible"] })
+        .andWhere("session.last_seen > :since", { since: new Date(now - PRESENCE_STALE_AFTER_MS) })
+        .getRawMany<{ user_id: string }>();
+    let sent = 0;
+    for (const { user_id } of rows) {
+        for (const instance of await instancesKnowing(String(user_id))) {
+            if (!(await trustFor(instance).catch(() => null))) continue;
+            await sharePresence(instance, [String(user_id)]);
+            sent++;
+        }
+    }
+    return sent;
+}
+
 export function startFederationDelivery() {
     const prune = setInterval(
         () =>
@@ -823,9 +951,15 @@ export function startFederationDelivery() {
         60 * 60 * 1000,
     );
     prune.unref?.();
+    const refresh = setInterval(
+        () => void refreshPresences().catch((error) => console.warn("[Federation] Could not refresh presences:", (error as Error).message)),
+        PRESENCE_REFRESH,
+    );
+    refresh.unref?.();
     ProcessLifecycle.eventEmitter.once("stopping", () => {
         stopping = true;
         clearInterval(prune);
+        clearInterval(refresh);
         for (const queue of queues.values()) clearTimeout(queue.timer);
     });
     void FederationOutboxEvent.createQueryBuilder("event")

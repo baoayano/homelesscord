@@ -7,6 +7,7 @@ import { localIds, toWire, WireUser } from "./federationIds";
 import { rewriteRemoteMedia } from "./federationMedia";
 import { ownInstance, signedFetch } from "./federationNetwork";
 import { assertQuota, quotaAdded } from "./federationQuota";
+import { homeBadges, storeRemoteBadges } from "./remoteBadges";
 
 export interface RemoteProfile {
     username: string;
@@ -152,7 +153,22 @@ export async function upsertShadows(users: WireUser[]) {
 export async function applyProfile(local_id: string, canonical: string, raw: unknown) {
     const parsed = parseCanonicalId(canonical);
     if (!parsed || !raw || typeof raw !== "object") return;
-    await upsertShadows([{ local_id, canonical, instance: parsed.instance, object: { ...(raw as Record<string, unknown>), id: local_id } }]);
+    const { badges, ...profile } = raw as Record<string, unknown>;
+    await upsertShadows([{ local_id, canonical, instance: parsed.instance, object: { ...profile, id: local_id } }]);
+    if (badges !== undefined) await storeRemoteBadges(local_id, parsed.instance, badges);
+}
+
+const BADGE_REFRESH_INTERVAL = 60_000;
+const badgeRefreshes = new Map<string, number>();
+
+export async function refreshRemoteProfile(local_id: string, canonical: string) {
+    if (Date.now() - (badgeRefreshes.get(local_id) ?? 0) < BADGE_REFRESH_INTERVAL) return false;
+    if (badgeRefreshes.size > 50_000) badgeRefreshes.clear();
+    badgeRefreshes.set(local_id, Date.now());
+    const profile = await fetchRemoteProfile(canonical).catch(() => null);
+    if (!profile) return false;
+    await applyProfile(local_id, canonical, profile);
+    return true;
 }
 
 export async function fetchRemoteProfile(canonical: string) {
@@ -199,7 +215,8 @@ export async function lookupRemoteHandle(handle: string) {
     const canonical = response.body.id;
     const parsed = parseCanonicalId(canonical);
     if (!parsed || parsed.instance !== instance) throw new FederationRequestError("bad_response", `${instance} answered with a user of another instance`, 502);
-    return ensureShadow(canonical as string, await rewriteRemoteMedia(response.body, instance));
+    const { badges, ...profile } = response.body;
+    return ensureShadow(canonical as string, { ...(await rewriteRemoteMedia(profile, instance)), ...(badges !== undefined && { badges }) });
 }
 
 export async function actorBlocked(canonical: string) {
@@ -208,5 +225,5 @@ export async function actorBlocked(canonical: string) {
 }
 
 export async function publicProfile(user: User) {
-    return toWire({ ...profileOf(user), id: user.id, bot: user.bot, discriminator: "0" });
+    return { ...(await toWire({ ...profileOf(user), id: user.id, bot: user.bot, discriminator: "0" })), badges: await homeBadges(user.id) };
 }

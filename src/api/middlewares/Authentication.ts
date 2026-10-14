@@ -66,7 +66,13 @@ export async function handleAuthentication(req: Request) {
         req.federationRelay =
             typeof relayHeader === "string" && relayHeader === federationRelaySecret() && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
         const foreignOrigin = !!req.headers.origin && !isInstanceOrigin(req, req.headers.origin);
-        const options = { ipAddress: req.ip, fingerprint: foreignOrigin ? undefined : req.fingerprint, federationRelay: req.federationRelay, propagateBans: !foreignOrigin };
+        const sentFingerprint = !!req.fingerprint && !!req.headers.cookie?.split("; ").includes(`__sb_sessid=${req.fingerprint}`);
+        const options = {
+            ipAddress: req.ip,
+            fingerprint: foreignOrigin || !sentFingerprint ? undefined : req.fingerprint,
+            federationRelay: req.federationRelay,
+            propagateBans: !foreignOrigin,
+        };
         const { decoded, user, session, oauth2 } = (req.tokenData = isOAuth2AccessToken(req.headers.authorization)
             ? await checkOAuth2Token(req.headers.authorization, options)
             : await checkToken(req.headers.authorization, options));

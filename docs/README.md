@@ -25,6 +25,7 @@
 - [announcements.md](features/announcements.md): encrypted announcements from the official account.
 - [automod.md](features/automod.md): the slur auto-ban, word lists, join reasons, account approval, sign-in and signup limits, spam rules, raid detection, server AutoMod rules and the Automod admin page with its raid incidents.
 - [captcha.md](features/captcha.md): Cap challenge work for registration, sign-in and password reset, and refusing automated browsers.
+- [discovery.md](features/discovery.md): what Discover lists, how search and ranking work, the search index, categories and keywords.
 - [e2ee.md](features/e2ee.md): end-to-end encrypted DMs, key backup and recovery.
 - [federation.md](features/federation.md): Other instances in Discovery, chat with servers and people on other instances, the owner switch, the Federation admin page, its config keys and endpoints.
 - [link-embeds.md](features/link-embeds.md): link previews, video players and components media.

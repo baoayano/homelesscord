@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { Channel, Guild, Member, Recipient, User } from "@spacebar/database";
+import { In } from "typeorm";
+import { Channel, Guild, Member, Recipient, Relationship, User } from "@spacebar/database";
+import { PublicUserProjection, RelationshipType } from "@spacebar/schemas";
 import {
     ApiError,
+    applyAuthorshipPlaceholders,
+    AUTHORSHIP_HEADER,
     Config,
     emitEvent,
     federationRelaySecret,
@@ -14,6 +18,7 @@ import {
     RELAY_METHODS,
     relayPathProblem,
     relayRouteAllowed,
+    Snowflake,
     SNOWFLAKE,
     translatePath,
 } from "@spacebar/util";
@@ -24,6 +29,8 @@ import { deleteMirrorGuild, mirrorInstance, syncMirrorChannels, upsertMirrorChan
 import { rewriteUploadUrl } from "./federationMedia";
 import { hostAnswerError, hostTransportError, ownInstance, signedFetch } from "./federationNetwork";
 import { actorBlocked, ensureShadow, lookupRemoteHandle, profileOf, upsertShadows } from "./federationShadows";
+import { localProfileBadges } from "./remoteBadges";
+import { acceptRelayAuthorship, attachStoredAuthorship, authoredRelay, guardIncoming, homeAuthorship, reportAuthorshipMismatch } from "./federationAuthorship";
 
 type Raw = Record<string, unknown>;
 
@@ -42,6 +49,7 @@ export interface RelayRequest {
     body?: unknown;
     files?: RelayFile[];
     profile?: unknown;
+    authorship?: string;
 }
 
 export interface RelayResponse {
@@ -59,7 +67,7 @@ const notFederated = (message = "This isn't available to other instances") => ne
 const segmentsOf = (path: string) => path.split("?")[0].split("/").filter(Boolean);
 
 const mapSegment = (segment: string, map: (id: string) => string | null | undefined) => {
-    const emoji = /^(.+):([^:]+)$/.exec(segment);
+    const emoji = /^([^:]+):(.+)$/.exec(segment);
     if (emoji && (SNOWFLAKE.test(emoji[2]) || emoji[2].startsWith("@"))) {
         const mapped = map(emoji[2]);
         return mapped ? `${emoji[1]}:${mapped}` : null;
@@ -71,7 +79,7 @@ const mapSegment = (segment: string, map: (id: string) => string | null | undefi
 async function wirePath(path: string) {
     const ids = new Set<string>();
     translatePath(path, (segment) => {
-        const emoji = /^(.+):(\d{15,20})$/.exec(segment);
+        const emoji = /^([^:]+):(\d{15,20})$/.exec(segment);
         if (emoji) ids.add(emoji[2]);
         else if (SNOWFLAKE.test(segment)) ids.add(segment);
         return segment;
@@ -83,7 +91,7 @@ async function wirePath(path: string) {
 async function localPath(path: string) {
     const ids = new Set<string>();
     translatePath(path, (segment) => {
-        const emoji = /^(.+):(@[^:]+)$/.exec(segment);
+        const emoji = /^([^:]+):(@.+)$/.exec(segment);
         if (emoji && parseCanonicalId(emoji[2])) ids.add(emoji[2]);
         else if (parseCanonicalId(segment)) ids.add(segment);
         return segment;
@@ -153,8 +161,17 @@ async function assertRelayAllowed(method: string, path: string, shadow: string, 
 
 const loopbackPort = (req: Request) => req.socket.localPort ?? Number(process.env.PORT ?? 3001);
 
-export async function loopback(port: number, user_id: string, method: string, path: string, body?: unknown, files?: RelayFile[]): Promise<RelayResponse> {
+export async function loopback(
+    port: number,
+    user_id: string,
+    method: string,
+    path: string,
+    body?: unknown,
+    files?: RelayFile[],
+    extraHeaders: Record<string, string> = {},
+): Promise<RelayResponse> {
     const headers: Record<string, string> = {
+        ...extraHeaders,
         authorization: generateFederationToken(user_id),
         "x-meowcord-relay": federationRelaySecret(),
         accept: "application/json",
@@ -220,12 +237,26 @@ export async function executeRelay(req: Request, sender: string, raw: Raw) {
     const shadow = await ensureShadow(request.actor, request.profile);
     const shadowUser = await User.findOne({ where: { id: shadow }, select: { id: true, suspended_until: true, disabled: true } });
     if (!shadowUser || shadowUser.disabled) throw new FederationRequestError("blocked", "The actor can't act on this instance", 403);
+    const added = (() => {
+        try {
+            return decodeURIComponent(/^\/channels\/[^/]+\/recipients\/([^/?]+)$/.exec(request.path)?.[1] ?? "");
+        } catch {
+            return "";
+        }
+    })();
+    if (method === "PUT" && parseCanonicalId(added)?.instance === sender) await ensureShadow(added);
     const path = await localPath(`${request.path}${queryString(request.query)}`);
     if (!relayRouteAllowed(method, path.split("?")[0])) throw notFederated();
+    const authorship = await acceptRelayAuthorship(sender, request.actor, method, request.path, request.authorship);
     const body = request.body === undefined ? undefined : await fromWire(request.body, sender, upsertShadows);
     await assertRelayAllowed(method, path, shadow, body);
-    const response = await loopback(loopbackPort(req), shadow, method, path, body, files);
-    return { ...response, body: response.body === null ? null : await toWire(response.body) };
+    const response = await loopback(loopbackPort(req), shadow, method, path, body, files, authorship ? { [AUTHORSHIP_HEADER]: authorship } : {});
+    const answer = response.body === null ? null : await attachStoredAuthorship(await toWire(response.body));
+    if (authorship && response.status < 300 && answer && typeof answer === "object") {
+        const created = authoredRelay(method, request.path)?.kind === "thread" ? (answer as Raw).message : answer;
+        await reportAuthorshipMismatch(sender, authorship, created).catch(() => undefined);
+    }
+    return { ...response, body: answer };
 }
 
 const relayUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILES_BYTES, files: 10, fields: 10 } });
@@ -326,6 +357,75 @@ async function afterRelay(req: Request, plan: RelayPlan, status: number, body: u
     }
 }
 
+const PROFILE_SELECT = {
+    id: true,
+    username: true,
+    global_name: true,
+    avatar: true,
+    avatar_decoration_data: true,
+    banner: true,
+    accent_color: true,
+    pronouns: true,
+    bio: true,
+    public_flags: true,
+} as const;
+
+const remoteProfileQuery = (query: [string, string[]][]) => {
+    const kept = query.filter(([key]) => key !== "guild_id");
+    const wantsCount = kept.some(([key, values]) => key === "with_mutual_friends_count" && values[0] === "true");
+    return wantsCount && !kept.some(([key]) => key === "with_mutual_friends") ? [...kept, ["with_mutual_friends", ["true"]] as [string, string[]]] : kept;
+};
+
+const friendIds = async (user_id: string) =>
+    new Set((await Relationship.find({ where: { from_id: user_id, type: RelationshipType.FRIEND }, select: { id: true, to_id: true } })).map((row) => row.to_id));
+
+export async function mutualFriendIds(viewer: string, target: string, relayed: unknown[] = []) {
+    const [mine, theirs] = await Promise.all([friendIds(viewer), friendIds(target)]);
+    const ids = new Set([...mine].filter((id) => theirs.has(id)));
+    for (const user of relayed) {
+        const id = user && typeof user === "object" && typeof (user as Raw).id === "string" ? ((user as Raw).id as string) : null;
+        if (id && mine.has(id)) ids.add(id);
+    }
+    ids.delete(viewer);
+    ids.delete(target);
+    return [...ids];
+}
+
+export async function remoteMutualFriends(viewer_id: string, target_id: string) {
+    const instance = await mirrorInstance("user", target_id);
+    if (!instance) return [];
+    const viewer = await User.findOne({ where: { id: viewer_id }, select: PROFILE_SELECT });
+    if (!viewer) return [];
+    const response = await relayToHost(instance, viewer, "GET", `/users/${target_id}/profile`, undefined, { with_mutual_friends: ["true"] }).catch(() => null);
+    const body = response?.status === 200 && response.body && typeof response.body === "object" ? (response.body as Raw) : {};
+    return Array.isArray(body.mutual_friends) ? body.mutual_friends : [];
+}
+
+export async function mergeRemoteProfile(viewer: string, target: string, profile: Raw, query: Record<string, string | undefined>) {
+    const shadow = await User.findOne({ where: { id: target }, select: { id: true, badge_ids: true, pride_badges: true, federated_instance: true } });
+    profile.badges = shadow ? await localProfileBadges(shadow) : [];
+    profile.guild_badges = [];
+    if (query.with_mutual_guilds === "true") {
+        const [mine, theirs] = await Promise.all([viewer, target].map((id) => Member.find({ where: { id }, select: { index: true, guild_id: true, nick: true } })));
+        const own = new Set(mine.map((row) => row.guild_id));
+        profile.mutual_guilds = theirs.filter((row) => own.has(row.guild_id)).map((row) => ({ id: row.guild_id, nick: row.nick ?? null }));
+    }
+    if (query.with_mutual_friends === "true" || query.with_mutual_friends_count === "true") {
+        const ids = await mutualFriendIds(viewer, target, Array.isArray(profile.mutual_friends) ? profile.mutual_friends : []);
+        profile.mutual_friends_count = ids.length;
+        if (query.with_mutual_friends === "true")
+            profile.mutual_friends = ids.length
+                ? (await User.find({ where: { id: In(ids) }, select: Object.fromEntries(PublicUserProjection.map((key) => [key, true])) })).map((user) => user.toPartialUser())
+                : [];
+        else delete profile.mutual_friends;
+    }
+    const guild_id = query.guild_id;
+    if (guild_id && SNOWFLAKE.test(guild_id)) {
+        const member = await Member.findOne({ where: { id: target, guild_id }, relations: { roles: true } });
+        if (member) profile.guild_member = { ...member.toPublicMember(), roles: member.roles.filter((role) => role.id !== guild_id).map((role) => role.id), user: profile.user };
+    }
+}
+
 export async function plaintextToPrivateMirror(method: string, segments: string[], plan: RelayPlan, body: unknown) {
     if (plan.kind !== "channel" || segments[2] !== "messages") return false;
     const raw = body && typeof body === "object" ? (body as Raw) : {};
@@ -361,41 +461,58 @@ export async function homeRelay(req: Request, res: Response, next: NextFunction)
             return res.status(400).json({ message: "Messages in a conversation with another instance must be end-to-end encrypted", code: 90002 });
         await homeAutomod(req, plan, body);
         const own = ownInstance();
-        const user = await User.findOneOrFail({
-            where: { id: req.user_id },
-            select: {
-                id: true,
-                username: true,
-                global_name: true,
-                avatar: true,
-                avatar_decoration_data: true,
-                banner: true,
-                accent_color: true,
-                pronouns: true,
-                bio: true,
-                public_flags: true,
-            },
-        });
+        const user = await User.findOneOrFail({ where: { id: req.user_id }, select: PROFILE_SELECT });
         const path = await wirePath(req.path);
+        const authored = authoredRelay(req.method, path);
+        if (authored?.kind === "create" && body && typeof body === "object" && ((body as Raw).nonce === undefined || (body as Raw).nonce === null))
+            (body as Raw).nonce = Snowflake.generate();
+        const wireBody = body === undefined ? undefined : await toWire(body);
+        const authorship = authored
+            ? await homeAuthorship({
+                  method: req.method,
+                  path,
+                  user_id: req.user_id,
+                  host: plan.instance,
+                  body: wireBody,
+                  files,
+                  current: async () => {
+                      const answer = await signedFetch<RelayResponse>(plan.instance, "POST", "/federation/v2/relay", {
+                          actor: `@${req.user_id}@${own}`,
+                          method: "GET",
+                          path: path.split("?")[0],
+                          query: {},
+                          profile: profileOf(user),
+                      });
+                      return answer.status === 200 && answer.body?.status === 200 ? answer.body.body : null;
+                  },
+              })
+            : null;
         const query: [string, string[]][] = Object.entries(req.query).flatMap(([key, value]): [string, string[]][] =>
             typeof value === "string" ? [[key, [value]]] : Array.isArray(value) ? [[key, value.map(String)]] : [],
         );
-        const queryMap = await canonicalIds(query.flatMap(([, values]) => values));
-        const wireQuery = Object.fromEntries(query.map(([key, values]) => [key, values.map((value) => queryMap.get(value) ?? value)]));
+        const profile = plan.kind === "user" && req.method === "GET" && segments[2] === "profile";
+        const relayed = profile ? remoteProfileQuery(query) : query;
+        const queryMap = await canonicalIds(relayed.flatMap(([, values]) => values));
+        const wireQuery = Object.fromEntries(relayed.map(([key, values]) => [key, values.map((value) => queryMap.get(value) ?? value)]));
         const response = await signedFetch<RelayResponse & { code?: string; error?: string }>(plan.instance, "POST", "/federation/v2/relay", {
             actor: `@${req.user_id}@${own}`,
             method: req.method,
             path,
             query: wireQuery,
-            body: body === undefined ? undefined : await toWire(body),
+            body: wireBody,
             files: files.length ? files : undefined,
             profile: profileOf(user),
+            ...(authorship && { authorship }),
+        }).catch((error) => {
+            throw hostTransportError(plan.instance, error);
         });
         if (response.status !== 200 || !response.body || typeof response.body.status !== "number") {
             const error = response.body?.error ?? `The instance that hosts this answered ${response.status}`;
             return res.status(response.status === 403 ? 403 : response.status === 404 ? 404 : response.status === 429 ? 429 : 502).json({ message: error, code: 0 });
         }
-        const translated = response.body.body === null || response.body.body === undefined ? null : await fromWire(response.body.body, plan.instance, upsertShadows);
+        if (response.body.body !== null && response.body.body !== undefined) await guardIncoming(response.body.body, plan.instance);
+        const translated =
+            response.body.body === null || response.body.body === undefined ? null : applyAuthorshipPlaceholders(await fromWire(response.body.body, plan.instance, upsertShadows));
         const uploads = /^\/channels\/\d+\/attachments\/?$/.test(req.path) && translated && typeof translated === "object" ? (translated as Raw).attachments : null;
         if (Array.isArray(uploads))
             for (const attachment of uploads) {
@@ -405,6 +522,8 @@ export async function homeRelay(req: Request, res: Response, next: NextFunction)
                 attachment.upload_url = rewritten;
             }
         await afterRelay(req, plan, response.body.status, translated);
+        if (profile && response.body.status === 200 && translated && typeof translated === "object")
+            await mergeRemoteProfile(req.user_id, plan.id, translated as Raw, Object.fromEntries(query.map(([key, values]) => [key, values[0]])));
         for (const [name, value] of Object.entries(response.body.headers ?? {})) if (PASSED_HEADERS.includes(name)) res.setHeader(name, value);
         if (translated === null || response.body.status === 204) return res.status(response.body.status).end();
         return res.status(response.body.status).json(translated);
@@ -414,12 +533,13 @@ export async function homeRelay(req: Request, res: Response, next: NextFunction)
     }
 }
 
-export const relayToHost = async (instance: string, actor: User, method: string, path: string, body?: unknown) => {
+export const relayToHost = async (instance: string, actor: User, method: string, path: string, body?: unknown, query?: Record<string, string[]>) => {
     const own = ownInstance();
     const response = await signedFetch<RelayResponse>(instance, "POST", "/federation/v2/relay", {
         actor: `@${actor.id}@${own}`,
         method,
         path: await wirePath(path),
+        ...(query && { query }),
         body: body === undefined ? undefined : await toWire(body),
         profile: profileOf(actor),
     }).catch((error) => {
@@ -427,5 +547,6 @@ export const relayToHost = async (instance: string, actor: User, method: string,
     });
     if (response.status !== 200 || !response.body || typeof response.body !== "object" || typeof response.body.status !== "number")
         throw hostAnswerError(instance, response.status, response.body);
-    return { ...response.body, body: response.body.body == null ? null : await fromWire(response.body.body, instance, upsertShadows) };
+    if (response.body.body != null) await guardIncoming(response.body.body, instance);
+    return { ...response.body, body: response.body.body == null ? null : applyAuthorshipPlaceholders(await fromWire(response.body.body, instance, upsertShadows)) };
 };

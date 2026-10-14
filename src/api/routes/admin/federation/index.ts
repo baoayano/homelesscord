@@ -3,7 +3,7 @@ import { Request, Response, Router } from "express";
 import { route } from "@spacebar/api/middlewares";
 import { FederationPeer } from "@spacebar/database";
 import { announceRefusal, Config, FederationKey, instancesJsonEntry } from "@spacebar/util";
-import { currentDocument, federationStatus, instanceId, instanceUrl, wellKnownDocument } from "@spacebar/api/util/utility/federation";
+import { announceContacts, currentDocument, federationStatus, instanceId, instanceUrl, wellKnownDocument } from "@spacebar/api/util/utility/federation";
 
 const router = Router({ mergeParams: true });
 
@@ -14,8 +14,10 @@ export const pickFederationSettings = () => {
         registryUrl: federation.registry.url,
         registryPublicKey: federation.registry.publicKey,
         announce: federation.announce,
+        announceStats: federation.announceStats ?? true,
         allowUnlistedPeers: federation.allowUnlistedPeers,
         peers: [...federation.peers],
+        contacts: [...(federation.contacts ?? [])],
         verification: federation.discovery.verification,
     };
 };
@@ -30,7 +32,12 @@ router.get(
     async (req: Request, res: Response) => {
         const id = instanceId();
         const wellKnown = wellKnownDocument();
-        const [status, document, peers] = await Promise.all([federationStatus(), currentDocument(), FederationPeer.find({ order: { id: "ASC" } })]);
+        const [status, document, peers, contacts] = await Promise.all([
+            federationStatus(),
+            currentDocument(),
+            FederationPeer.find({ order: { id: "ASC" } }),
+            id && !announceRefusal(id) ? announceContacts(id) : Promise.resolve([]),
+        ]);
         res.json({
             settings: pickFederationSettings(),
             instance: {
@@ -38,6 +45,7 @@ router.get(
                 url: instanceUrl(),
                 public_key: FederationKey.ready ? FederationKey.publicKey : null,
                 announce_refusal: announceRefusal(id),
+                contacts,
                 listed: !!document?.instances.some((instance) => instance.id === id),
                 registry_entry: document?.instances.find((instance) => instance.id === id) ?? null,
                 instances_json: wellKnown ? instancesJsonEntry(wellKnown, "https://github.com/meowcorded/meowcord") : null,

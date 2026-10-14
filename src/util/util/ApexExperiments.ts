@@ -46,6 +46,17 @@ export function getApexExperiments(userId?: string) {
     return { assignments: { 1: { [userId]: { evaluation_id: null, assignments } } } };
 }
 
+const userExperimentDefaults: Record<string, number> = {
+    "2023-09_iar_user_reporting": 1,
+};
+
+export type UserExperimentAssignment = [number, number, number, number, number, number, number, number];
+
+export function getUserExperiments(userId?: string): UserExperimentAssignment[] {
+    if (!userId) return [];
+    return Object.entries(userExperimentDefaults).map(([name, bucket]) => [murmur(name), 0, bucket, 0, 0, -1, 0, 0]);
+}
+
 export function getGuildExperiments(guildId: string) {
     const grants = Config.get().client.guildExperiments?.[guildId];
     if (!grants) return undefined;

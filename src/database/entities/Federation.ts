@@ -46,7 +46,7 @@ export class FederatedObject extends BaseEntity {
     @PrimaryColumn({ type: "varchar" }) canonical: string;
     @Index("IDX_federated_objects_local_id", { unique: true }) @Column({ type: "varchar" }) local_id: string;
     @Index("IDX_federated_objects_instance") @Column({ type: "varchar" }) instance: string;
-    @Column({ type: "timestamptz" }) created_at: Date;
+    @Index("IDX_federated_objects_created_at") @Column({ type: "timestamptz" }) created_at: Date;
 }
 
 @Entity({ name: "federation_deliveries" })

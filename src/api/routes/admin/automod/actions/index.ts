@@ -16,13 +16,15 @@ router.get(
         right: "VIEW_MODERATION",
         spacebarOnly: true,
         description:
-            "The automod log, newest first. Filter by `rule`, `action`, `user_id` or `reversed`. `review=yes` lists the last 24 hours of actions that did something and that nobody has undone or confirmed yet.",
+            "The automod log, newest first. Filter by `rule`, `action`, `user_id`, `reversed`, `dry_run=yes` and `days`. `review=yes` lists the last 24 hours of actions that did something and that nobody has undone or confirmed yet.",
         query: {
             rule: { type: "string", required: false },
             action: { type: "string", required: false },
             user_id: { type: "string", required: false },
             reversed: { type: "string", required: false, description: "yes | no" },
             review: { type: "string", required: false, description: "yes" },
+            dry_run: { type: "string", required: false, description: "yes" },
+            days: { type: "number", required: false },
             limit: { type: "number", required: false },
             offset: { type: "number", required: false },
         },
@@ -42,6 +44,9 @@ router.get(
         else if (userId) query.andWhere("LOWER(a.username) = LOWER(:username)", { username: userId.replace(/^@/, "") });
         if (reversed === "yes") query.andWhere("a.reversed = :reversed", { reversed: true });
         if (reversed === "no") query.andWhere("a.reversed = :reversed", { reversed: false });
+        if (req.query.dry_run === "yes") query.andWhere("a.would_action IS NOT NULL");
+        const days = Number(req.query.days);
+        if (days > 0) query.andWhere("a.created_at > :since", { since: new Date(Date.now() - Math.min(days, 365) * 24 * 60 * 60 * 1000) });
         if (req.query.review === "yes")
             query
                 .andWhere("a.created_at > :reviewSince", { reviewSince: new Date(Date.now() - REVIEW_WINDOW_MS) })
@@ -92,6 +97,7 @@ router.get(
                 term: entry.term ?? null,
                 source: entry.source,
                 action: entry.action,
+                would_action: entry.would_action ?? null,
                 excerpt: entry.excerpt,
                 guild: entry.guild_id ? { id: entry.guild_id, name: guilds.find((guild) => guild.id === entry.guild_id)?.name ?? null } : null,
                 channel: entry.channel_id

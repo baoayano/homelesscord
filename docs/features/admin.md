@@ -64,15 +64,54 @@ Every staff action is written to the existing `audit_logs` table with no guild: 
 
 Refused requests are not logged. The Audit log page under Staff reads `GET /api/v9/admin/audit-log`, which needs `VIEW_AUDIT_LOG` and filters by `actor_id`, `target_id`, `area`, `action`, `after` and `before`, newest first, 50 at a time with `before_id` paging.
 
+Each entry has a `target_type` taken from the route parameter that named the target: `user` for `user_id` and `member_id`, `guild`, `report`, `automod_action`, `raid`, `violation`, `role`, `ban`, `channel` or `message`. An entry without a route parameter is a `user` when its target is an account, such as a staff role assignment. User targets come with a `target` summary and server targets with `target_guild`, the server's id, name and icon, which is null once the server is deleted. On the page the staff member and user targets open the user drawer and server targets open the server drawer. The user drawer has a Staff actions on this account button for staff with `VIEW_AUDIT_LOG`, which opens the log filtered to that account. `scripts/tests/admin-audit-targets.test.cjs` covers the target types.
+
 ## Navigation and editors
 
-Navigation is grouped and searchable with Command+K or Ctrl+K. Editors open in drawers that contain focus, protect unsaved changes and have mobile layouts. Leaving a page cancels its pending requests.
+Navigation is grouped. Command+K or Ctrl+K focuses the search box at the top of the sidebar, which filters the pages and, from 2 characters on, also searches:
+
+- people by username, display name, email, id, `@handle` or `name#1234`, local and from other instances, when you have `VIEW_USERS`;
+- servers by name or id when you have `MANAGE_GUILDS`;
+- an IP address, which offers to open the address and lists the accounts on it.
+
+It shows up to 5 people and 5 servers with the total of each and a Show all matching accounts entry. The up and down arrows move through the results, Enter opens the highlighted person, server or address in its drawer, Enter with no results opens the first matching page and Escape clears the box. Closing the drawer puts focus back in the search box.
+
+Editors open in drawers that contain focus, protect unsaved changes and have mobile layouts. Leaving a page cancels its pending requests. Every row that opens a drawer, in the users, addresses, servers, reports, invites, badges, games, shop, sticker pack and staff role lists, can be reached with Tab and opened with Enter or Space. Escape closes the drawer and focus returns to the row, or to the same row after the list refreshed.
+
+Actions that delete, disable, ban, lift a ban, sign out or send to everyone ask first in a dialog that names the target, says what happens and has a button that names the action, such as Lift ban or Delete 3 accounts. Cancel has focus in dialogs for destructive actions and Escape cancels. Lifting an account's instance ban from the user drawer asks first too, which it didn't before. Only the unsaved changes prompts still use the browser's own dialog.
+
+Notifications are announced through a `role="status"` region, and errors use `role="alert"`. Two actions offer Undo for 10 seconds: lifting a suspension restores the old end time if it hasn't passed yet, and lifting address bans bans the addresses again with their old reasons. Undo doesn't bring back the account bans that spread from a lifted address ban, and the notification says so.
 
 Each form records its edit version before a request. A successful save clears the dirty state only when no later edit happened, so later text, checkbox, multiselect and file drafts stay protected. User and server editors refresh only while their original form is still connected, visible and clean, and a save that finishes after its drawer closed does not reopen it. At most three notifications show at once, and pointer events pass through them.
 
 Closing a drawer restores focus to the control that opened it when that control is still connected, visible, enabled and outside inert content. Otherwise focus moves to dashboard search, or to the login field after sign-out. Cancelling the unsaved-edit confirmation leaves the drawer open. Dismissal restores both body overflow axes and their CSS priorities.
 
 Returning to sign-in, for example after the session expires, cancels pending page reads, clears cached identity and view content and closes stale drawers even when they have unsaved edits. The Users and Servers lists keep their existing rows while refreshing and after a failed refresh, and Retry fetches the current query.
+
+## Overview
+
+The Overview page starts with five trend cards: Accounts, Servers, Messages in 24 hours, Online now and Open reports. Each card has a sparkline and the change against the period before it. Accounts, Servers and Open reports compare the last 7 days of new rows with the 7 days before. Messages compare the last 24 hours with the 24 hours before. Online now counts accounts with a session that isn't offline and was seen in the last 90 seconds, and its sparkline shows how many different accounts sent messages each hour. Every change has an arrow and a percentage. The arrow is green for a change in the good direction and red otherwise, and for open reports and automod actions a rise is the bad direction. Smaller cards below show memberships, disabled accounts, open incidents and, when there are any, users and servers from other instances. Open reports only shows to staff with `VIEW_MODERATION`.
+
+The Activity section has one chart per metric, and each chart has its own 24 hours, 7 days, 30 days and 90 days switch. The dashboard remembers the last range per chart in the browser. A chart with one series draws bars, and a chart with more draws lines with a legend. Hovering, or focusing a chart and pressing the left and right arrow keys, shows the exact value of a bucket. Every chart has an `aria-label` that sums up its total and peak, and a Show the numbers section with the full table.
+
+| Chart                     | Metric            | Counts                                                                                                    | Right                 |
+| ------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------- | --------------------- |
+| New accounts              | `accounts`        | Accounts registered here, without bots and shadow users, by their snowflake id                           | any admin right       |
+| Messages sent             | `messages`        | Rows in `messages` by their snowflake id                                                                 | any admin right       |
+| Active people             | `active_users`    | Different message authors per bucket. The headline counts different authors over the whole range        | any admin right       |
+| New servers               | `servers`         | Servers created here, without mirror servers                                                             | any admin right       |
+| Reports opened and closed | `reports_opened`, `reports_closed` | Reports by id, and resolved or dismissed reports by `resolved_at`                         | `VIEW_MODERATION`     |
+| Automod actions           | `automod_actions` | Rows in `automod_actions` by id                                                                          | `VIEW_MODERATION`     |
+| Federation                | `federation`      | New rows in `federated_objects` per instance, the 5 busiest instances and the rest summed as one line   | `OPERATOR`            |
+| Attachment uploads        | `attachment_bytes`| Sum of `attachments.size` by id, plus the `instance` rows of the storage quota ledger as the stored total | `OPERATOR`            |
+
+The server doesn't record federation requests per peer, so the Federation chart counts the ids each instance introduced, which grows with the users, servers and messages it sends. Shadow users and mirror server ids carry the remote creation time, so counting them by id would date them by when they were created on their home instance.
+
+`GET /api/v9/admin/stats/timeseries` takes `metric`, `range` (`24h`, `7d`, `30d` or `90d`, 7 days by default) and `utc_offset` in minutes from -720 to 840 in steps of 15, which the dashboard sets from the browser so days start at local midnight. The 24 hour range has 24 hourly buckets that end with the current hour, and the others have one bucket per day that ends with today. Empty buckets are 0. Each series has `points`, `total` and `previous_total`, the total for the same length of time just before the range. The caller needs any admin right, then the right in the table above, and gets 400 for an unknown metric, range or offset. Results are cached in memory for 60 seconds per metric, range and offset.
+
+Every query is bounded by time and uses an index. Rows with a snowflake id are counted by an id range on the primary key and bucketed by the id's timestamp, so no query reads `messages.timestamp` or `users.created_at`. Closed reports and federation ids are counted by `resolved_at` and `created_at`, which the `AdminTimeseriesIndexes1792961538274` migration indexes on PostgreSQL and SQLite. The bucket expressions use integer division on both backends and `EXTRACT(EPOCH ...)` or `julianday` for timestamp columns. Charts are inline SVG drawn by `assets/public/admin/overview.js` without a library, and redraw at the card's width when it changes.
+
+`src/api/util/utility/adminTimeseries.test.ts` covers the bucket windows, the offsets, zero filling, the query validation and the rights per metric. `scripts/tests/admin-timeseries-route.test.cjs` covers the order of the access check, validation and caching in the route. On 2026-10-13 a fresh instance with 10,506 messages, 143 accounts, 26 servers, 60 reports, 400 automod actions and 1,800 federated ids over 90 days answered every metric and range in 1 to 8 ms, and the same queries returned the expected buckets on a fresh SQLite database.
 
 ## Profiles and accounts
 
@@ -83,6 +122,8 @@ Nitro registration date controls the free evolving badge's start time. It defaul
 With `MANAGE_USERS`, operators can also manage another user's pride badges, profile widget layout and client preferences. These routes keep the operator-target protection, the badge catalog validation and the widget eligibility rules. Every change writes a customization history entry with the actor, the target, the section and the changed field names, without raw preference values or secrets. Pride badge and widget changes commit together with their history entry. Preference writes keep the existing legacy and protobuf mutation flow and append the history entry after saving, so those two are not one transaction yet.
 
 Admin user responses use an explicit projection that leaves out password hashes, session tokens, OAuth tokens, MFA secrets, private encryption keys, sealed backups and recovery codes. MFA reports only whether an authenticator is set up. Password-reset links are a separate explicit action that needs `SUPPORT_USERS`.
+
+The Users list sorts by newest, oldest or username, and the Servers list by newest, oldest, name or most members. `GET /api/v9/admin/users` takes `sort` as `newest`, `oldest` or `name`, and `GET /api/v9/admin/guilds` takes `newest`, `oldest`, `name` or `members`, and both return 400 for anything else. Ties sort by id. A user search for `@name` ignores the `@`, and `name#1234` matches the username and the exact discriminator. Both lists show the number of results and page 50 at a time.
 
 `PATCH /api/v9/admin/users/:user_id` checks each field: `disabled`, `suspended_until`, `account_standing` and `join_status` need `MODERATE_USERS`, `verified` needs `SUPPORT_USERS`, `rights` needs `OPERATOR`, and every other field needs `MANAGE_USERS`.
 
@@ -122,13 +163,34 @@ Registration stores the address it came from in `users.registration_ip`, using t
 - The IP addresses view of the Users page, `GET /api/v9/admin/ips`, lists addresses with the most accounts first, with the number of accounts, how many registered there and when the address was last seen. `q` filters by the start of an address.
 - Opening an address shows its accounts and removes all of them with the same bulk endpoint. It bans the address too unless you untick that.
 
+## Client addresses
+
+Site settings has a Client addresses card. Rate limits, address bans and the accounts per address limit all use the address it picks.
+
+- Address header picks `security.forwardedFor`. Automatic, the default, reads `X-Forwarded-For` from trusted proxies and then `CF-Connecting-IP` when the connection comes from one of Cloudflare's published ranges. The other choices are `X-Forwarded-For`, `CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP` and `Fly-Client-IP`. The server reads the header only when the connection comes from a trusted proxy or from Cloudflare, so a visitor can't set their own address.
+- Trusted proxies sets `security.trustedProxies`, a comma separated list of addresses, CIDR ranges or the names `loopback`, `linklocal` and `uniquelocal`. Blank means all three names. It takes effect after a restart.
+- The API, CDN and gateway use the same rules. Private and Cloudflare addresses never count toward the accounts per address limit.
+
 ## IP bans
 
-IP bans are `instance_bans` rows with `ip_address` set. `GET /api/v9/admin/ips/bans` lists them, `POST` to the same path adds one and `DELETE /api/v9/admin/ips/bans/:ban_id` lifts one. Listing needs `VIEW_MODERATION`, adding and lifting need `MODERATE_USERS`, and the Users page lists them below the addresses.
+IP bans are `instance_bans` rows with `ip_address` set. `GET /api/v9/admin/ips/bans` lists them, `POST` to the same path adds one, `DELETE /api/v9/admin/ips/bans/:ban_id` lifts one and `POST /api/v9/admin/ips/bans/lift` lifts up to 100 at once. Listing needs `VIEW_MODERATION`, and adding and lifting need `MODERATE_USERS`.
 
-- Registration from a banned address returns 403 before the captcha is checked, and so does password sign-in.
-- Tokens already issued stop working when they are used from a banned address. The account that used one gets an instance ban of its own, which is how instance bans already spread. Lifting the address ban also lifts the bans it spread.
+The IP bans tab of the Users page shows to staff with `VIEW_MODERATION`. It has a form to ban an address, a search by the start of an address, a Show filter for all bans, bans set by staff and bans that spread from another ban with the count of each, and pages of 50. Each row shows the address and reason, the kind, the account a spread ban belongs to, the ban it spread from and how many bans an explicit ban spread to. Addresses open the address drawer and accounts open the user drawer. Checkboxes select bans across pages, and Lift bans lifts the selection after one confirmation.
+
+- `GET /api/v9/admin/ips/bans` takes `kind` (`all`, `explicit` or `spread`), `q` for the start of an address, which also matches the `::ffff:` spelling, `limit` up to 100 and `offset`. The response has `total`, `counts` with the number of `explicit` and `spread` address bans, and per ban `origin_ban_id`, `origin` with the source ban's id, address, account and reason, `user` with the account summary and `spread_count`. An unknown `kind` or a `q` that isn't the start of an address returns 400.
+- `POST /api/v9/admin/ips/bans/lift` takes `ban_ids`, 1 to 100 ids. Each address ban is lifted with the bans it spread, the same as the single `DELETE`. The response lists the lifted bans with their address and reason in `lifted`, the ids that matched no address ban, such as account bans or unknown ids, in `missing`, and the number of spread bans lifted with them in `spread_lifted`.
+- `scripts/tests/admin-ip-bans.test.cjs` covers the filters, the source and spread fields, the bulk lift and the single lift.
+
+- Registration from a banned address returns 403 before the captcha is checked. Password sign-in checks the address after the password, so staff can still sign in from it.
+- Tokens already issued stop working when they are used from a banned address. The account that used one gets an instance ban of its own, and a banned account that signs in from a new address or browser bans that address or browser too. Each spread ban names the ban it came from. Only bans that staff or automod made spread, and only one step, so someone who shares a network with a banned account can be refused from that network but never gets an account ban of their own. Spread browser bans expire after 7 days, while a spread account ban stays until staff lift it. Migration `1792946027519-CascadedBans` removes the bans that spread from other spread bans before this rule. Lifting the address ban also lifts the bans it spread.
+- Staff accounts, meaning operators, accounts with any staff right and members of a staff role, are never caught by address or browser bans and never spread one. A ban on the staff account itself still applies, so remove someone from staff before banning their address.
+- Users from other instances reach this server through the federation relay on loopback, so their requests never match or spread an address or browser ban. Another instance can't ban anyone here. Only this instance's staff can.
+- A banned account never bans the addresses it uses. Address bans only come from staff, on the IP bans list or through a raid action. Before this, every request from a banned account banned its address, so one banned WARP user or one Cloudflare edge address in front of the server filled the IP bans list and locked out everyone behind it. Migration `1792958814063-AutomaticAddressBans` deletes every address ban that spread automatically and every ban that spread from one.
+- Cloudflare's published ranges count as shared addresses too, so they never match a ban and can't be banned.
+- Private, loopback and shared addresses, such as `127.0.0.1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10`, never match a ban and can't be banned. Behind a reverse proxy without the right `security.trustedProxies`, every request comes from the proxy's address, and before this rule one ban on it locked out every account. Migration `1792931468207-SharedAddressBans` removes the bans that spread that way and everything they spread to.
 - You can't ban the address you are using.
+
+The user drawer's Instance bans card lists the bans on an account, marks the ones that spread automatically and has a Lift ban button for each. `DELETE /api/v9/admin/users/:user_id/instance-bans/:ban_id` lifts one together with the bans it spread, and needs `MODERATE_USERS`.
 
 ## Instance invites
 

@@ -96,6 +96,8 @@ const until = async (fn, timeout = 8000) => {
 
 const registryKey = generateKeyPairSync("ed25519");
 const registryPublic = registryKey.publicKey.export({ format: "jwk" }).x;
+const registryDiscovery = [];
+const registryBlockedGuilds = [];
 const registryDocument = () => {
     const payload = Buffer.from(
         JSON.stringify({
@@ -119,8 +121,8 @@ const registryDocument = () => {
                       listed_at: new Date().toISOString(),
                   }))
                 : [],
-            blocked: { instances: [], guilds: [], users: [] },
-            discovery: [],
+            blocked: { instances: [], guilds: registryBlockedGuilds, users: [] },
+            discovery: registryDiscovery,
         }),
     );
     return { payload: payload.toString("base64url"), signature: sign(null, payload, registryKey.privateKey).toString("base64url"), key_id: "registry-1" };
@@ -608,6 +610,266 @@ async function fakeHostJoins(bobToken) {
     );
 }
 
+async function discoveryCases({ alice, admin, bob, guildId, canonicalGuild }) {
+    const adminB = await register(B, "discoveryadmin");
+    psql(B.db, `UPDATE users SET rights = '1' WHERE id = '${adminB.id}'`);
+    const metadata = await call(A, "PATCH", `/guilds/${guildId}/discovery-metadata`, alice.token, { primary_category_id: 2, keywords: ["Whiskers"] });
+    check(
+        "the owner saves discovery keywords and a category",
+        metadata.status === 200 && metadata.body?.keywords?.[0] === "Whiskers",
+        `${metadata.status} ${JSON.stringify(metadata.body)}`,
+    );
+    const listedServer = async (name) => {
+        const created = await call(A, "POST", "/guilds", alice.token, { name });
+        await call(A, "PATCH", `/guilds/${created.body.id}/global-discovery`, alice.token, { enabled: true });
+        await call(A, "PATCH", `/admin/federation/guilds/${created.body.id}`, admin.token, { verified: true });
+        return { id: created.body.id, canonical: `@${created.body.id}@${A.id}` };
+    };
+    const spam = await listedServer("Whiskers spam");
+    const muted = await listedServer("Whiskers muted");
+    const withdrawn = await listedServer("Whiskers withdrawn");
+    const envelope = await fetch(`${A.origin}/.well-known/meowcord/discovery`).then((response) => response.json());
+    const published = JSON.parse(Buffer.from(envelope.payload, "base64url").toString("utf8")).guilds;
+    const entry = published.find((guild) => guild.id === canonicalGuild);
+    check(
+        "the discovery list carries keywords, categories, the online count and activity",
+        entry?.keywords?.includes("Whiskers") && entry?.category_ids?.[0] === 2 && typeof entry?.presence_count === "number" && "active_at" in entry,
+        JSON.stringify(entry),
+    );
+    registryDiscovery.push(...published.map((guild) => ({ ...guild, instance: A.id, verified_at: new Date().toISOString() })));
+    registryBlockedGuilds.push({ id: spam.canonical, reason: "probe", at: null });
+    const blocked = await call(B, "POST", "/admin/federation/blocks", adminB.token, { kind: "guild", target: muted.canonical, reason: "probe" });
+    const off = await call(A, "PATCH", `/guilds/${withdrawn.id}/global-discovery`, alice.token, { enabled: false });
+    const refreshed = await call(B, "POST", "/admin/federation/refresh", adminB.token);
+    check(
+        "the other instance refreshes the registry and the peer listings",
+        refreshed.status === 200 && blocked.status < 300 && off.status === 200,
+        `${refreshed.status} ${blocked.status} ${off.status}`,
+    );
+    const search = (query) => call(B, "GET", `/federation/discovery?${new URLSearchParams(query)}`, bob.token);
+    const found = await search({ query: "whiskers" });
+    const card = found.body?.guilds?.[0];
+    check(
+        "search on the other instance finds the server by keyword and names its instance",
+        found.status === 200 &&
+            found.body?.total === 1 &&
+            card?.id === canonicalGuild &&
+            card?.instance === A.id &&
+            card?.verified === true &&
+            typeof card?.presence_count === "number" &&
+            card?.category_ids?.includes(2) &&
+            !!card?.instance_name,
+        `${found.status} ${JSON.stringify(found.body).slice(0, 600)}`,
+    );
+    const ids = (r) => (r.body?.guilds ?? []).map((guild) => guild.id);
+    const everything = await search({ limit: "48" });
+    const hidden = [spam.canonical, muted.canonical, withdrawn.canonical];
+    check(
+        "servers blocked by the registry or this instance's admins, or withdrawn by their owner, never show",
+        everything.status === 200 && ids(everything).includes(canonicalGuild) && !hidden.some((id) => ids(everything).includes(id)),
+        JSON.stringify(ids(everything)),
+    );
+    const byName = await Promise.all(["spam", "muted", "withdrawn"].map((word) => search({ query: `whiskers ${word}` })));
+    check(
+        "searching a hidden server's exact name finds nothing",
+        byName.every((r) => r.body?.total === 0),
+        byName.map((r) => r.body?.total).join(","),
+    );
+    const category = await search({ category_id: "2" });
+    const otherCategory = await search({ category_id: "5" });
+    const page = await search({ limit: "1", offset: "5" });
+    check(
+        "the cross-instance list filters by category and pages",
+        ids(category).includes(canonicalGuild) && !ids(otherCategory).includes(canonicalGuild) && page.body?.guilds?.length === 0 && page.body?.total >= 1,
+        `${JSON.stringify(ids(category))} ${JSON.stringify(ids(otherCategory))} ${JSON.stringify(page.body).slice(0, 200)}`,
+    );
+    const none = await search({ query: "nothingmatchesthis" });
+    check(
+        "a search with no match answers an empty page",
+        none.status === 200 && none.body?.total === 0 && Array.isArray(none.body?.instances),
+        JSON.stringify(none.body).slice(0, 200),
+    );
+}
+
+const STAFF_ICON = "5e74e9b61934fc1f67c65515d1f7e60d";
+
+async function badgeCases({ alice, admin, bob, adminB, aliceOnB, dmId }) {
+    const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const pride = await call(A, "PATCH", "/users/@me/pride-badges", alice.token, { flags: ["transgender"] });
+    const role = await call(A, "POST", "/admin/staff/roles", admin.token, { name: "Moderator", show_badge: true });
+    const roleId = role.body?.id ?? role.body?.role?.id ?? (await call(A, "GET", "/admin/staff/roles", admin.token)).body?.roles?.find((entry) => entry.name === "Moderator")?.id;
+    const assigned = await call(A, "PUT", `/admin/users/${alice.id}/staff-roles`, admin.token, { role_ids: [roleId] });
+    const helper = await call(A, "POST", "/admin/badges", admin.token, { description: "Bug catcher", icon_data: tinyPng });
+    const granted = await call(A, "PATCH", `/admin/users/${alice.id}`, admin.token, { badge_ids: [helper.body?.id] });
+    check(
+        "alice's home gives her a pride flag, a staff role with a badge and an admin badge",
+        pride.status === 200 && !!roleId && assigned.status === 200 && !!helper.body?.id && granted.status === 200,
+        `${pride.status} ${role.status} ${assigned.status} ${helper.status} ${granted.status} ${JSON.stringify(assigned.body).slice(0, 200)}`,
+    );
+    const homeProfile = await call(A, "GET", `/users/${alice.id}/profile`, admin.token);
+    check(
+        "alice's home shows its own staff badge on her profile",
+        homeProfile.body?.badges?.some((badge) => badge.id === `staff-role-${roleId}`),
+        JSON.stringify(homeProfile.body?.badges).slice(0, 300),
+    );
+
+    const remote = await call(B, "GET", `/users/${aliceOnB}/remote-badges`, bob.token);
+    const badges = remote.body?.badges ?? [];
+    const staff = badges.filter((badge) => badge.kind === "staff");
+    const flag = badges.find((badge) => badge.kind === "pride");
+    const plain = badges.find((badge) => badge.kind === "badge" && badge.description === `Bug catcher · ${A.id}`);
+    const nitro = badges.find((badge) => badge.kind === "badge" && badge.description.includes("Nitro badge:"));
+    check(
+        "bob's instance lists alice's badges from her home under her instance",
+        remote.status === 200 && remote.body?.instance === A.id && badges.length === 4,
+        JSON.stringify(remote.body).slice(0, 600),
+    );
+    check(
+        "her home's staff badge shows as staff of her instance with no icon",
+        staff.length === 1 && staff[0].icon_url === null && staff[0].label === `Staff on ${A.id}` && staff[0].description.startsWith(`Staff on ${A.id}: `),
+        JSON.stringify(staff),
+    );
+    check(
+        "her pride badge is drawn from bob's own copy of the flag and names her instance",
+        flag?.icon_url === `${B.origin}/badge-icons/pride_transgender.png` && flag?.description === `Transgender · ${A.id}`,
+        JSON.stringify(flag),
+    );
+    check(
+        "her admin badge goes through bob's media proxy and names her instance",
+        !!plain?.icon_url?.startsWith(`${B.origin}/federation-media/${A.id}/badge-icons/`) && plain?.description === `Bug catcher · ${A.id}`,
+        JSON.stringify(plain),
+    );
+    const icon = plain?.icon_url ? await fetch(plain.icon_url) : null;
+    check(
+        "bob's instance serves the badge icon from her home",
+        icon?.status === 200 && /^image\//.test(icon.headers.get("content-type") ?? ""),
+        `${icon?.status} ${icon?.headers.get("content-type")}`,
+    );
+    check(
+        "no remote badge points at the remote instance or at the staff badge art",
+        badges.every((badge) => !badge.icon_url?.includes(STAFF_ICON) && !badge.icon_url?.startsWith(A.origin)),
+        JSON.stringify(badges),
+    );
+    check(
+        "her free Nitro badge is labeled as belonging to her home and uses proxied artwork",
+        !!nitro?.icon_url?.startsWith(`${B.origin}/federation-media/${A.id}/badge-icons/`) && nitro.description.endsWith(` · ${A.id}`),
+        JSON.stringify(nitro),
+    );
+    const savedBadges = await call(A, "PATCH", "/users/@me/badges/settings", alice.token, {
+        display_order: [`custom:${helper.body?.id}`, "1", "22", "pride:transgender"],
+        hidden_badges: ["22"],
+    });
+    check("alice can customize the badges exported by her home", savedBadges.status === 200, String(savedBadges.status));
+    await call(B, "GET", `/federation/users/lookup?handle=${encodeURIComponent(`${alice.username}@${A.id}`)}`, bob.token);
+    const customized = await call(B, "GET", `/users/${aliceOnB}/remote-badges`, bob.token);
+    const visibleBadges = customized.body?.badges ?? [];
+    check(
+        "after refreshing the profile a staff badge hidden on its home is absent on the other instance",
+        customized.status === 200 && visibleBadges.length === 3 && visibleBadges.every((badge) => badge.kind !== "staff"),
+        JSON.stringify(visibleBadges),
+    );
+    check(
+        "the other instance respects the home's saved badge order",
+        visibleBadges[0]?.description === `Bug catcher · ${A.id}` && visibleBadges[1]?.description.includes("Nitro badge:") && visibleBadges[2]?.kind === "pride",
+        JSON.stringify(visibleBadges),
+    );
+    await call(A, "PATCH", "/users/@me/badges/settings", alice.token, { display_order: [], hidden_badges: [] });
+    await call(B, "GET", `/federation/users/lookup?handle=${encodeURIComponent(`${alice.username}@${A.id}`)}`, bob.token);
+
+    const profile = await call(B, "GET", `/users/${aliceOnB}/profile`, bob.token);
+    const shown = profile.body?.badges ?? [];
+    check(
+        "her profile on bob's instance keeps the home's badges out of the local badge row",
+        profile.status === 200 && shown.length === 0 && (profile.body?.guild_badges ?? []).length === 0,
+        JSON.stringify(shown).slice(0, 300),
+    );
+    const user = await call(B, "GET", `/users/${aliceOnB}`, bob.token);
+    const flags = Number(user.body?.public_flags ?? 0);
+    check(
+        "her user object on bob's instance has no staff, partner or official flag",
+        user.status === 200 && (flags & (1 | 2 | (1 << 18) | (1 << 28) | (1 << 29))) === 0 && user.body?.system !== true,
+        `${user.status} ${flags}`,
+    );
+    const staffRoles = await call(B, "GET", `/admin/users/${aliceOnB}/staff-roles`, adminB.token);
+    check(
+        "bob's admin dashboard gives her no staff role",
+        staffRoles.status === 200 && staffRoles.body?.roles?.length === 0,
+        `${staffRoles.status} ${JSON.stringify(staffRoles.body)}`,
+    );
+    const adminUser = await call(B, "GET", `/admin/users/${aliceOnB}`, adminB.token);
+    check(
+        "bob's admin dashboard shows her with default rights and no badges",
+        adminUser.status === 200 && !(adminUser.body?.badge_ids ?? []).length && (BigInt(adminUser.body?.rights ?? 0) & 1n) === 0n,
+        `${adminUser.status} ${JSON.stringify(adminUser.body).slice(0, 200)}`,
+    );
+    await call(B, "POST", "/admin/staff/roles", adminB.token, { name: "Helpers", show_badge: true });
+    const roleB = (await call(B, "GET", "/admin/staff/roles", adminB.token)).body?.roles?.find((entry) => entry.name === "Helpers")?.id;
+    const refused = await call(B, "PUT", `/admin/users/${aliceOnB}/staff-roles`, adminB.token, { role_ids: [roleB] });
+    check("bob's admins can't hand her a staff role either", !!roleB && refused.status === 400, `${roleB} ${refused.status} ${JSON.stringify(refused.body)}`);
+
+    const shot = process.env.FED_SHOT;
+    if (!shot) return;
+    const { chromium } = createRequire(`${process.env.HOME}/.cache/fosscord-tools/`)("playwright-core");
+    const browser = await chromium.launch({ ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" }), headless: true });
+    try {
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+        await context.addInitScript((token) => localStorage.setItem("token", JSON.stringify(token)), bob.token);
+        const page = await context.newPage();
+        await page.goto(`${B.origin}/channels/@me/${dmId}`);
+        const group = page.locator(".fosscord-remote-badges").first();
+        await group.waitFor({ timeout: 45000 }).catch(() => undefined);
+        const panel = {
+            label: await group
+                .locator(".fosscord-remote-badges-label")
+                .innerText()
+                .catch(() => ""),
+            staff: await group
+                .locator(".fosscord-remote-badge-staff")
+                .allInnerTexts()
+                .catch(() => []),
+            foreignIcon: await group.locator(".fosscord-remote-badge-staff svg.fosscord-remote-badge-staff-icon").count(),
+            images: await group.locator("img").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("src"))),
+        };
+        await page.screenshot({ path: shot.replace(/\.png$/, "-sidebar.png") });
+        console.log(`screenshot: ${shot.replace(/\.png$/, "-sidebar.png")}`);
+        const view = async (name) => {
+            await page.waitForTimeout(2500);
+            const file = shot.replace(/\.png$/, `-${name}.png`);
+            await page.screenshot({ path: file });
+            console.log(`screenshot: ${file}`);
+            return page.locator(".fosscord-remote-badges").count();
+        };
+        await page
+            .locator('[id^="message-username-"]')
+            .first()
+            .click({ timeout: 5000 })
+            .catch(() => undefined);
+        const inPopout = await view("popout");
+        await page.keyboard.press("Escape");
+        await page
+            .getByText("View Full Profile")
+            .first()
+            .click({ timeout: 5000 })
+            .catch(() => undefined);
+        const inModal = await view("full");
+        const staffArt = await page.locator(`.fosscord-remote-badges img[src*="${STAFF_ICON}"]`).count();
+        check("the popout and the full profile show the labeled group too", inPopout >= 2 && inModal >= 2, `${inPopout} ${inModal}`);
+        check("the profile shows the remote badges in a group labeled with her instance", panel.label.includes(`On ${A.id}`), JSON.stringify(panel));
+        check(
+            "the remote staff badge uses the foreign icon and says whose staff it is",
+            panel.foreignIcon === 1 && panel.staff.length === 1 && panel.staff[0].includes(`Staff on ${A.id}`) && staffArt === 0,
+            JSON.stringify({ ...panel, staffArt }),
+        );
+        check(
+            "the remote group shows the pride flag and the admin badge as images",
+            panel.images.length === 2 && panel.images.every((src) => src?.startsWith(B.origin)),
+            JSON.stringify(panel.images),
+        );
+    } finally {
+        await browser.close();
+    }
+}
+
 async function hostJoinCases({ alice, admin, bob, inviteCode, guildId, textId, mirror }) {
     const join = (account, code) => timedCall(B, "POST", `/federation/invites/${A.id}/${code}`, account.token);
     const fast = (response) => response.ms < 5000;
@@ -790,6 +1052,7 @@ async function main() {
             (await listed()).includes(canonicalGuild),
         `${verify.status} ${JSON.stringify(verify.body)} ${JSON.stringify(owner.body)}`,
     );
+    await discoveryCases({ alice, admin, bob, guildId: guild.body.id, canonicalGuild });
 
     const preview = await call(B, "GET", `/federation/invites/${A.id}/${invite.body.code}`, bob.token);
     check(
@@ -901,6 +1164,41 @@ async function main() {
     const fileOnA = await gA.waitFor("MESSAGE_CREATE", (d) => d.content === "file from b");
     const hosted = fileOnA?.attachments?.[0]?.url ?? "";
     check("alice's instance stores bob's file on its own CDN", hosted.startsWith(`${A.origin}/attachments/`) && (await bytesOf(hosted)).equals(fromBobBytes), hosted);
+    const fileBack = await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "file from b");
+    check(
+        "bob's file comes back from alice's instance signed under his name",
+        fileBack?.author?.id === bob.id && fileBack?.meowcord_authorship_state === "verified",
+        JSON.stringify({ author: fileBack?.author?.id, state: fileBack?.meowcord_authorship_state }),
+    );
+    const cloudBytes = Buffer.from(`a file bob uploads through the cloud flow ${randomBytes(8).toString("hex")}`);
+    const slots = await call(B, "POST", `/channels/${mirrorText?.id}/attachments`, bob.token, { files: [{ id: "0", filename: "cloud-b.txt", file_size: cloudBytes.length }] });
+    const slot = slots.body?.attachments?.[0];
+    const put = slot?.upload_url ? await fetch(slot.upload_url, { method: "PUT", body: cloudBytes, headers: { "content-type": "text/plain" } }) : null;
+    const cloudSent = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, {
+        content: "cloud file from b",
+        attachments: [{ id: "0", filename: "cloud-b.txt", uploaded_filename: slot?.upload_filename }],
+    });
+    const cloudBack = await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "cloud file from b");
+    check(
+        "a file bob uploads through his instance's upload forward comes back signed under his name",
+        !!put?.ok && cloudSent.status === 200 && cloudBack?.author?.id === bob.id && cloudBack?.meowcord_authorship_state === "verified" && cloudBack?.attachments?.length === 1,
+        `${slots.status} ${put?.status} ${cloudSent.status} ${JSON.stringify(cloudBack ?? cloudSent.body).slice(0, 240)}`,
+    );
+    const cloudStatement = (() => {
+        const token = psql(A.db, "SELECT authorship FROM messages WHERE content = 'cloud file from b'");
+        try {
+            return JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8"));
+        } catch {
+            return null;
+        }
+    })();
+    check(
+        "alice's instance keeps bob's statement with the file's size and hash",
+        cloudStatement?.attachments?.[0]?.size === cloudBytes.length &&
+            cloudStatement.attachments[0].sha256 === createHash("sha256").update(cloudBytes).digest("base64url") &&
+            cloudStatement.author === `@${bob.id}@${B.id}`,
+        JSON.stringify(cloudStatement).slice(0, 300),
+    );
 
     const sent = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, { content: `hello from b <@${aliceOnB}>` });
     check("bob sends a message with a mention", sent.status === 200, `${sent.status} ${JSON.stringify(sent.body).slice(0, 300)}`);
@@ -928,6 +1226,8 @@ async function main() {
     const edited = await call(B, "PATCH", `/channels/${mirrorText?.id}/messages/${sent.body?.id}`, bob.token, { content: "hello from b, edited" });
     check("bob edits his message", edited.status === 200, `${edited.status}`);
     check("alice sees the edit", !!(await gA.waitFor("MESSAGE_UPDATE", (d) => d.content === "hello from b, edited")));
+    const editBack = await gB.waitFor("MESSAGE_UPDATE", (d) => d.content === "hello from b, edited");
+    check("bob's edit comes back signed under his name", editBack?.author?.id === bob.id && editBack?.meowcord_authorship_state === "verified");
 
     const react = await call(B, "PUT", `/channels/${mirrorText?.id}/messages/${fromA?.id}/reactions/${encodeURIComponent("👍")}/@me`, bob.token);
     check("bob reacts to alice's message", react.status === 204, `${react.status} ${JSON.stringify(react.body)}`);
@@ -1320,6 +1620,8 @@ async function main() {
         `${profile.status} ${JSON.stringify(profile.body).slice(0, 300)}`,
     );
 
+    await badgeCases({ alice, admin, bob, adminB, aliceOnB, dmId: dmCreate?.id });
+
     const objects = await call(B, "GET", `/federation/objects?ids=${aliceOnB}`, bob.token);
     check("canonical ids resolve", objects.body?.[aliceOnB] === `@${alice.id}@${A.id}`, JSON.stringify(objects.body));
     const reverse = await call(B, "GET", `/federation/objects?canonical=${encodeURIComponent(`@${alice.id}@${A.id}`)},${encodeURIComponent(`@${bob.id}@${B.id}`)}`, bob.token);
@@ -1339,6 +1641,81 @@ async function main() {
         "an unknown canonical id gets a local id only for an instance this one federates with",
         /^\d+$/.test(fresh.body?.[strangerEmoji] ?? "") && !fresh.body?.["@123456789012345678@unknown.example"],
         JSON.stringify(fresh.body),
+    );
+
+    const closed = await call(B, "DELETE", `/channels/${dmCreate?.id}`, bob.token);
+    const reopened = await call(B, "POST", "/users/@me/channels", bob.token, { recipients: [aliceOnB] });
+    check(
+        "bob closes the DM with alice and reopens the same one",
+        closed.status < 300 && reopened.status === 200 && reopened.body?.id === dmCreate?.id,
+        `${closed.status} ${reopened.status} ${reopened.body?.id} ${dmCreate?.id}`,
+    );
+    const aliceReopened = await call(A, "POST", "/users/@me/channels", alice.token, { recipients: [bobOnA] });
+    check("alice still has one DM with bob", aliceReopened.body?.id === dm.body?.id, `${aliceReopened.body?.id} ${dm.body?.id}`);
+
+    await call(B, "PUT", `/users/@me/relationships/${bob.id}`, carol.token, {});
+    await call(B, "PUT", `/users/@me/relationships/${carol.id}`, bob.token, {});
+    const mutual = await call(B, "GET", `/users/${aliceOnB}/relationships`, bob.token);
+    check(
+        "bob sees carol as a mutual friend of alice",
+        mutual.status === 200 && mutual.body?.some?.((user) => user.id === carol.id),
+        `${mutual.status} ${JSON.stringify(mutual.body).slice(0, 300)}`,
+    );
+
+    const daveOnA = (await call(A, "GET", `/federation/users/lookup?handle=${encodeURIComponent(`${dave.username}@${B.id}`)}`, alice.token)).body?.id;
+    const blocked = await call(A, "PUT", `/users/@me/relationships/${daveOnA}`, alice.token, { type: 2 });
+    const blockEvent = await gA.waitFor("RELATIONSHIP_ADD", (d) => d.type === 2 && d.id === daveOnA);
+    check("alice blocks dave and her gateway gets the blocked user with the block", blocked.status === 204 && blockEvent?.user?.id === daveOnA, `${blocked.status}`);
+    await call(B, "POST", "/users/@me/relationships", dave.token, { username: `${alice.username}@${A.id}` });
+    await sleep(500);
+    await call(A, "DELETE", `/users/@me/relationships/${daveOnA}`, alice.token);
+    await call(A, "POST", "/users/@me/relationships", alice.token, { username: `${dave.username}@${B.id}` });
+    const relationType = (instance, from, to) => psql(instance.db, `SELECT type FROM relationships WHERE from_id = '${from}' AND to_id = '${to}'`);
+    check(
+        "friend requests crossing between instances become a friendship on both sides",
+        await until(() => relationType(A, alice.id, daveOnA) === "1" && relationType(B, dave.id, aliceOnB) === "1"),
+        `${relationType(A, alice.id, daveOnA)} ${relationType(B, dave.id, aliceOnB)}`,
+    );
+
+    await call(B, "PUT", `/users/@me/relationships/${bob.id}`, dave.token, {});
+    await call(B, "PUT", `/users/@me/relationships/${dave.id}`, bob.token, {});
+    const daveJoins = await call(B, "PUT", `/channels/${groupB?.id}/recipients/${dave.id}`, bob.token);
+    check("bob adds his friend dave to alice's group DM", daveJoins.status < 300, `${daveJoins.status} ${JSON.stringify(daveJoins.body)}`);
+    check("alice sees dave join her group DM", !!(await gA.waitFor("CHANNEL_RECIPIENT_ADD", (d) => d.channel_id === group.body?.id && d.user?.id === daveOnA)));
+    const withDave = await sendEncrypted(alice, group.body?.id, "group with dave");
+    check(
+        "alice encrypts to dave in her group DM",
+        withDave.response.status === 200 && withDave.body.encrypted.keys.some((k) => k.user_id === `@${dave.id}@${B.id}`),
+        `${withDave.response.status}`,
+    );
+
+    const handOver = await call(A, "PATCH", `/channels/${group.body?.id}`, alice.token, { owner: bobOnA });
+    check(
+        "alice hands the group DM to bob",
+        handOver.status === 200 && !!(await gB.waitFor("CHANNEL_UPDATE", (d) => d.id === groupB?.id && d.owner_id === bob.id)),
+        `${handOver.status} ${JSON.stringify(handOver.body).slice(0, 200)}`,
+    );
+    const handBack = await call(B, "PATCH", `/channels/${groupB?.id}`, bob.token, { owner: aliceOnB });
+    check(
+        "bob hands it back through the relay",
+        handBack.status === 200 && !!(await gA.waitFor("CHANNEL_UPDATE", (d) => d.id === group.body?.id && d.owner_id === alice.id)),
+        `${handBack.status} ${JSON.stringify(handBack.body).slice(0, 200)}`,
+    );
+
+    const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    await call(A, "PATCH", `/channels/${group.body?.id}`, alice.token, { icon: tinyPng });
+    const iconUpdate = await gB.waitFor("CHANNEL_UPDATE", (d) => d.id === groupB?.id && !!d.icon);
+    const iconOnB = iconUpdate && (await fetch(`${B.origin}/channel-icons/${groupB?.id}/${iconUpdate.icon}.png`));
+    check("bob's instance serves the group icon from alice's instance", iconOnB?.status === 200, `${iconUpdate?.icon} ${iconOnB?.status}`);
+
+    const emoji = await call(A, "POST", `/guilds/${guild.body.id}/emojis`, alice.token, { name: "pinkcat", image: tinyPng });
+    const canonicalEmoji = `@${emoji.body?.id}@${A.id}`;
+    const emojiOnB = (await call(B, "GET", `/federation/objects?canonical=${encodeURIComponent(canonicalEmoji)}`, bob.token)).body?.[canonicalEmoji];
+    const customReaction = await call(B, "PUT", `/channels/${dmCreate?.id}/messages/${dmMessage?.id}/reactions/${encodeURIComponent(`pinkcat:${emojiOnB}`)}/@me`, bob.token);
+    check(
+        "bob reacts with alice's custom emoji in the DM",
+        customReaction.status === 204 && !!(await gA.waitFor("MESSAGE_REACTION_ADD", (d) => d.emoji?.id === emoji.body?.id && d.user_id === bobOnA)),
+        `${emoji.status} ${customReaction.status} ${JSON.stringify(customReaction.body)}`,
     );
 
     const gAdmin = await call(A, "POST", "/admin/federation/blocks", admin.token, { kind: "instance", target: B.id, reason: "probe" });

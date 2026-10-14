@@ -73,6 +73,7 @@ const openEnvelope = async (message: Message, encodedKey: unknown): Promise<Open
         envelope.ct,
         [...envelope.keys].sort((a, b) => (a.device_id < b.device_id ? -1 : 1)).map((k) => [k.user_id, k.device_id, k.prekey_id, k.enc, k.wrapped]),
         ...(envelope.backup ? [[...envelope.backup].sort((a, b) => (a.user_id < b.user_id ? -1 : 1)).map((b) => [b.user_id, b.enc, b.wrapped])] : []),
+        ...(envelope.mentions ? [{ mentions: [...envelope.mentions].sort() }] : []),
     ];
     if (!verifyEd25519(device.signing_key, JSON.stringify(signed), envelope.sig)) return { verified: false, reason: "The sender's signature on this message doesn't check out." };
     try {

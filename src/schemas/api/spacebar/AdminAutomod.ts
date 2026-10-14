@@ -14,7 +14,7 @@ export interface AdminAutomodWordListSchema {
      * @maxItems 500
      */
     terms: string[];
-    action: "delete" | "suspend" | "name";
+    action: "log" | "delete" | "timeout" | "hold" | "suspend" | "disable" | "name";
     /**
      * @minimum 1
      * @maximum 365
@@ -22,7 +22,7 @@ export interface AdminAutomodWordListSchema {
     suspendDays?: number;
 }
 
-export type AdminAutomodSpamAction = "log" | "delete" | "timeout" | "suspend" | "disable";
+export type AdminAutomodSpamAction = "log" | "delete" | "timeout" | "hold" | "suspend" | "disable";
 
 export interface AdminAutomodSpamRuleSchema {
     enabled?: boolean;
@@ -176,6 +176,10 @@ export interface AdminAutomodSpamSchema {
      * @maximum 40320
      */
     timeoutMinutes?: number;
+    /**
+     * @maxItems 500
+     */
+    ignoreLinkDomains?: string[];
     /**
      * @minimum 1
      * @maximum 8760
@@ -389,6 +393,7 @@ export interface AdminAutomodSettingsSchema {
     raids?: AdminAutomodRaidSchema;
     slurs?: {
         enabled?: boolean;
+        action?: AdminAutomodSpamAction;
         includeSoftA?: boolean;
         /**
          * @minimum 1
@@ -509,8 +514,34 @@ export interface AdminAutomodTestSchema {
     ip?: string;
 }
 
+export interface AdminAutomodAppealDecisionSchema {
+    decision: "accept" | "deny";
+}
+
 export interface AdminAutomodReverseSchema {
-    reversal: "undo" | "not_a_match";
+    reversal: "undo" | "not_a_match" | "false_positive";
+}
+
+export interface AdminAutomodRulePolicySchema {
+    enabled?: boolean;
+    action?: AdminAutomodSpamAction;
+    dryRun?: boolean;
+    exemptStaff?: boolean;
+    exemptBots?: boolean;
+    exemptVerifiedEmail?: boolean;
+    /**
+     * @minimum 0
+     * @maximum 3650
+     */
+    exemptAccountAgeDays?: number;
+    /**
+     * @maxItems 500
+     */
+    exemptUserIds?: string[];
+    /**
+     * @maxItems 500
+     */
+    exemptGuildIds?: string[];
 }
 
 export interface AdminAutomodUsersSchema {

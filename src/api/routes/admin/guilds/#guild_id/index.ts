@@ -5,6 +5,7 @@ import { Channel, FederatedObject, Guild, Member, User } from "@spacebar/databas
 import { Config, handleFile, emitEvent, GuildDeleteEvent } from "@spacebar/util";
 import { AdminGuildUpdateSchema } from "@spacebar/schemas";
 import { applyGuildTag, purgeDeletedChannels, syncTagAdopters } from "@spacebar/api/util";
+import { reindexDiscoverySoon } from "@spacebar/api/util/handlers/Discovery";
 import { assertMirrorGuildEditable } from "@spacebar/api/util/utility/federatedAdmin";
 import { pickOwner } from "../index";
 
@@ -157,6 +158,7 @@ router.patch(
         );
 
         await guild.save();
+        reindexDiscoverySoon(guild_id);
         if (tagChanged) await syncTagAdopters(guild);
         await Guild.emitUpdate(guild_id);
 

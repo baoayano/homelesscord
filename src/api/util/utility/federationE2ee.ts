@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In, IsNull, Not } from "typeorm";
-import { FederatedE2eeKeys, Recipient, Relationship, User } from "@spacebar/database";
+import { FederatedE2eeKeys, FormerRecipient, Recipient, Relationship, User } from "@spacebar/database";
 import { E2eeDeviceResponse, E2eeSignedKey, E2eeUserKeysResponse, RelationshipType } from "@spacebar/schemas";
 import { Config, parseCanonicalId } from "@spacebar/util";
 import { decodeKey, e2eeDeviceId, e2eeDeviceMessage, e2eePrekeyMessage, verifyEd25519 } from "./e2ee";
@@ -70,7 +70,9 @@ const invalidatedAt = new Map<string, number>();
 
 async function channelHint(user_id: string, channel_id?: string) {
     if (channel_id) return canonicalOf(channel_id);
-    const row = await Recipient.findOne({ where: { user_id }, select: { channel_id: true } });
+    const row =
+        (await Recipient.findOne({ where: { user_id }, select: { channel_id: true } })) ??
+        (await FormerRecipient.findOne({ where: { user_id }, select: { channel_id: true, user_id: true }, order: { left_at: "DESC" } }));
     return row ? canonicalOf(row.channel_id) : null;
 }
 
@@ -91,6 +93,10 @@ async function fetchRemoteKeys(shadow: { id: string; federated_instance: string 
         return null;
     });
     if (!response) return stored;
+    if (response.status === 403 && stored && (await FormerRecipient.exists({ where: { user_id: shadow.id } }))) {
+        await FederatedE2eeKeys.update({ user_id: shadow.id }, { fetched_at: new Date() });
+        return stored;
+    }
     if (response.status === 403 || response.status === 404) {
         await FederatedE2eeKeys.delete({ user_id: shadow.id });
         return null;
@@ -187,10 +193,34 @@ async function confirmedByHost(user_id: string, instance: string, channel: strin
     return recipients.length > 0 && (await User.exists({ where: { id: In(recipients), federated_instance: instance } }));
 }
 
+export async function formerMemberWith(user_id: string, instance: string) {
+    const former = await FormerRecipient.find({ where: { user_id }, select: { channel_id: true, user_id: true, host_instance: true } });
+    if (!former.length) return false;
+    if (former.some((row) => row.host_instance === instance)) return true;
+    const members = await Recipient.find({ where: { channel_id: In(former.map((row) => row.channel_id)) }, select: { id: true, user_id: true } });
+    return members.length > 0 && User.exists({ where: { id: In(members.map((row) => row.user_id)), federated_instance: instance } });
+}
+
+export async function friendInHostChannel(user_id: string, instance: string, channel: string | undefined) {
+    if (parseCanonicalId(channel)?.instance !== instance) return false;
+    const local = await localOf(channel as string, false);
+    if (!local) return false;
+    const recipients = (await Recipient.find({ where: { channel_id: local }, select: { id: true, user_id: true } })).map((row) => row.user_id);
+    if (!recipients.length) return false;
+    const friends = await Relationship.find({ where: { from_id: user_id, to_id: In(recipients), type: RelationshipType.FRIEND }, select: { id: true, to_id: true } });
+    if (!friends.length) return false;
+    return User.exists({ where: { id: In(friends.map((row) => row.to_id)), federated_instance: IsNull() } });
+}
+
 export async function sharesWithInstance(user_id: string, instance: string, channel?: string) {
     const key = `${user_id}:${instance}`;
     if (Date.now() - (shared.get(key) ?? 0) < SHARED_FOR) return true;
-    const ok = (await sharesConversation(user_id, instance)) || (await sharesRelationship(user_id, instance)) || (await confirmedByHost(user_id, instance, channel));
+    const ok =
+        (await sharesConversation(user_id, instance)) ||
+        (await sharesRelationship(user_id, instance)) ||
+        (await friendInHostChannel(user_id, instance, channel)) ||
+        (await formerMemberWith(user_id, instance)) ||
+        (await confirmedByHost(user_id, instance, channel));
     if (ok) {
         if (shared.size > 20_000) shared.clear();
         shared.set(key, Date.now());

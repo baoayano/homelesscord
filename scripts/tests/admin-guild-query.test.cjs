@@ -8,7 +8,7 @@ function harness() {
     let handler;
     const calls = [],
         query = {};
-    for (const name of ["select", "addSelect", "orderBy", "limit", "offset", "where", "andWhere"])
+    for (const name of ["select", "addSelect", "orderBy", "addOrderBy", "limit", "offset", "where", "andWhere"])
         query[name] = (...args) => {
             calls.push([name, ...args]);
             return query;
@@ -128,4 +128,21 @@ test("the server list shows servers hosted here by default and mirrors only when
     const h = harness();
     await assert.rejects(h.run({ origin: "mirrors" }), (error) => error.status === 400);
     assert.equal(h.calls.length, 0);
+});
+
+test("server search sorts by age, name or member count and refuses unknown sorts", async () => {
+    const order = async (sort) => {
+        const h = harness();
+        await h.run({ sort });
+        return h.calls.filter(([name]) => name === "orderBy" || name === "addOrderBy").map(([, column, direction]) => `${column} ${direction}`);
+    };
+    assert.deepEqual(await order(undefined), ["guild.id DESC"]);
+    assert.deepEqual(await order("oldest"), ["guild.id ASC"]);
+    assert.deepEqual(await order("name"), ["guild.name ASC", "guild.id ASC"]);
+    assert.deepEqual(await order("members"), ["member_count DESC", "guild.id DESC"]);
+    for (const sort of ["owner", ["name", "members"], "__proto__"]) {
+        const h = harness();
+        await assert.rejects(h.run({ sort }), (error) => error.status === 400);
+        assert.equal(h.calls.length, 0);
+    }
 });

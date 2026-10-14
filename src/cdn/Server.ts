@@ -3,7 +3,7 @@ import morgan from "morgan";
 import { Server, ServerOptions } from "lambert-server/Server";
 import { CORS, BodyParser, Authentication } from "@spacebar/api/middlewares";
 import { Attachment, initDatabase } from "@spacebar/database";
-import { Config, JwtKeypairManager, registerRoutes } from "@spacebar/util";
+import { Config, JwtKeypairManager, registerRoutes, useClientAddress } from "@spacebar/util";
 import { ProcessLifecycle, SystemdLifecycle } from "../util/util/ProcessLifecycle";
 import { Monitoring } from "../util/monitoring/Monitoring";
 import guildProfilesRoute from "./routes/guild-profiles";
@@ -47,8 +47,7 @@ export class CDNServer extends Server {
             );
         }
 
-        const trustedProxies = Config.get().security.trustedProxies;
-        if (trustedProxies) this.app.set("trust proxy", trustedProxies);
+        useClientAddress(this.app, () => Config.get().security);
 
         this.app.disable("x-powered-by");
 

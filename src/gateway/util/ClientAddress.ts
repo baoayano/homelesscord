@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { BlockList, isIP } from "node:net";
+import { behindCloudflare, isCloudflareAddress } from "../../util/util/networking/Cloudflare";
 
 const NAMED_RANGES: Record<string, [string, number][]> = {
     loopback: [
@@ -53,8 +54,16 @@ export const isTrustedProxy = (address: string | undefined | null, trustedProxie
 
 export const clientAddress = (request: IncomingMessage, forwardedFor: string | null, trustedProxies?: string | boolean | null) => {
     const peer = request.socket.remoteAddress;
-    if (!forwardedFor || !isTrustedProxy(peer, trustedProxies)) return peer;
-    const forwarded = request.headers[forwardedFor.toLowerCase()];
-    const last = typeof forwarded === "string" ? forwarded.split(",").at(-1)?.trim() : undefined;
-    return (last && isIP(unmapped(last)) ? last : undefined) || peer;
+    const header = (forwardedFor || "X-Forwarded-For").toLowerCase();
+    if (!isTrustedProxy(peer, trustedProxies) && !(header !== "x-forwarded-for" && isCloudflareAddress(peer))) return behindCloudflare(peer, request.headers["cf-connecting-ip"]);
+    const forwarded = request.headers[header];
+    const last =
+        typeof forwarded === "string"
+            ? forwarded
+                  .split(",")
+                  .at(header === "x-forwarded-for" ? -1 : 0)
+                  ?.trim()
+            : undefined;
+    const address = (last && isIP(unmapped(last)) ? last : undefined) || peer;
+    return header === "x-forwarded-for" ? behindCloudflare(address, request.headers["cf-connecting-ip"]) : address;
 };

@@ -11,6 +11,7 @@ import {
     spamAttachmentHashes,
 } from "@spacebar/api/util";
 import { route } from "@spacebar/api/middlewares";
+import { relayedAuthorship } from "@spacebar/api/util/utility/federationAuthorship";
 import { Application, Attachment, Channel, GuildInsights, Member, Message, ReadState, Recipient, User, Webhook } from "@spacebar/database";
 import {
     Config,
@@ -33,6 +34,7 @@ import multer from "multer";
 import { FindManyOptions, FindOperator, In, LessThan, MoreThan, MoreThanOrEqual } from "typeorm";
 import {
     AcknowledgeDeleteSchema,
+    ChannelType,
     isTextChannel,
     MessageCreateSchema,
     PartialUser,
@@ -411,6 +413,9 @@ router.post(
             rights: req.rights,
             bot: req.user_bot,
             system: req.user?.system,
+            account: req.user,
+            knownRecipient: channel.type === ChannelType.DM && !dmViaGuilds.length,
+            encrypted: !!body.encrypted,
             attachments: spamAttachmentHashes(attachmentFacts),
         });
         if (channel.guild_id)
@@ -438,6 +443,7 @@ router.post(
             attachments,
             permission: req.permission,
             attachmentHashes: attachmentFacts.map((fact) => fact.hash),
+            authorship: relayedAuthorship(req),
         });
         if (dmViaGuilds.length) {
             const recipient = channel.recipients?.find((r) => r.user_id !== req.user_id)?.user_id;

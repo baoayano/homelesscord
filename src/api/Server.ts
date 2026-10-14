@@ -19,6 +19,7 @@ import {
     FederationKey,
     ASSETS_FOLDER,
     PUBLIC_ASSETS_FOLDER,
+    useClientAddress,
 } from "@spacebar/util";
 import { ProcessLifecycle, SystemdLifecycle } from "../util/util/ProcessLifecycle";
 import { outboundProxyStatus } from "../util/util/networking/SocksTransport";
@@ -31,8 +32,10 @@ import { recoverPendingPolls, dispatchMessagePush, startMessagePurger, startSche
 import { route } from "@spacebar/api/middlewares";
 import { startAnnouncementDeliveryWorker } from "./util/utility/announcementDelivery";
 import { startFederation } from "./util/utility/federation";
+import { startDiscoveryIndexer } from "./util/handlers/Discovery";
 import { startScamListRefresh } from "./util/utility/scamGuard";
 import { forwardEvent, startFederationDelivery } from "./util/utility/federationEvents";
+import { authorshipCutoff } from "./util/utility/federationAuthorship";
 import { homeRelay } from "./util/utility/federationRelay";
 import { startFederatedVoice } from "./util/utility/federationVoice";
 import { federationGate, instanceBaseUrl, trustFor } from "./util/utility/federationNetwork";
@@ -92,8 +95,7 @@ export class SpacebarServer extends Server {
         this.app.set("json replacer", JSONReplacer);
         this.app.disable("x-powered-by");
 
-        const trustedProxies = Config.get().security.trustedProxies;
-        if (trustedProxies) this.app.set("trust proxy", trustedProxies);
+        useClientAddress(this.app, () => Config.get().security);
 
         this.app.use(CORS);
         this.app.use("/federation/v2", federationGate);
@@ -155,8 +157,10 @@ export class SpacebarServer extends Server {
         startMessagePurger();
         startAnnouncementDeliveryWorker();
         startFederation();
+        startDiscoveryIndexer();
         startScamListRefresh();
         startFederationDelivery();
+        authorshipCutoff().catch((error) => console.warn("[Federation] Could not record when signed authorship started:", (error as Error).message));
         startFederatedVoice();
         setRemoteLookup(async (local_id) => {
             const row = await FederatedObject.findOne({ where: { local_id }, select: { canonical: true, instance: true } });

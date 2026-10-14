@@ -12,6 +12,7 @@ import { Config } from "./Config";
 import { OrmUtils } from "@spacebar/util";
 import { clearInterval, setInterval } from "node:timers";
 import { ProcessLifecycle } from "@spacebar/util/util/ProcessLifecycle";
+import { isStaffAccount, loadStaffRoles } from "./StaffRoles";
 
 /// Change history:
 /// 1 - Initial version with HS256
@@ -94,6 +95,7 @@ export const checkToken = (
                         "flags",
                         "verified",
                         "federated_instance",
+                        "created_at",
                     ]), // TODO: clean up
                     relations: !opts?.relations ? undefined : OrmUtils.keysToObject(opts.relations), // TODO: clean up
                 }),
@@ -142,14 +144,7 @@ export const checkToken = (
                 return rejectAndLog(reject, 401, "User not found");
             }
 
-            const banReasons = banned
-                ? await InstanceBan.findInstanceBans({
-                      userId: user.id,
-                      ipAddress: opts?.ipAddress,
-                      fingerprint: opts?.fingerprint,
-                      propagateBan: opts?.propagateBans ?? true,
-                  })
-                : [];
+            const banReasons = banned ? await InstanceBan.findInstanceBans({ ...(await banLookup(user, opts)), propagateBan: opts?.propagateBans ?? true }) : [];
             if (banReasons.length > 0) {
                 logAuth("validateUser rejected: User banned for reasons: " + banReasons.join(", "));
                 return rejectAndLog(reject, 418, "Invalid Token");
@@ -229,6 +224,11 @@ export const hashOAuth2Token = (token: string) => crypto.createHash("sha256").up
 
 export const isOAuth2AccessToken = (authorization: string) => /^Bearer [A-Za-z0-9_-]{20,}$/.test(authorization);
 
+async function banLookup(user: User, opts?: { ipAddress?: string; fingerprint?: string; federationRelay?: boolean }) {
+    if (opts?.federationRelay || user.federated_instance || isStaffAccount(user, await loadStaffRoles())) return { userId: user.id };
+    return { userId: user.id, ipAddress: opts?.ipAddress, fingerprint: opts?.fingerprint };
+}
+
 export async function checkOAuth2Token(authorization: string, opts?: { ipAddress?: string; fingerprint?: string; propagateBans?: boolean }): Promise<UserTokenData> {
     const token = await OAuth2Token.findOne({
         where: {
@@ -246,12 +246,7 @@ export async function checkOAuth2Token(authorization: string, opts?: { ipAddress
             fingerprint: opts?.fingerprint,
         })
     ) {
-        const banReasons = await InstanceBan.findInstanceBans({
-            userId: user.id,
-            ipAddress: opts?.ipAddress,
-            fingerprint: opts?.fingerprint,
-            propagateBan: opts?.propagateBans ?? true,
-        });
+        const banReasons = await InstanceBan.findInstanceBans({ ...(await banLookup(user, opts)), propagateBan: opts?.propagateBans ?? true });
         if (banReasons.length > 0) throw new HTTPError("Invalid Token", 418);
     }
     return {

@@ -150,6 +150,7 @@ test("only known CDN path shapes are federated media", () => {
         "/stickers/1234567890123456.json",
         "/guilds/1234567890123456/users/1234567890123457/avatars/0123456789abcdef0123456789abcdef.png",
         "/role-icons/1234567890123456/0123456789abcdef0123456789abcdef.png",
+        "/channel-icons/1234567890123456/0123456789abcdef0123456789abcdef.png",
         "/avatar-decoration-presets/a_0123456789abcdef0123456789abcdef.png",
         "/external/abcdefghijklmnopqrstuvwxyz0/https/images.example/cat.png",
     ])

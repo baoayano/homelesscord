@@ -82,6 +82,44 @@ export function remoteError(key: string, error: unknown) {
     return errorText(error) ?? "That invite couldn't be used. It may have expired, or its instance may be unreachable.";
 }
 
+const FRIEND_LINK = /^(?:https?:\/\/)?([^/\s?#]+)\/add\/([^/\s?#]+)\/?(?:[?#]\S*)?$/i;
+
+export const ownInstanceId = () => (env().INSTANCE_ID || location.host).toLowerCase();
+
+const originOf = (instance: string) => `${/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(instance) ? "http" : "https"}://${instance}`;
+
+export function globalHandle(user: { username?: string } | null | undefined) {
+    if (!user?.username) return null;
+    return userInstance(user) ? user.username : `${user.username}@${ownInstanceId()}`;
+}
+
+export function friendLink(user: { username?: string } | null | undefined) {
+    const handle = globalHandle(user);
+    if (!handle) return null;
+    const at = handle.lastIndexOf("@");
+    const instance = handle.slice(at + 1);
+    const base = isOwnHost(instance) || instance === ownInstanceId() ? location.origin : originOf(instance);
+    return `${base}/add/${encodeURIComponent(handle.slice(0, at))}`;
+}
+
+export function friendInput(value: string) {
+    const link = FRIEND_LINK.exec(value.trim());
+    let handle = value;
+    if (link) {
+        try {
+            handle = `${decodeURIComponent(link[2])}@${link[1].toLowerCase()}`;
+        } catch {
+            return value;
+        }
+    }
+    const at = handle.lastIndexOf("@");
+    if (at > 0) {
+        const instance = handle.slice(at + 1).toLowerCase();
+        if (isOwnHost(instance) || instance === ownInstanceId()) return handle.slice(0, at);
+    }
+    return handle;
+}
+
 export const isHandle = (value: string) => HANDLE.test(value) && !isOwnHost(value.slice(value.lastIndexOf("@") + 1));
 
 export async function addRemoteFriend(handle: string) {
