@@ -1552,6 +1552,9 @@
                         "type": "string",
                         "nullable": true
                     },
+                    "owner": {
+                        "type": "string"
+                    },
                     "bitrate": {
                         "type": "integer"
                     },
@@ -4994,6 +4997,27 @@
                         "type": "string"
                     },
                     "gift_code_sku_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "login",
+                    "password"
+                ]
+            },
+            "AutomodAppealSchema": {
+                "type": "object",
+                "properties": {
+                    "login": {
+                        "type": "string"
+                    },
+                    "password": {
+                        "minLength": 1,
+                        "maxLength": 72,
+                        "type": "string"
+                    },
+                    "message": {
+                        "maxLength": 1000,
                         "type": "string"
                     }
                 },
@@ -8865,9 +8889,7 @@
                     },
                     "auto_moderation_rules": {
                         "type": "array",
-                        "items": {
-                            "$ref": "#/components/schemas/AutomodRuleSchema"
-                        }
+                        "items": {}
                     },
                     "guild_scheduled_events": {
                         "type": "array",
@@ -9896,6 +9918,38 @@
                                     }
                                 },
                                 "additionalProperties": false
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "network": {
+                        "type": "object",
+                        "properties": {
+                            "forwardedFor": {
+                                "description": "Header that carries the client address, read only from trusted proxies and Cloudflare. Empty picks automatically.",
+                                "anyOf": [
+                                    {
+                                        "enum": [
+                                            "",
+                                            "CF-Connecting-IP",
+                                            "Fly-Client-IP",
+                                            "True-Client-IP",
+                                            "X-Forwarded-For",
+                                            "X-Real-IP"
+                                        ],
+                                        "type": "string"
+                                    },
+                                    {
+                                        "type": "null"
+                                    }
+                                ]
+                            },
+                            "trustedProxies": {
+                                "description": "Express trust proxy value: comma separated addresses, ranges or loopback, linklocal and uniquelocal",
+                                "type": [
+                                    "null",
+                                    "string"
+                                ]
                             }
                         },
                         "additionalProperties": false
@@ -11026,6 +11080,23 @@
                     "ip"
                 ]
             },
+            "AdminIpBanLiftSchema": {
+                "type": "object",
+                "properties": {
+                    "ban_ids": {
+                        "description": "The address bans to lift, at most 100 per request. Each one also lifts the bans it spread.",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "ban_ids"
+                ]
+            },
             "AdminSessionsRevokeSchema": {
                 "type": "object",
                 "properties": {
@@ -11196,6 +11267,11 @@
                                 "type": "integer"
                             },
                             "maxGroupDmRecipients": {
+                                "minimum": 1,
+                                "maximum": 2147483647,
+                                "type": "integer"
+                            },
+                            "maxStaffGroupDmRecipients": {
                                 "minimum": 1,
                                 "maximum": 2147483647,
                                 "type": "integer"
@@ -11795,8 +11871,12 @@
                     "action": {
                         "enum": [
                             "delete",
+                            "disable",
+                            "hold",
+                            "log",
                             "name",
-                            "suspend"
+                            "suspend",
+                            "timeout"
                         ],
                         "type": "string"
                     },
@@ -11822,6 +11902,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -11854,6 +11935,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -11893,6 +11975,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -11932,6 +12015,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -11976,6 +12060,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -12020,6 +12105,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -12059,6 +12145,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -12098,6 +12185,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -12142,6 +12230,7 @@
                                 "enum": [
                                     "delete",
                                     "disable",
+                                    "hold",
                                     "log",
                                     "suspend",
                                     "timeout"
@@ -12194,6 +12283,13 @@
                         "minimum": 1,
                         "maximum": 40320,
                         "type": "integer"
+                    },
+                    "ignoreLinkDomains": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
                     },
                     "suspendHours": {
                         "minimum": 1,
@@ -12311,6 +12407,7 @@
                         "enum": [
                             "delete",
                             "disable",
+                            "hold",
                             "log",
                             "suspend",
                             "timeout"
@@ -12482,6 +12579,17 @@
                         "properties": {
                             "enabled": {
                                 "type": "boolean"
+                            },
+                            "action": {
+                                "enum": [
+                                    "delete",
+                                    "disable",
+                                    "hold",
+                                    "log",
+                                    "suspend",
+                                    "timeout"
+                                ],
+                                "type": "string"
                             },
                             "includeSoftA": {
                                 "type": "boolean"
@@ -12676,11 +12784,27 @@
                     "text"
                 ]
             },
+            "AdminAutomodAppealDecisionSchema": {
+                "type": "object",
+                "properties": {
+                    "decision": {
+                        "enum": [
+                            "accept",
+                            "deny"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "decision"
+                ]
+            },
             "AdminAutomodReverseSchema": {
                 "type": "object",
                 "properties": {
                     "reversal": {
                         "enum": [
+                            "false_positive",
                             "not_a_match",
                             "undo"
                         ],
@@ -12690,6 +12814,56 @@
                 "required": [
                     "reversal"
                 ]
+            },
+            "AdminAutomodRulePolicySchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "action": {
+                        "enum": [
+                            "delete",
+                            "disable",
+                            "hold",
+                            "log",
+                            "suspend",
+                            "timeout"
+                        ],
+                        "type": "string"
+                    },
+                    "dryRun": {
+                        "type": "boolean"
+                    },
+                    "exemptStaff": {
+                        "type": "boolean"
+                    },
+                    "exemptBots": {
+                        "type": "boolean"
+                    },
+                    "exemptVerifiedEmail": {
+                        "type": "boolean"
+                    },
+                    "exemptAccountAgeDays": {
+                        "minimum": 0,
+                        "maximum": 3650,
+                        "type": "integer"
+                    },
+                    "exemptUserIds": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "exemptGuildIds": {
+                        "maxItems": 500,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
             },
             "AdminAutomodUsersSchema": {
                 "type": "object",
@@ -12759,11 +12933,21 @@
                     "announce": {
                         "type": "boolean"
                     },
+                    "announceStats": {
+                        "type": "boolean"
+                    },
                     "allowUnlistedPeers": {
                         "type": "boolean"
                     },
                     "peers": {
                         "maxItems": 200,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "contacts": {
+                        "maxItems": 10,
                         "type": "array",
                         "items": {
                             "type": "string"
@@ -15693,6 +15877,42 @@
                     "federated_instance": {
                         "type": "string",
                         "nullable": true
+                    },
+                    "remote_badges": {
+                        "anyOf": [
+                            {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "string"
+                                        },
+                                        "kind": {
+                                            "type": "string"
+                                        },
+                                        "description": {
+                                            "type": "string"
+                                        },
+                                        "pride_flag": {
+                                            "type": "string"
+                                        },
+                                        "icon": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "additionalProperties": false,
+                                    "required": [
+                                        "description",
+                                        "id",
+                                        "kind"
+                                    ]
+                                }
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
                     },
                     "tag": {
                         "type": "string"
@@ -18811,6 +19031,12 @@
                     "about": {
                         "type": "string",
                         "nullable": true
+                    },
+                    "category_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
                     }
                 },
                 "required": [
@@ -19121,6 +19347,10 @@
                                 "type": "null"
                             }
                         ]
+                    },
+                    "authorship": {
+                        "type": "string",
+                        "nullable": true
                     },
                     "soundboard_sounds": {
                         "anyOf": [
@@ -20599,6 +20829,12 @@
                         "type": "array",
                         "items": {
                             "$ref": "#/components/schemas/E2eeEnvelopeBackupKey"
+                        }
+                    },
+                    "mentions": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
                         }
                     },
                     "sig": {
@@ -23169,6 +23405,10 @@
                     "maxGroupDmRecipients": {
                         "type": "integer",
                         "default": 25
+                    },
+                    "maxStaffGroupDmRecipients": {
+                        "type": "integer",
+                        "default": 100
                     }
                 },
                 "required": [
@@ -23176,6 +23416,7 @@
                     "maxGroupDmRecipients",
                     "maxName",
                     "maxPins",
+                    "maxStaffGroupDmRecipients",
                     "maxTopic",
                     "maxWebhooks"
                 ]
@@ -24932,6 +25173,9 @@
             "name": "api"
         },
         {
+            "name": "appeal"
+        },
+        {
             "name": "developers"
         },
         {
@@ -25324,7 +25568,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "The automod log, newest first. Filter by `rule`, `action`, `user_id` or `reversed`. `review=yes` lists the last 24 hours of actions that did something and that nobody has undone or confirmed yet.",
+                "description": "The automod log, newest first. Filter by `rule`, `action`, `user_id`, `reversed`, `dry_run=yes` and `days`. `review=yes` lists the last 24 hours of actions that did something and that nobody has undone or confirmed yet.",
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -25372,6 +25616,23 @@
                             "type": "string"
                         },
                         "description": "yes"
+                    },
+                    {
+                        "name": "dry_run",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "yes"
+                    },
+                    {
+                        "name": "days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
                     },
                     {
                         "name": "limit",
@@ -25470,6 +25731,104 @@
                             "type": "string"
                         },
                         "description": "action_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/appeals/": {
+            "get": {
+                "x-right-required": "VIEW_MODERATION",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Appeals from accounts that automod or a moderator suspended, held for review or disabled, newest first. `status` filters by pending, accepted or denied and defaults to pending. `still_restricted` says whether the restriction is still in place.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "pending | accepted | denied | all"
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/appeals/{appeal_id}/": {
+            "post": {
+                "x-right-required": "MODERATE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Decide an appeal. `accept` lifts the restriction, marks the automod action behind it as a false positive and overturns its violation. `deny` keeps the restriction. The user sees the decision the next time they open the appeal page.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodAppealDecisionSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "appeal_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "appeal_id"
                     }
                 ],
                 "tags": [
@@ -25959,6 +26318,87 @@
                 ]
             }
         },
+        "/api/admin/automod/rules/": {
+            "get": {
+                "x-right-required": "VIEW_MODERATION",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Every automod rule with its switch, action, dry run and exemptions, and what it caught over the last `days` days (7 by default): hits, dry runs, confirmed hits and hits a moderator undid or marked as a false positive.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/automod/rules/{rule_key}/": {
+            "patch": {
+                "x-right-required": "MANAGE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Change one automod rule: its switch, its action where it has one, dry run, and who it skips. Lists replace the stored list. Thresholds stay in `PATCH /admin/automod/settings`.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminAutomodRulePolicySchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "rule_key",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "rule_key"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/admin/automod/scam-list/": {
             "get": {
                 "x-right-required": "VIEW_MODERATION",
@@ -26050,7 +26490,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "Hits per rule over the last `days` days (30 by default), with how many a moderator undid, marked as not a match or confirmed. `false_positive_rate` is undone hits divided by reviewed hits, or null when nobody reviewed any.",
+                "description": "Hits per rule over the last `days` days (30 by default), with how many were dry runs and how many a moderator undid, marked as a false positive, marked as not a match or confirmed. `false_positive_rate` is undone hits divided by reviewed hits, or null when nobody reviewed any. `pending_appeals` counts appeals nobody has decided yet.",
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -27139,6 +27579,15 @@
                         "description": "local (default) lists servers hosted here, remote lists mirrors of servers on other instances, all lists both. An exact id search ignores it"
                     },
                     {
+                        "name": "sort",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "newest (default), oldest, name or members"
+                    },
+                    {
                         "name": "limit",
                         "in": "query",
                         "required": false,
@@ -27781,13 +28230,31 @@
                         "bearer": []
                     }
                 ],
-                "description": "Instance bans on IP addresses, newest first",
+                "description": "Instance bans on IP addresses, newest first. `kind` is all, explicit for bans staff or a raid action made, or spread for bans that spread from another ban. `q` matches the start of an address. Each ban names the ban it spread from, the account it belongs to and how many bans it spread to.",
                 "responses": {
                     "default": {
                         "description": "No description available"
                     }
                 },
                 "parameters": [
+                    {
+                        "name": "kind",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "all | explicit | spread"
+                    },
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "The start of an address"
+                    },
                     {
                         "name": "limit",
                         "in": "query",
@@ -27829,6 +28296,41 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/AdminIpBanCreateSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/ips/bans/lift/": {
+            "post": {
+                "x-right-required": "MODERATE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Lift up to 100 IP bans at once, each together with the bans it spread. The response lists the lifted bans with their addresses and reasons, the ids that matched no address ban and how many spread bans went with them.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AdminIpBanLiftSchema"
                             }
                         }
                     }
@@ -28339,6 +28841,56 @@
                             "type": "string"
                         },
                         "description": "role_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/stats/timeseries/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "One metric over the last 24 hours in hourly buckets, or the last 7, 30 or 90 days in daily buckets, with empty buckets filled with zero and the total of the window before it. Results are cached for 60 seconds per metric, range and offset.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "metric",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "range",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "utc_offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number"
+                        }
                     }
                 ],
                 "tags": [
@@ -29561,7 +30113,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "Search users on this instance. `q` matches an exact id, an IP address, or part of a username, display name or email. `ip` lists the accounts that registered on or signed in from an address.",
+                "description": "Search users on this instance. `q` matches an exact id, an IP address, a handle such as `@name` or `name#1234`, or part of a username, display name or email. `ip` lists the accounts that registered on or signed in from an address.",
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -29602,6 +30154,15 @@
                             "type": "string"
                         },
                         "description": "local (default) lists accounts of this instance, remote lists users of other instances stored here, all lists both. An exact id search ignores it"
+                    },
+                    {
+                        "name": "sort",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "newest (default), oldest or name"
                     },
                     {
                         "name": "limit",
@@ -29733,6 +30294,51 @@
                             "type": "string"
                         },
                         "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/users/{user_id}/instance-bans/{ban_id}/": {
+            "delete": {
+                "x-right-required": "MODERATE_USERS",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Lift an instance ban on an account, together with the address and browser bans it spread to",
+                "responses": {
+                    "204": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    },
+                    {
+                        "name": "ban_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "ban_id"
                     }
                 ],
                 "tags": [
@@ -33194,6 +33800,38 @@
                 },
                 "tags": [
                     "api"
+                ]
+            }
+        },
+        "/api/auth/appeal/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "For an account that can't sign in because it is suspended, held for review or disabled. With the account's login and password it returns why, and with `message` it sends one appeal for the current restriction to the moderators' queue.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AutomodAppealSchema"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
                 ]
             }
         },
@@ -38307,7 +38945,7 @@
                         "bearer": []
                     }
                 ],
-                "description": "Other instances from the registry and the servers they list for global discovery, with icons through this instance's media proxy",
+                "description": "Other instances from the registry and a page of the servers they list for global discovery, searched by name, keywords and description from the cached listings, with icons through this instance's media proxy",
                 "responses": {
                     "default": {
                         "description": "No description available"
@@ -40905,6 +41543,82 @@
                 ]
             }
         },
+        "/api/guilds/{guild_id}/discovery-categories/{category_id}/": {
+            "put": {
+                "x-permission-required": "MANAGE_GUILD",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Add a secondary discovery category to the server",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    },
+                    {
+                        "name": "category_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "category_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            },
+            "delete": {
+                "x-permission-required": "MANAGE_GUILD",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Remove a secondary discovery category from the server",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    },
+                    {
+                        "name": "category_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "category_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
         "/api/guilds/{guild_id}/discovery-metadata/": {
             "get": {
                 "x-permission-required": "MANAGE_GUILD",
@@ -43362,6 +44076,93 @@
                             "type": "string"
                         },
                         "description": "request_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/guilds/{guild_id}/role-subscriptions/settings": {
+            "get": {
+                "x-permission-required": [],
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/guilds/{guild_id}/role-subscriptions/group-listings": {
+            "get": {
+                "x-permission-required": [],
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/guilds/{guild_id}/role-subscriptions/trials": {
+            "get": {
+                "x-permission-required": [],
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
                     }
                 ],
                 "tags": [
@@ -51997,6 +52798,23 @@
                 ]
             }
         },
+        "/api/users/@me/linked-users/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ]
+            }
+        },
         "/api/users/@me/meaningfully-online/": {
             "post": {
                 "security": [
@@ -52674,6 +53492,23 @@
                                 }
                             }
                         }
+                    }
+                },
+                "tags": [
+                    "api"
+                ]
+            }
+        },
+        "/api/users/@me/program-rewards/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "No description available"
                     }
                 },
                 "tags": [
@@ -54227,6 +55062,41 @@
                 ]
             }
         },
+        "/api/users/{user_id}/remote-badges/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "The badges a user's home instance gave them, for users from other instances. They are shown apart from this instance's badges, and staff badges come without their icon.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "user_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/voice/regions/": {
             "get": {
                 "security": [
@@ -55410,6 +56280,27 @@
                 },
                 "tags": [
                     "admin"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/appeal/": {
+            "get": {
+                "security": [
+                    {}
+                ],
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "appeal"
                 ],
                 "x-badges": [
                     {
