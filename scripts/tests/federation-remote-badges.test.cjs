@@ -129,6 +129,22 @@ test("staff, admin, moderator, official and team badges become remote staff badg
     );
 });
 
+test("staff words only count as whole words, so supporter and community badges keep their icon", () => {
+    for (const description of ["Early Supporter", "Supporters", "Steam linked", "Teammate of the month", "Systematic", "Modest"])
+        assert.equal(clean([{ id: "badge-plain", description, icon: icon() }])[0]?.kind, "badge", description);
+    for (const [id, description] of [
+        ["badge-a", "Support"],
+        ["badge-b", "Head Moderators"],
+        ["badge-c", "Admins"],
+        ["supportTeam", "Cool"],
+        ["badge-d", "Trust & Safety"],
+        ["staff4life", "Cool"],
+        ["badge-e", "Server Owner"],
+        ["badge-f", "Instance staffer"],
+    ])
+        assert.equal(clean([{ id, description, icon: icon() }])[0]?.kind, "staff", `${id} ${description}`);
+});
+
 test("known pride flags keep their flag id and drop the sender's icon", () => {
     const [badge] = clean([{ id: "pride-transgender", description: "Transgender", icon: "https://evil.example/track.png", pride_flag: "transgender" }]);
     assert.deepEqual(badge, { id: "pride-transgender", kind: "pride", description: "Transgender", pride_flag: "transgender" });

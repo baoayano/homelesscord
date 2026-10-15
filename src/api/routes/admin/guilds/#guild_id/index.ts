@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
 import { Channel, FederatedObject, Guild, Member, User } from "@spacebar/database";
-import { Config, handleFile, emitEvent, GuildDeleteEvent } from "@spacebar/util";
+import { Config, dropGuildTags, handleFile, emitEvent, GuildDeleteEvent } from "@spacebar/util";
 import { AdminGuildUpdateSchema } from "@spacebar/schemas";
 import { applyGuildTag, purgeDeletedChannels, syncTagAdopters } from "@spacebar/api/util";
 import { reindexDiscoverySoon } from "@spacebar/api/util/handlers/Discovery";
@@ -180,6 +180,7 @@ router.delete(
 
         await Promise.all([
             Guild.delete({ id: guild_id }), // cascades to all guild related data
+            dropGuildTags(guild_id),
             emitEvent({
                 event: "GUILD_DELETE",
                 data: { id: guild_id },

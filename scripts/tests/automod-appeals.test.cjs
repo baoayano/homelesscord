@@ -160,7 +160,7 @@ test("appeals have their own table on both backends, behind the sign-in rate lim
         const names = fs.readdirSync(dir).sort();
         const file = names.find((name) => name.endsWith("-AutomodAppeals.ts"));
         assert.ok(file, backend);
-        assert.equal(names.at(-1), file);
+        assert.equal(names.filter((name) => name.split("-")[0] === file.split("-")[0]).length, 1, "the timestamp is unique");
         const text = fs.readFileSync(path.join(dir, file), "utf8");
         assert.match(text, /CREATE TABLE IF NOT EXISTS "automod_appeals"/);
         assert.match(text, /CREATE UNIQUE INDEX IF NOT EXISTS "IDX_automod_appeals_restriction" ON "automod_appeals" \("user_id", "restriction_key"\)/);

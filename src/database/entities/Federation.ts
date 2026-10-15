@@ -93,3 +93,32 @@ export class FederatedE2eeKeys extends BaseEntity {
     @Column({ type: "text" }) keys: string;
     @Column({ type: "timestamptz" }) fetched_at: Date;
 }
+
+export type FederationMoveStatus = "pending" | "running" | "applied" | "unverified" | "refused";
+
+@Entity({ name: "federation_moves" })
+@Index("IDX_federation_moves_route", ["from_id", "to_id", "at"], { unique: true })
+export class FederationMove extends BaseEntity {
+    @PrimaryColumn({ type: "int8" }) id: string;
+    @Index("IDX_federation_moves_from_id") @Column({ type: "varchar" }) from_id: string;
+    @Index("IDX_federation_moves_to_id") @Column({ type: "varchar" }) to_id: string;
+    @Column({ type: "timestamptz" }) at: Date;
+    @Column({ type: "varchar" }) source: string;
+    @Column({ type: "varchar" }) status: FederationMoveStatus;
+    @Column({ type: "text", nullable: true }) detail: string | null;
+    @Column({ type: "text", nullable: true }) proof: string | null;
+    @Column({ type: "varchar", nullable: true }) proof_kind: string | null;
+    @Column({ type: "varchar", nullable: true }) previous_key: string | null;
+    @Column({ type: "varchar", nullable: true }) public_key: string | null;
+    @Column({ type: "text", nullable: true }) counts: string | null;
+    @Column({ type: "timestamptz" }) created_at: Date;
+    @Column({ type: "timestamptz", nullable: true }) applied_at: Date | null;
+}
+
+@Entity({ name: "federation_instance_keys" })
+export class FederationInstanceKey extends BaseEntity {
+    @PrimaryColumn({ type: "varchar" }) instance: string;
+    @Column({ type: "varchar" }) public_key: string;
+    @Column({ type: "varchar" }) source: string;
+    @Column({ type: "timestamptz" }) seen_at: Date;
+}

@@ -7,6 +7,11 @@
     <title>Appeal on __INSTANCE_NAME__</title>
     <link rel="icon" href="/favicon.svg" />
     <style>
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklab, currentColor 32%, transparent) transparent;
+      }
+
       @font-face {
         font-family: "gg sans";
         font-style: normal;
@@ -209,9 +214,22 @@
         cursor: progress;
         opacity: 0.7;
       }
+      button.secondary {
+        background: transparent;
+        color: var(--color-text);
+        box-shadow: inset 0 0 0 1px var(--color-border);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
       @media (hover: hover) {
         button:hover {
           background: var(--color-accent-hover);
+        }
+        button.secondary:hover {
+          background: var(--color-field);
         }
       }
       .state {
@@ -303,6 +321,20 @@
         <button type="submit" id="check-button">See my account's status</button>
       </form>
 
+      <form class="card" id="mfa" novalidate hidden>
+        <h2>Confirm it's you</h2>
+        <p class="intro" id="mfa-intro">This account has two-factor authentication on.</p>
+        <div class="field" id="mfa-code-field">
+          <label for="mfa-code">Authentication or backup code</label>
+          <input id="mfa-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" aria-describedby="mfa-error" />
+        </div>
+        <p class="error" id="mfa-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="submit" id="mfa-button">Continue</button>
+          <button type="button" class="secondary" id="mfa-key" hidden>Use a security key</button>
+        </div>
+      </form>
+
       <section class="card" id="result" role="status" hidden>
         <div class="state" id="state"><span class="dot" aria-hidden="true"></span><h2 id="state-title"></h2></div>
         <p id="reason"></p>
@@ -328,7 +360,8 @@
     <script>
       "use strict";
       const $ = (id) => document.getElementById(id);
-      const credentials = { login: "", password: "" };
+      const credentials = { login: "", password: "", appeal_ticket: "" };
+      let challenge = null;
       const RESTRICTION_TITLES = {
         suspended: "Your account is suspended",
         held: "Your account is held for review",
@@ -411,6 +444,81 @@
         $("appeal").hidden = !state.can_appeal;
       };
 
+      const b64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const fromB64url = (text) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+      const askForMfa = (data) => {
+        challenge = data;
+        const form = $("mfa");
+        form.hidden = false;
+        form.classList.add("enter");
+        $("mfa-code-field").hidden = !data.totp && !data.backup;
+        $("mfa-button").hidden = !data.totp && !data.backup;
+        $("mfa-key").hidden = !data.webauthn || !window.PublicKeyCredential;
+        $("mfa-intro").textContent = data.totp
+          ? "This account has two-factor authentication on. Enter the 6-digit code from your authenticator app, or one of your backup codes."
+          : data.webauthn
+            ? "This account has two-factor authentication on. Use your security key, or enter one of your backup codes."
+            : "This account has two-factor authentication on. Enter one of your backup codes.";
+        if (!$("mfa-code-field").hidden) $("mfa-code").focus();
+      };
+
+      const finishMfa = async (button, method, code) => {
+        const error = $("mfa-error");
+        const { ok, data } = await send(button, { login: credentials.login, password: credentials.password, ticket: challenge.ticket, method, code });
+        if (!ok || data?.mfa) {
+          const text = data?.code === 60008 || data?.code === 60006 ? "That code didn't work. Check it and try again." : errorText(data, "That code didn't work. Try again.");
+          if (data?.code === 60006 || data?.mfa) {
+            const again = await send(button, { login: credentials.login, password: credentials.password });
+            if (again.data?.mfa) challenge = again.data;
+          }
+          return showError(error, text, [$("mfa-code")]);
+        }
+        showError(error, "", [$("mfa-code")]);
+        $("mfa").hidden = true;
+        credentials.appeal_ticket = data.appeal_ticket;
+        render(data);
+      };
+
+      $("mfa").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const field = $("mfa-code");
+        const code = field.value.replace(/\s+/g, "");
+        if (!code) return showError($("mfa-error"), "Enter a code.", [field]);
+        await finishMfa($("mfa-button"), /^\d{6}$/.test(code) && challenge.totp ? "totp" : "backup", code);
+      });
+
+      $("mfa-key").addEventListener("click", async () => {
+        const { publicKey } = JSON.parse(challenge.webauthn);
+        try {
+          const credential = await navigator.credentials.get({
+            publicKey: {
+              ...publicKey,
+              challenge: fromB64url(publicKey.challenge),
+              allowCredentials: publicKey.allowCredentials.map((key) => ({ ...key, id: fromB64url(key.id) })),
+            },
+          });
+          const { response } = credential;
+          await finishMfa(
+            $("mfa-key"),
+            "webauthn",
+            JSON.stringify({
+              id: credential.id,
+              rawId: b64url(credential.rawId),
+              type: credential.type,
+              response: {
+                clientDataJSON: b64url(response.clientDataJSON),
+                authenticatorData: b64url(response.authenticatorData),
+                signature: b64url(response.signature),
+                userHandle: response.userHandle ? b64url(response.userHandle) : null,
+              },
+            }),
+          );
+        } catch {
+          showError($("mfa-error"), "The security key didn't respond. Try again or use a backup code.", [$("mfa-code")]);
+        }
+      });
+
       $("check").addEventListener("submit", async (event) => {
         event.preventDefault();
         const login = $("login");
@@ -423,6 +531,12 @@
         if (!ok) return showError(error, errorText(data, "Something went wrong. Try again."), [login, password]);
         credentials.login = login.value.trim();
         credentials.password = password.value;
+        credentials.appeal_ticket = "";
+        $("result").hidden = true;
+        $("appeal").hidden = true;
+        if (data?.mfa) return askForMfa(data);
+        $("mfa").hidden = true;
+        credentials.appeal_ticket = data.appeal_ticket;
         render(data);
       });
 

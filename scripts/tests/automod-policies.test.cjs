@@ -156,6 +156,9 @@ function instanceAutomodFixture(automod, { users = [], staff = [] } = {}) {
         "./safetyNotices": { issueViolation: async () => ({ id: "violation" }) },
         "./systemAccounts": { getSystemAccount: async () => ({ id: "official" }) },
         "./automodPolicy": policyModule(automod, staff),
+        typeorm: { In: (values) => ({ in: values }) },
+        "../../middlewares/RateLimit": { addressBucket: (address) => address ?? "127.0.0.1" },
+        "./accountIps": { ipVariants: (ip) => [ip], normalizeIp: (ip) => ip },
         "./spamGuard.js": {
             applySpamAction: async (user, action, opts) => {
                 calls.spamActions.push([user.id, action, opts.guild_ids]);
@@ -306,7 +309,7 @@ test("the rules route maps each switch to the rule's own setting and counts both
     await assert.rejects(call(route.patch, { params: { rule_key: "nope" }, body: {} }), /Unknown automod rule/);
 });
 
-test("policy exemption lists are stored as whole lists and the dry run migration is idempotent and newest", () => {
+test("policy exemption lists are stored as whole lists and the dry run migration is idempotent with a unique timestamp", () => {
     const source = fs.readFileSync(path.join(__dirname, "../../src/util/util/Config.ts"), "utf8");
     assert.match(source, /AUTOMOD_POLICY_KEYS\.flatMap\(\(key\) => \[`automod\.policies\.\$\{key\}\.exemptUserIds`, `automod\.policies\.\$\{key\}\.exemptGuildIds`\]\)/);
     for (const backend of ["postgres", "sqlite"]) {
@@ -316,9 +319,8 @@ test("policy exemption lists are stored as whole lists and the dry run migration
         const text = fs.readFileSync(path.join(dir, file), "utf8");
         assert.match(text, /would_action/);
         assert.match(text, backend === "postgres" ? /ADD COLUMN IF NOT EXISTS/ : /PRAGMA table_info/);
-        const stamp = Number(file.split("-")[0]);
-        const others = fs.readdirSync(dir).filter((name) => name !== file && !name.endsWith("-AutomodAppeals.ts"));
-        for (const other of others) assert.ok(Number(other.split("-")[0]) < stamp, other);
+        const stamp = file.split("-")[0];
+        assert.equal(fs.readdirSync(dir).filter((name) => name.split("-")[0] === stamp).length, 1, "the timestamp is unique");
     }
 });
 

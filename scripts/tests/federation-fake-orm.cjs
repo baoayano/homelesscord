@@ -91,11 +91,16 @@ const passThroughAuthorship = {
     reportAuthorshipMismatch: async () => undefined,
 };
 
+const unmoved = {
+    aliasCanonical: (canonical) => canonical,
+    normalizeMoved: (value) => value,
+};
+
 const authorshipExports = () => require("../../src/util/util/federation/Authorship.ts");
 
 const load = (file, imports, globals = {}) => {
     const module = { exports: {} };
-    const resolved = { "./federationAuthorship": passThroughAuthorship, ...imports };
+    const resolved = { "./federationAuthorship": passThroughAuthorship, "./federationMoves": unmoved, ...imports };
     if (resolved["@spacebar/util"]) resolved["@spacebar/util"] = { ...authorshipExports(), Snowflake: { generate: () => String(Date.now()) }, ...resolved["@spacebar/util"] };
     vm.runInNewContext(transpile(file), {
         module,

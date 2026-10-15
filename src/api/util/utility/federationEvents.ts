@@ -43,6 +43,7 @@ import { ownInstance, signedFetch, trustFor } from "./federationNetwork";
 import { quotaAdded, trimInboxEvents } from "./federationQuota";
 import { upsertShadows } from "./federationShadows";
 import { attachStoredAuthorship, guardIncoming } from "./federationAuthorship";
+import { normalizeMoved } from "./federationMoves";
 import { applyRemoteCall, applyRemoteStream, applyRemoteVoiceState, applyVoiceServerUpdate, parseStreamKey } from "./federationVoice";
 
 type Raw = Record<string, unknown>;
@@ -196,6 +197,18 @@ const queueOf = (instance: string) => {
     if (!queue) queues.set(instance, (queue = { queued: 0, sending: false, failures: 0, failingSince: null }));
     return queue;
 };
+
+export function retargetQueue(from: string, to: string, moved: number) {
+    const old = queues.get(from);
+    if (old) {
+        clearTimeout(old.timer);
+        queues.delete(from);
+    }
+    if (!moved && !old?.queued) return;
+    const queue = queueOf(to);
+    queue.queued += moved;
+    schedule(to, 1000);
+}
 
 export const deliveryQueues = () =>
     Object.fromEntries([...queues].map(([instance, queue]) => [instance, { queued: queue.queued, failures: queue.failures, failing_since: queue.failingSince }]));
@@ -863,8 +876,9 @@ export async function handleInbox(sender: string, body: Raw) {
     if (!events) throw new FederationRequestError("bad_request", "events must be an array", 400);
     if (events.length > BATCH) throw new FederationRequestError("too_large", `At most ${BATCH} events per request`, 413);
     let applied = 0;
-    for (const entry of events) {
-        if (!isObject(entry) || typeof entry.event !== "string" || !ACCEPTED.has(entry.event)) continue;
+    for (const raw of events) {
+        if (!isObject(raw) || typeof raw.event !== "string" || !ACCEPTED.has(raw.event)) continue;
+        const entry = normalizeMoved(raw);
         const wire = { ...entry, recipients: Array.isArray(entry.recipients) ? entry.recipients : [] } as WireEvent;
         const guild = wire.guild_id ? parseCanonicalId(wire.guild_id) : null;
         const channel = wire.channel_id ? parseCanonicalId(wire.channel_id) : null;

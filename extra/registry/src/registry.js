@@ -1,5 +1,6 @@
 import { importSigningSeed, REGISTRY_KEY_ID, sha256Hex, signEnvelope } from "./crypto.js";
 import { logEvent, nowIso } from "./db.js";
+import { publishedMoves } from "./moves.js";
 
 export const MIN_PROTOCOL = 1;
 const DAY = 24 * 60 * 60 * 1000;
@@ -27,6 +28,7 @@ export async function buildContent(env) {
             "SELECT d.* FROM discovery d JOIN instances i ON i.id = d.instance WHERE d.status = 'verified' AND d.present = 1 AND i.status = 'approved' AND d.instance NOT IN (SELECT id FROM blocks WHERE kind = 'instance') AND d.id NOT IN (SELECT id FROM blocks WHERE kind = 'guild') ORDER BY d.id",
         ),
     ]);
+    const moves = await publishedMoves(env);
     const blocked = { instances: [], guilds: [], users: [] };
     for (const block of blocks.results) {
         const list = { instance: blocked.instances, guild: blocked.guilds, user: blocked.users }[block.kind];
@@ -57,6 +59,7 @@ export async function buildContent(env) {
             invite_url: row.invite_url,
             verified_at: row.verified_at,
         })),
+        moves,
     };
 }
 
@@ -84,7 +87,7 @@ export async function publish(env, { force = false, actor = null } = {}) {
     await logEvent(env, {
         kind: "publish",
         actor,
-        message: `sequence ${sequence}, ${content.instances.length} instances, ${content.discovery.length} discovery servers, ${content.blocked.instances.length + content.blocked.guilds.length + content.blocked.users.length} blocks`,
+        message: `sequence ${sequence}, ${content.instances.length} instances, ${content.discovery.length} discovery servers, ${content.blocked.instances.length + content.blocked.guilds.length + content.blocked.users.length} blocks, ${content.moves.length} moves`,
     });
     return currentPublication(env);
 }

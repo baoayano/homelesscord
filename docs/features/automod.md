@@ -64,7 +64,7 @@ Moderators can approve or reject in bulk. Rejecting signs the accounts out. The 
 These sit on top of the route rate limits, which allow 2 successful registrations per IP every 12 hours and 5 login attempts per IP per minute by default.
 
 - `automod.registration.maxAccountsPerIpPerDay` counts every account created from one IP over 24 hours, including pending ones, which the route limiter misses because they answer with an error. It is off at 0. A blocked signup returns `TOO_MANY_REGISTRATIONS` and is logged with rule `ip_limit`. Signups with a registration token skip it.
-- `automod.login.maxFailedAttemptsPerAccount` (10) and `automod.login.lockoutMinutes` (15) lock one account after that many wrong passwords from any IP. The lock returns `ACCOUNT_LOGIN_LOCKED` before the password is compared, and a successful sign-in clears the count. Set the attempts to 0 to turn it off.
+- `automod.login.maxFailedAttemptsPerAccount` (10) and `automod.login.lockoutMinutes` (15) lock an account for one address after that many wrong passwords from that address, counting an IPv6 /64 as one address. Someone guessing from their own address only locks themselves out. After 10 times that many wrong passwords from all addresses together, the account is also locked for every address it has never signed in from, while addresses with one of its sessions, or the one it registered from, can still sign in. The lock returns `ACCOUNT_LOGIN_LOCKED` before the password is compared, and a successful sign-in clears the count for that address. Set the attempts to 0 to turn it off.
 
 ### Accounts per address
 
@@ -201,7 +201,7 @@ The home instance accepts it when `automod.federation.acceptReports` is on, the 
 
 `src/api/util/utility/safety.ts` watches each server.
 
-- A join raid is 15 joins within 120 seconds, 8 joins from accounts younger than 24 hours, or 10 joins through one invite. It sets `raid_detected_at`, pauses invites for 60 minutes through `invites_disabled_until` unless invites are already paused for longer, and adds later joiners to the same incident.
+- A join raid is 15 joins within 120 seconds, 8 joins from accounts younger than 24 hours, or 10 joins through one invite. All three numbers grow with the server: they are multiplied by the larger of 1, 0.5% of its members divided by 15, and three times its usual joins per window divided by 15. The usual join rate is a running count of joins that fades over 6 hours. A server of 20,000 members needs about 100 joins in 120 seconds, and a server that usually gets 12 joins a window needs about 36. It sets `raid_detected_at`, pauses invites for 60 minutes through `invites_disabled_until` unless invites are already paused for longer, and adds later joiners to the same incident.
 - A DM raid is 10 members starting DMs with other members within 300 seconds. Members who can kick, ban, time out or manage the server don't count, so moderators messaging members don't pause DMs. It sets `dm_spam_detected_at` and `dms_disabled_until` for 60 minutes.
 - A mention raid is 3 accounts tripping `mention_spam` or `everyone_spam` in one server within 300 seconds. It sends `AUTO_MODERATION_MENTION_RAID_DETECTION`, and Discord's "clear" button ends it.
 
@@ -230,7 +230,7 @@ The defaults match what automod did before the policies existed, so an upgrade c
 
 ## Appeals
 
-An account that can't sign in because it is suspended, held for review or disabled by staff or automod gets a sign-in error that ends with "To see why or send an appeal, go to <instance>/appeal." The page at `/appeal` asks for the email or username and password and calls `POST /api/v9/auth/appeal`. That route checks the password the same way sign-in does, counts wrong passwords toward the account lock and shares the sign-in rate limit. Without `message` it returns the restriction, the reason built from the newest automod action behind it, when it ends and any appeal already sent. With `message`, up to 1,000 characters, it sends the appeal.
+An account that can't sign in because it is suspended, held for review or disabled by staff or automod gets a sign-in error that ends with "To see why or send an appeal, go to <instance>/appeal." The page at `/appeal` asks for the email or username and password and calls `POST /api/v9/auth/appeal`. When the account has two-factor authentication, the route answers `{ mfa: true, ticket, totp, backup, webauthn }` like sign-in does and shows nothing else until the page sends the ticket back with an authenticator code, a backup code or a security key assertion. A verified request gets an `appeal_ticket` that is good for 30 minutes, so sending the appeal doesn't ask for a code again. That route checks the password the same way sign-in does, counts wrong passwords toward the account lock and shares the sign-in rate limit. Without `message` it returns the restriction, the reason built from the newest automod action behind it, when it ends and any appeal already sent. With `message`, up to 1,000 characters, it sends the appeal.
 
 Each account can send one appeal per restriction. The restriction is keyed by the automod action behind it, or by the suspension end when a moderator set it by hand, so a later suspension can be appealed again. Sending the same message twice, such as a retry on a slow connection, returns the first appeal. A different second message gets an `APPEAL_ALREADY_SENT` field error. Accounts from other instances can't use the page, because their password lives on their home instance.
 
@@ -308,7 +308,7 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | `automod.allowList`                         | `[]`    | Words automod never acts on.                               |
 | `automod.registration.maxAccountsPerIpPerDay` | 0     | Accounts per IP per day, 0 is off.                         |
 | `automod.registration.maxAccountsPerIp`     | 0       | Live accounts registered from one address or IPv6 /64, 0 is off. |
-| `automod.login.maxFailedAttemptsPerAccount` | 10      | Wrong passwords before an account locks, 0 is off.         |
+| `automod.login.maxFailedAttemptsPerAccount` | 10      | Wrong passwords from one address before it locks, 0 is off. |
 | `automod.login.lockoutMinutes`              | 15      | Lock length.                                               |
 | `automod.login.maxAccountsPerIp`            | 0       | Other accounts signed in from one address or IPv6 /64, 0 is off. |
 | `automod.login.sessionActiveDays`           | 30      | How recently a session must be used to count.              |
@@ -349,7 +349,7 @@ All routes are under `/api/v9/admin/automod` and need `MANAGE_USERS`.
 | `automod.spam.suspendHours`                 | 24      | Suspension length.                                         |
 | `automod.spam.escalateAfterStrikes`         | 3       | Strikes before the action steps up, 0 is off.              |
 | `automod.spam.strikeWindowHours`            | 24      | How long a strike counts.                                  |
-| `guild.safety.raidJoinThreshold`            | 15      | Joins in `raidJoinWindowSeconds` (120), 0 is off.          |
+| `guild.safety.raidJoinThreshold`            | 15      | Joins in `raidJoinWindowSeconds` (120) before scaling, 0 is off. |
 | `guild.safety.raidNewAccountJoinThreshold`  | 8       | Joins from accounts younger than `raidNewAccountHours` (24). |
 | `guild.safety.raidInviteJoinThreshold`      | 10      | Joins through one invite.                                  |
 | `guild.safety.raidPauseInvitesMinutes`      | 60      | Invite pause after a join raid, 0 only alerts.             |

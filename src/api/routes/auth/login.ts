@@ -73,12 +73,12 @@ router.post(
             });
         });
 
-        await assertLoginNotLocked(user.id);
+        await assertLoginNotLocked(user.id, req.ip);
 
         // the salt is saved in the password refer to bcrypt docs
         const same_password = await bcrypt.compare(password, user.data.hash || "");
         if (!same_password) {
-            await recordFailedLogin(user.id);
+            await recordFailedLogin(user.id, req.ip);
             throw FieldErrors({
                 login: {
                     message: req.t("auth:login.INVALID_LOGIN"),
@@ -91,7 +91,7 @@ router.post(
             });
         }
 
-        await clearFailedLogins(user.id);
+        await clearFailedLogins(user.id, req.ip);
         if (!isStaffAccount(user, await loadStaffRoles())) await assertIpNotBanned(req.ip, "Sign-in from this network is blocked on this instance");
 
         const appealHint = ` To see why or send an appeal, go to ${requestOrigin(req)}/appeal.`;

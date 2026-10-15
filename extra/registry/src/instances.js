@@ -30,6 +30,10 @@ export async function fetchWellKnown(env, instance) {
         federation_enabled: document.federation?.enabled === true ? 1 : 0,
         software_version: text(document.version, 100) || null,
         discovery_url: sameOriginUrl(document.discovery_url, instance.origin) ?? `${instance.origin}/.well-known/meowcord/discovery`,
+        moved_from: (Array.isArray(document.moved_from) ? document.moved_from : [])
+            .filter((entry) => typeof entry?.payload === "string" && typeof entry.signature === "string" && typeof entry.key_id === "string")
+            .slice(0, 10)
+            .map(({ payload, signature, key_id }) => ({ payload, signature, key_id })),
     };
 }
 
@@ -59,7 +63,7 @@ export async function storeWellKnown(env, instance, wellKnown) {
             .run();
         return { keyChangePending: false };
     }
-    const reviewed = existing.status === "approved" || existing.status === "suspended";
+    const reviewed = existing.status === "approved" || existing.status === "suspended" || existing.status === "moved";
     const keyChangePending = reviewed && existing.public_key && existing.public_key !== wellKnown.public_key;
     if (keyChangePending && existing.pending_public_key !== wellKnown.public_key) {
         await logEvent(env, { kind: "key-change", level: "warn", instance: instance.id, message: "the instance published a new key, it waits for review in the admin" });

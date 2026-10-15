@@ -4,21 +4,21 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
 
-function harness(objects, userId = "100000000000000001") {
+function harness(objects, userId = "100000000000000001", moves = { instance: "a.example", previous: [], moved: {} }) {
     const source = ts.createSourceFile("engine.ts", fs.readFileSync("client/e2ee/src/engine.ts", "utf8"), ts.ScriptTarget.Latest, true);
     const engine = source.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === "Engine");
     const helpers = source.statements
         .filter(
             (node) =>
                 ts.isVariableStatement(node) &&
-                ["canonicalInstance", "canonicalSnowflake", "isCanonical", "LOCAL_REFERENCE", "CANONICAL_REFERENCE"].includes(
+                ["canonicalInstance", "canonicalSnowflake", "isCanonical", "LOCAL_REFERENCE", "CANONICAL_REFERENCE", "MAX_BINDING_VARIANTS", "MOVES_TTL"].includes(
                     node.declarationList.declarations[0].name.getText(source),
                 ),
         )
         .map((node) => node.getText(source))
         .join("\n");
-    const methods = ["canonicalIds", "localIds", "canonicalPayload", "localPayload", "signedUserId", "bindingFor", "safetyNumber"].map((name) =>
-        engine.members.find((node) => ts.isMethodDeclaration(node) && node.name.getText(source) === name),
+    const methods = ["canonicalIds", "localIds", "canonicalPayload", "localPayload", "signedUserId", "bindingFor", "safetyNumber", "previousInstances", "bindingVariants"].map(
+        (name) => engine.members.find((node) => ts.isMethodDeclaration(node) && node.name.getText(source) === name),
     );
     methods.forEach((method) => assert.ok(method));
     const module = { exports: {} };
@@ -52,6 +52,7 @@ function harness(objects, userId = "100000000000000001") {
         api: {
             request: async (method, url) => {
                 calls.push(url);
+                if (url === "/federation/moves") return moves;
                 if (objects === 404) throw { ok: false, status: 404 };
                 const params = new URL(url, "http://x").searchParams;
                 if (params.has("canonical")) {
@@ -113,6 +114,25 @@ test("an instance without federation falls back to version 1 and stops asking", 
 test("a version 2 envelope can't be checked without canonical ids", async () => {
     const { instance } = harness(404);
     await assert.rejects(instance.bindingFor(channel, remote, [me], undefined, 2), (error) => error.code === "BAD_ENVELOPE");
+});
+
+test("a version 2 binding is also tried with the ids instances had before they moved", async () => {
+    const bobHome = "555555555555555555";
+    const { instance } = harness({ [me]: `@${me}@a.example`, [remote]: `@${bobHome}@b.example`, [channel]: "@777777777777777777@b.example" }, me, {
+        instance: "a.example",
+        previous: ["old-a.example"],
+        moved: { "old-b.example": "b.example" },
+    });
+    const ids = await instance.bindingFor(channel, remote, [me], undefined, 2);
+    const variants = await instance.bindingVariants(ids);
+    const seen = variants.map((variant) => `${variant.channel} ${variant.sender} ${variant.user(me)}`);
+    assert.equal(seen[0], `${ids.channel} ${ids.sender} ${ids.user(me)}`);
+    assert.ok(seen.includes(`@777777777777777777@old-b.example @${bobHome}@old-b.example @${me}@a.example`));
+    assert.ok(seen.includes(`@777777777777777777@b.example @${bobHome}@b.example @${me}@old-a.example`));
+    assert.ok(seen.includes(`@777777777777777777@old-b.example @${bobHome}@old-b.example @${me}@old-a.example`));
+    assert.equal(variants.length, 4);
+    const unmoved = harness({ [me]: `@${me}@a.example`, [remote]: `@${bobHome}@b.example`, [channel]: "@777777777777777777@b.example" }, me).instance;
+    assert.equal((await unmoved.bindingVariants(await unmoved.bindingFor(channel, remote, [me], undefined, 2))).length, 1);
 });
 
 test("a version 1 envelope is never upgraded", async () => {

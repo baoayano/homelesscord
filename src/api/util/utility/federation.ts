@@ -16,9 +16,13 @@ import {
     contactHandles,
     contactNames,
     DirectoryPeer,
+    cleanDiscoveryWelcome,
     discoveryCategoryIds,
     DiscoveryGuild,
     discoveryKeywords,
+    DiscoverySort,
+    DiscoveryWelcome,
+    MAX_WELCOME_CHANNELS,
     effectivePeers,
     externalProxyUrl,
     FEDERATION_PROTOCOL,
@@ -38,11 +42,13 @@ import {
     rewriteMediaUrl,
     signEnvelope,
     Snowflake,
+    snowflakeTime,
     WellKnownDocument,
 } from "@spacebar/util";
 import { ChannelType } from "@spacebar/schemas";
 import { sqlArrayIncludes } from "@spacebar/database/Sql";
 import { federatedInstances, homeCdnBase } from "./federationMedia";
+import { announceOwnMoves, learnRegistryMoves, ownMoveStatements, prepareOwnMoves, refreshAliases, rememberKeys, resumeMoves } from "./federationMoves";
 import { ProcessLifecycle } from "../../../util/util/ProcessLifecycle";
 
 const STATE_ID = "instance";
@@ -58,6 +64,7 @@ let announcing: Promise<FederationState> | null = null;
 let timer: NodeJS.Timeout | undefined;
 let initial: NodeJS.Timeout | undefined;
 let stopping = false;
+let movesAnnouncedAt = 0;
 
 export const instanceUrl = () => {
     const { general, api } = Config.get();
@@ -98,6 +105,7 @@ export const wellKnownDocument = (): WellKnownDocument | null => {
         registration: registrationState(),
         federation: { enabled: federation.enabled, accepts_unlisted: federation.allowUnlistedPeers },
         discovery_url: `${url}/.well-known/meowcord/discovery`,
+        ...(ownMoveStatements().length && { moved_from: ownMoveStatements() }),
     };
 };
 
@@ -184,12 +192,26 @@ export const refreshRegistry = () => {
         }
         await state.save();
         invalidateDirectory();
+        await syncMoves(state).catch((error) => console.warn("[Federation] Could not process instance moves:", (error as Error).message));
         await refreshPeers().catch((error) => console.warn("[Federation] Could not refresh peer discovery lists:", (error as Error).message));
         return state;
     })().finally(() => {
         refreshing = null;
     });
     return refreshing;
+};
+
+const syncMoves = async (state: FederationState) => {
+    const document = await currentDocument(state);
+    await resumeMoves();
+    if (!isDocumentLive(document)) return;
+    await learnRegistryMoves(document);
+    await rememberKeys(
+        document!.instances
+            .filter((instance) => instance.state === "active" || instance.state === "listed")
+            .map((instance) => ({ instance: instance.id, public_key: instance.public_key })),
+        "registry",
+    );
 };
 
 const fetchJson = async (url: string) => {
@@ -231,6 +253,7 @@ const refreshPeer = async (candidate: { id: string; url: string; public_key: str
             row.public_key = wellKnown.public_key;
             row.well_known = JSON.stringify(wellKnown);
             key = wellKnown.public_key;
+            await rememberKeys([{ instance: candidate.id, public_key: wellKnown.public_key }], "peer");
             discoveryUrl = wellKnown.discovery_url;
         } else row.public_key = key;
         const list = acceptDiscoveryList(await fetchJson(discoveryUrl), candidate.id, key as string);
@@ -391,11 +414,17 @@ export const directory = async () => {
     const instanceById = new Map(instances.map((instance) => [instance.id, instance]));
     const mediaOrigins = new Map([...(await federatedInstances()).values()].map((instance) => [instance.url, instance.id]));
     const cdn = homeCdnBase();
-    const guildIcon = (value: string | null) => {
+    const media = (value: string | null | undefined) => {
         if (!value) return null;
         const rewritten = cdn ? rewriteMediaUrl(value, mediaOrigins, cdn) : value;
         return rewritten === value ? proxiedImage(value) : rewritten;
     };
+    const createdAt = (id: string) => {
+        const time = snowflakeTime(id);
+        return time == null ? null : new Date(time).toISOString();
+    };
+    const welcomeOf = (welcome: DiscoveryWelcome | null | undefined) =>
+        welcome ? { description: welcome.description, channels: welcome.channels.map((channel) => ({ ...channel, emoji_url: media(channel.emoji_url) })) } : null;
     const fromInstance = new Map(remoteGuilds.map((guild) => [guild.id, guild]));
     const registryListed = new Set(document.discovery.map((guild) => guild.id));
     const guilds = result.guilds.map((guild) => {
@@ -408,22 +437,27 @@ export const directory = async () => {
             instance_icon_url: instance?.icon_url ?? null,
             name: guild.name,
             description: guild.description,
-            icon_url: guildIcon(guild.icon_url),
+            icon_url: media(guild.icon_url),
+            splash_url: media(own?.splash_url ?? guild.splash_url),
             member_count: own?.member_count ?? guild.member_count,
             presence_count: own?.presence_count ?? null,
             keywords: guild.keywords ?? own?.keywords ?? [],
             category_ids: guild.category_ids ?? own?.category_ids ?? [],
             active_at: own?.active_at ?? null,
+            created_at: createdAt(guild.id),
             verified: registryListed.has(guild.id),
             invite_url: guild.invite_url,
+            welcome: welcomeOf(own?.welcome ?? guild.welcome),
         };
     });
+    const index = new RemoteDiscoveryIndex(guilds);
+    const counts = index.instanceCounts();
     return {
         available: true as const,
         verification: federation.discovery.verification,
-        instances,
+        instances: instances.map((instance) => ({ ...instance, guild_count: counts.get(instance.id) ?? 0 })),
         guilds,
-        index: new RemoteDiscoveryIndex(guilds),
+        index,
     };
 };
 
@@ -442,7 +476,7 @@ export const cachedDirectory = () => {
     return directoryCache.value;
 };
 
-export const searchDirectory = async (options: { query?: unknown; categoryIds?: number[]; offset: number; limit: number }) => {
+export const searchDirectory = async (options: { query?: unknown; categoryIds?: number[]; instance?: string | null; sort?: DiscoverySort; offset: number; limit: number }) => {
     const found = await cachedDirectory();
     if (!found.available) return found;
     const { total, entries } = found.index.search(options);
@@ -450,10 +484,26 @@ export const searchDirectory = async (options: { query?: unknown; categoryIds?: 
         available: true as const,
         verification: found.verification,
         instances: found.instances,
-        guilds: entries,
+        guilds: entries.map(({ welcome, ...guild }) => ({ ...guild, has_welcome: !!welcome })),
         total,
         offset: options.offset,
         limit: options.limit,
+        sort: options.sort ?? "relevance",
+        instance: options.instance ?? null,
+    };
+};
+
+export const directoryGuild = async (id: string) => {
+    const found = await cachedDirectory();
+    if (!found.available) return null;
+    const guild = found.guilds.find((entry) => entry.id === id);
+    if (!guild) return null;
+    const instance = found.instances.find((entry) => entry.id === guild.instance);
+    return {
+        ...guild,
+        instance_description: instance?.description ?? "",
+        instance_url: instance?.url ?? null,
+        instance_registration: instance?.registration ?? null,
     };
 };
 
@@ -488,12 +538,24 @@ export const ownDiscoveryGuilds = async () => {
     if (!url || !id) return [];
     const guilds = await Guild.find({
         where: { global_discovery: true, global_discovery_hidden: false, global_discovery_verified: true },
-        select: { id: true, name: true, description: true, icon: true, member_count: true, primary_category_id: true, discovery_metadata: true },
+        select: {
+            id: true,
+            name: true,
+            description: true,
+            icon: true,
+            splash: true,
+            discovery_splash: true,
+            banner: true,
+            welcome_screen: true,
+            member_count: true,
+            primary_category_id: true,
+            discovery_metadata: true,
+        },
         order: { member_count: "DESC" },
         take: 500,
     });
     const ids = guilds.map((guild) => guild.id);
-    const [invites, online, activity] = await Promise.all([permanentInvites(ids), Guild.countOnlineMembersIn(ids), lastActivity(ids)]);
+    const [invites, online, activity, welcomes] = await Promise.all([permanentInvites(ids), Guild.countOnlineMembersIn(ids), lastActivity(ids), welcomeScreens(guilds)]);
     const document = await currentDocument();
     const blocks = blockSets(document, await localBlocks());
     return guilds.flatMap((guild) => {
@@ -511,10 +573,52 @@ export const ownDiscoveryGuilds = async () => {
                 keywords: discoveryKeywords(guild.discovery_metadata?.keywords ?? []),
                 category_ids: discoveryCategoryIds([...(guild.primary_category_id != null ? [guild.primary_category_id] : []), ...(guild.discovery_metadata?.category_ids ?? [])]),
                 active_at: activity.get(guild.id) ?? null,
+                splash_url: guildSplashUrl(guild),
+                welcome: welcomes.get(guild.id) ?? null,
                 invite_url: `${url}/invite/${code}`,
             },
         ];
     });
+};
+
+export const guildSplashUrl = (guild: Pick<Guild, "id" | "splash" | "discovery_splash" | "banner">) => {
+    const cdn = (Config.get().cdn.endpointPublic || "").replace(/\/+$/, "");
+    const [folder, hash] = guild.discovery_splash
+        ? ["discovery-splashes", guild.discovery_splash]
+        : guild.splash
+          ? ["splashes", guild.splash]
+          : guild.banner
+            ? ["banners", guild.banner]
+            : [null, null];
+    return folder && hash && cdn ? `${cdn}/${folder}/${guild.id}/${hash}.${hash.startsWith("a_") ? "gif" : "png"}?size=640` : null;
+};
+
+const welcomeScreens = async (guilds: Pick<Guild, "id" | "welcome_screen">[]) => {
+    const screens = new Map<string, DiscoveryWelcome>();
+    const enabled = guilds.filter((guild) => guild.welcome_screen?.enabled);
+    const channelIds = enabled.flatMap((guild) => (guild.welcome_screen.welcome_channels ?? []).slice(0, MAX_WELCOME_CHANNELS).map((channel) => channel.channel_id));
+    const channels = channelIds.length ? await Channel.find({ where: { id: In(channelIds) }, select: { id: true, name: true, guild_id: true } }) : [];
+    const names = new Map(channels.map((channel) => [channel.id, channel]));
+    const cdn = (Config.get().cdn.endpointPublic || "").replace(/\/+$/, "");
+    for (const guild of enabled) {
+        const welcome = cleanDiscoveryWelcome({
+            description: guild.welcome_screen.description,
+            channels: (guild.welcome_screen.welcome_channels ?? []).flatMap((entry) => {
+                const channel = names.get(entry.channel_id);
+                if (!channel || channel.guild_id !== guild.id) return [];
+                return [
+                    {
+                        name: channel.name,
+                        description: entry.description,
+                        emoji_name: entry.emoji_name,
+                        emoji_url: entry.emoji_id && cdn ? `${cdn}/emojis/${entry.emoji_id}.webp?size=48` : null,
+                    },
+                ];
+            }),
+        });
+        if (welcome) screens.set(guild.id, welcome);
+    }
+    return screens;
 };
 
 const lastActivity = async (guildIds: string[]) => {
@@ -602,11 +706,23 @@ export function startFederation() {
         await refreshRegistry();
         const state = await loadState();
         if (Config.get().federation.announce && (!state.announced_at || Date.now() - state.announced_at.getTime() >= ANNOUNCE_INTERVAL)) await announce();
+        if (ownMoveStatements().length && Date.now() - movesAnnouncedAt >= ANNOUNCE_INTERVAL) {
+            movesAnnouncedAt = Date.now();
+            await announceOwnMoves().catch((error) => console.warn("[Federation] Could not send the move statements:", (error as Error).message));
+        }
     };
     const run = () => tick().catch((error) => console.error("[Federation] Registry cycle failed:", error));
+    void refreshAliases()
+        .then(() => prepareOwnMoves())
+        .catch((error) => console.error("[Federation] Could not load instance moves:", error));
     initial = setTimeout(() => {
         if (stopping || !Config.get().federation.enabled) return;
         refreshRegistry()
+            .then(() => resumeMoves())
+            .then(() => {
+                movesAnnouncedAt = Date.now();
+                return announceOwnMoves();
+            })
             .then(() => (Config.get().federation.announce ? announce() : undefined))
             .catch((error) => console.error("[Federation] Startup sync failed:", error));
     }, 10_000);

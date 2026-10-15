@@ -3,6 +3,7 @@ import { Request, Response, Router } from "express";
 import { route } from "@spacebar/api/middlewares";
 import { parseCanonicalId, SNOWFLAKE } from "@spacebar/util";
 import { canonicalIds, localIds } from "@spacebar/api/util/utility/federationIds";
+import { resolveInstanceId } from "@spacebar/api/util/utility/federationMoves";
 import { ownInstance, trustFor } from "@spacebar/api/util/utility/federationNetwork";
 
 const router = Router({ mergeParams: true });
@@ -31,15 +32,12 @@ router.get(
         const known = await localIds(canonical, { create: false });
         const own = ownInstance();
         const unknown = canonical.filter((id) => !known.has(id));
+        const instanceOf = (id: string) => resolveInstanceId(parseCanonicalId(id)!.instance);
         const allowed = (
-            await Promise.all(
-                [...new Set(unknown.map((id) => parseCanonicalId(id)!.instance))].map(async (instance) =>
-                    instance !== own && (await trustFor(instance).catch(() => null)) ? instance : null,
-                ),
-            )
+            await Promise.all([...new Set(unknown.map(instanceOf))].map(async (instance) => (instance !== own && (await trustFor(instance).catch(() => null)) ? instance : null)))
         ).filter(Boolean);
         const created = await localIds(
-            unknown.filter((id) => allowed.includes(parseCanonicalId(id)!.instance)),
+            unknown.filter((id) => allowed.includes(instanceOf(id))),
             {},
         );
         res.json({ ...Object.fromEntries(await canonicalIds(ids)), ...Object.fromEntries(known), ...Object.fromEntries(created) });

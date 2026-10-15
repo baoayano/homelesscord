@@ -24,6 +24,7 @@ import {
     visitWireMessages,
 } from "@spacebar/util";
 import { forwardedUpload } from "./federationMedia";
+import { authorshipAliases, normalizeMoved } from "./federationMoves";
 import { ownInstance, trustFor } from "./federationNetwork";
 
 type Raw = Record<string, unknown>;
@@ -66,6 +67,7 @@ export async function guardIncoming(value: unknown, host: string, fresh = false)
         cutoff: await authorshipCutoff(),
         fresh,
         seen,
+        aliases: authorshipAliases(),
         onRefused: (message, reason) => refusals.push(`${message.id} by ${(message.author as Raw)?.id}: ${reason}`),
     });
     if (refusals.length)
@@ -230,10 +232,10 @@ export async function homeAuthorship(options: {
             FederationKey.privateKey,
         );
     }
-    const current = await options.current().catch(() => null);
+    const current = normalizeMoved(await options.current().catch(() => null));
     if (!isWireMessage(current) || (current.author as Raw).id !== author) return null;
     const token = current[AUTHORSHIP_FIELD];
-    const check = checkAuthorship(current, token, { publicKey: FederationKey.publicKey });
+    const check = checkAuthorship(current, token, { publicKey: FederationKey.publicKey, aliases: authorshipAliases() });
     const created = snowflakeTime(current.id);
     const legacy = (token === undefined || token === null) && created !== null && created < (await authorshipCutoff());
     if (!check.ok && !legacy) throw new UnverifiedEditError(options.host);

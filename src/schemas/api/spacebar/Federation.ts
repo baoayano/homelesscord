@@ -25,6 +25,10 @@ export interface AdminFederationSettingsSchema {
      * @maxItems 10
      */
     contacts?: string[];
+    /**
+     * @maxItems 10
+     */
+    previousIds?: string[];
     verification?: "registry" | "instance";
 }
 

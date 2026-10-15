@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { adminChatConfig, chatContacts, chatState, closeAdminChat, openAdminChat } from "../src/admin/chat.js";
+import {
+    adminChatConfig,
+    chatContacts,
+    chatState,
+    closeAdminChat,
+    connectChatAccount,
+    disconnectChatAccount,
+    finishChatAccountMfa,
+    openAdminChat,
+    secretChatConfig,
+} from "../src/admin/chat.js";
 import { handleAdmin } from "../src/admin/pages.js";
 import { checkAnnouncePayload, cleanContacts, storeContacts } from "../src/announce.js";
 import { randomBase64Url, sha256Hex } from "../src/crypto.js";
@@ -125,15 +135,15 @@ describe("announce contacts", () => {
 
 describe("admin group chat", () => {
     test("needs both secrets and an https origin", () => {
-        expect(adminChatConfig({})).toBeNull();
-        expect(adminChatConfig({ ADMIN_CHAT_ORIGIN: ORIGIN })).toBeNull();
-        expect(adminChatConfig({ ADMIN_CHAT_ORIGIN: "http://hub.meow.example.com", ADMIN_CHAT_TOKEN: TOKEN })).toBeNull();
-        expect(adminChatConfig({ ADMIN_CHAT_ORIGIN: `${ORIGIN}/app`, ADMIN_CHAT_TOKEN: TOKEN })).toEqual({ origin: ORIGIN, token: TOKEN });
+        expect(secretChatConfig({})).toBeNull();
+        expect(secretChatConfig({ ADMIN_CHAT_ORIGIN: ORIGIN })).toBeNull();
+        expect(secretChatConfig({ ADMIN_CHAT_ORIGIN: "http://hub.meow.example.com", ADMIN_CHAT_TOKEN: TOKEN })).toBeNull();
+        expect(secretChatConfig({ ADMIN_CHAT_ORIGIN: `${ORIGIN}/app`, ADMIN_CHAT_TOKEN: TOKEN })).toEqual({ origin: ORIGIN, token: TOKEN, source: "secrets" });
     });
 
-    test("refuses to open without secrets", async () => {
+    test("refuses to open without an account", async () => {
         const result = await openAdminChat({ DB: env.DB }, "tiago");
-        expect(result.error).toContain("ADMIN_CHAT_ORIGIN");
+        expect(result.error).toContain("Connect the admin chat account");
     });
 
     test("opens a named group DM, adds missing admins on a second open and closes it", async () => {
@@ -236,7 +246,90 @@ describe("admin group chat", () => {
 
         const unconfigured = await handleAdmin(new Request("https://registry.example.com/admin", { headers: { cookie } }), { DB: env.DB }, ctx);
         const unconfiguredPage = await unconfigured.text();
-        expect(unconfiguredPage).toContain("Set the ADMIN_CHAT_ORIGIN and ADMIN_CHAT_TOKEN secrets");
+        expect(unconfiguredPage).toContain("No account is connected");
+        expect(unconfiguredPage).toContain('value="connect"');
         expect(unconfiguredPage).toMatch(/value="open" class="primary" disabled/);
+    });
+});
+
+describe("admin chat account", () => {
+    const SEED = randomBase64Url(32);
+    const ACCOUNT_TOKEN = "account-token";
+
+    function fakeLogin({ mfa = false, captcha = false } = {}) {
+        const calls = [];
+        globalThis.fetch = async (input, init = {}) => {
+            const url = new URL(input);
+            const path = url.pathname.replace(/^\/api\/v9/, "");
+            const body = init.body ? JSON.parse(init.body) : null;
+            calls.push({ path, body, authorization: init.headers?.authorization });
+            const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+            expect(url.origin).toBe(ORIGIN);
+            if (path === "/auth/login") {
+                if (captcha) return json({ captcha_key: ["captcha-required"], captcha_service: "cap" }, 400);
+                if (body.password !== "hunter2")
+                    return json(
+                        { code: 50035, message: "Invalid Form Body", errors: { login: { _errors: [{ code: "INVALID_LOGIN", message: "Login or password is invalid." }] } } },
+                        400,
+                    );
+                return mfa ? json({ token: null, mfa: true, totp: true, backup: true, ticket: "ticket-1" }) : json({ token: ACCOUNT_TOKEN, user_id: "1" });
+            }
+            if (path === "/auth/mfa/totp")
+                return body.code === "123456" && body.ticket === "ticket-1" ? json({ token: ACCOUNT_TOKEN }) : json({ message: "Invalid two-factor code", code: 60008 }, 400);
+            if (path === "/users/@me") return init.headers.authorization === ACCOUNT_TOKEN ? json({ id: "1", username: "admins" }) : json({ message: "401: Unauthorized" }, 401);
+            if (path === "/auth/logout") return new Response(null, { status: 204 });
+            return json({ message: "not found" }, 404);
+        };
+        return calls;
+    }
+
+    beforeEach(() => {
+        env = { DB: fakeD1(), REGISTRY_SIGNING_KEY: SEED };
+        addInstance(env, "hub.meow.example.com");
+    });
+
+    test("signs in, keeps only the encrypted token and replaces the secrets", async () => {
+        const calls = fakeLogin();
+        env.ADMIN_CHAT_ORIGIN = "https://old.example.com";
+        env.ADMIN_CHAT_TOKEN = "old";
+        expect((await connectChatAccount(env, "tiago", { instance: "hub.meow.example.com", login: "admins", password: "wrong" })).error).toContain("Login or password is invalid");
+        const result = await connectChatAccount(env, "tiago", { instance: "hub.meow.example.com", login: "admins", password: "hunter2" });
+        expect(result.notice).toContain("Connected admins");
+        const stored = JSON.stringify(env.DB.sqlite.query("SELECT * FROM admin_chat_account").all());
+        expect(stored).not.toContain(ACCOUNT_TOKEN);
+        expect(stored).not.toContain("hunter2");
+        expect(await adminChatConfig(env)).toEqual({ origin: ORIGIN, token: ACCOUNT_TOKEN, source: "account", username: "admins", user_id: "1" });
+        expect(calls.find((call) => call.path === "/users/@me").authorization).toBe(ACCOUNT_TOKEN);
+        expect(await adminChatConfig({ ...env, REGISTRY_SIGNING_KEY: randomBase64Url(32) })).toEqual({ origin: "https://old.example.com", token: "old", source: "secrets" });
+    });
+
+    test("asks for a two-factor code and finishes with it", async () => {
+        fakeLogin({ mfa: true });
+        const first = await connectChatAccount(env, "tiago", { instance: "hub.meow.example.com", login: "admins", password: "hunter2" });
+        expect(first.mfa).toEqual({ origin: ORIGIN, ticket: "ticket-1", totp: true, backup: true });
+        expect(await adminChatConfig(env)).toBeNull();
+        expect((await finishChatAccountMfa(env, "tiago", { instance: "hub.meow.example.com", ticket: "ticket-1", method: "totp", code: "000000" })).error).toContain(
+            "Invalid two-factor code",
+        );
+        const done = await finishChatAccountMfa(env, "tiago", { instance: "hub.meow.example.com", ticket: "ticket-1", method: "totp", code: "123 456" });
+        expect(done.notice).toContain("Connected");
+        expect((await adminChatConfig(env)).token).toBe(ACCOUNT_TOKEN);
+    });
+
+    test("explains a captcha and refuses instances that aren't approved", async () => {
+        fakeLogin({ captcha: true });
+        expect((await connectChatAccount(env, "tiago", { instance: "hub.meow.example.com", login: "admins", password: "hunter2" })).error).toContain("captcha");
+        addInstance(env, "pending.example.com", "pending");
+        expect((await connectChatAccount(env, "tiago", { instance: "pending.example.com", login: "admins", password: "hunter2" })).error).toBe("Pick an approved instance");
+    });
+
+    test("disconnecting signs the token out and forgets it", async () => {
+        const calls = fakeLogin();
+        await connectChatAccount(env, "tiago", { instance: "hub.meow.example.com", login: "admins", password: "hunter2" });
+        const result = await disconnectChatAccount(env, "tiago");
+        expect(result.notice).toContain("signed its token out");
+        expect(calls.at(-1)).toEqual({ path: "/auth/logout", body: {}, authorization: ACCOUNT_TOKEN });
+        expect(await adminChatConfig(env)).toBeNull();
+        expect((await disconnectChatAccount(env, "tiago")).error).toBe("No account is connected");
     });
 });

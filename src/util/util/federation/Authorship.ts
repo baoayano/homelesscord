@@ -217,10 +217,15 @@ export const authorshipSignature = (token: string) => token.split(".")[1] ?? "";
 
 export type AuthorshipCheck = { ok: true; statement: AuthorshipStatement } | { ok: false; reason: string };
 
+export interface AuthorshipAliases {
+    resolve: (canonical: string) => string;
+    variants: (message: Raw) => Raw[];
+}
+
 export function checkAuthorship(
     message: Raw,
     token: unknown,
-    options: { publicKey: string | KeyObject | null | undefined; now?: number; seen?: Map<string, string> },
+    options: { publicKey: string | KeyObject | null | undefined; now?: number; seen?: Map<string, string>; aliases?: AuthorshipAliases },
 ): AuthorshipCheck {
     const fail = (reason: string): AuthorshipCheck => ({ ok: false, reason });
     if (typeof token !== "string") return fail("no statement");
@@ -229,23 +234,27 @@ export function checkAuthorship(
     if (!statement) return fail("the statement doesn't verify");
     if (statement.v !== AUTHORSHIP_VERSION) return fail(`statement version ${statement.v} isn't known`);
     const author = objectOf(message.author);
-    if (statement.author !== author.id) return fail("the statement names another author");
+    const same = (signed: string | null, current: unknown) =>
+        signed === current ||
+        (!!options.aliases && typeof signed === "string" && typeof current === "string" && options.aliases.resolve(signed) === options.aliases.resolve(current));
+    if (!same(statement.author, author.id)) return fail("the statement names another author");
     if (statement.thread) {
         if (statement.message !== null || message.id !== message.channel_id) return fail("the statement starts a thread, but this message doesn't");
-    } else if (statement.channel !== message.channel_id) return fail("the statement names another channel");
+    } else if (!same(statement.channel, message.channel_id)) return fail("the statement names another channel");
     const now = options.now ?? Date.now();
     const at = Date.parse(statement.at);
     if (at > now + AUTHORSHIP_WINDOW) return fail("the statement is dated in the future");
     const created = snowflakeTime(message.id);
     if (created === null) return fail("the message id isn't a snowflake");
     if (statement.message !== null) {
-        if (statement.message !== message.id) return fail("the statement names another message");
+        if (!same(statement.message, message.id)) return fail("the statement names another message");
         if (at < created - AUTHORSHIP_WINDOW) return fail("the statement is older than the message");
     } else {
         if (Math.abs(created - at) > AUTHORSHIP_WINDOW) return fail("the message wasn't created when the statement was signed");
         if (message.nonce !== undefined && message.nonce !== null && String(message.nonce) !== statement.nonce) return fail("the statement names another nonce");
     }
-    if (statement.content !== contentDigest(message)) return fail("the content doesn't match the statement");
+    if (statement.content !== contentDigest(message) && !options.aliases?.variants(message).some((variant) => contentDigest(variant) === statement.content))
+        return fail("the content doesn't match the statement");
     if (!attachmentsMatch(statement.attachments, message)) return fail("the attachments don't match the statement");
     if (statement.message === null && options.seen) {
         const signature = authorshipSignature(token);
@@ -303,6 +312,7 @@ export interface GuardOptions {
     fresh: boolean;
     now?: number;
     seen?: Map<string, string>;
+    aliases?: AuthorshipAliases;
     onRefused?: (message: Raw, reason: string) => void;
 }
 
@@ -322,7 +332,7 @@ export function guardWireMessages(value: unknown, options: GuardOptions): { top:
             state = !(isTop && options.fresh) && created !== null && created < options.cutoff ? "legacy" : "unverified";
             if (state === "unverified") options.onRefused?.(message, "no statement");
         } else {
-            const result = checkAuthorship(message, token, { publicKey: options.keys.get(instance), now: options.now, seen: options.seen });
+            const result = checkAuthorship(message, token, { publicKey: options.keys.get(instance), now: options.now, seen: options.seen, aliases: options.aliases });
             state = result.ok ? "verified" : "unverified";
             if (!result.ok) options.onRefused?.(message, result.reason);
         }

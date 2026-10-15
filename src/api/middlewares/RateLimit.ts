@@ -304,6 +304,7 @@ export async function initRateLimits(app: Router) {
     const userProfile = rateLimit({ bucket: "PATCH users/@me", ...routes.userProfile });
     app.patch("/users/:user_id", (req, res, next) => ([req.user_id, "@me"].includes(`${req.params.user_id}`) ? userProfile(req, res, next) : next()));
     app.use("/users/@me/instance-invites", rateLimit({ bucket: "users/@me/instance-invites", ...routes.instanceInvite }));
+    app.get(["/federation/discovery", "/federation/discovery/guilds/:guild_id"], rateLimit({ bucket: "GET federation/discovery", count: 60, window: 30 }));
     const userWrites = rateLimit({ onlyWrites: true, ...routes.user });
     app.use("/users/:user_id", (req, res, next) =>
         ![req.user_id, "@me"].includes(`${req.params.user_id}`) || req.path.startsWith("/e2ee/") ? next() : userWrites(req, res, next),

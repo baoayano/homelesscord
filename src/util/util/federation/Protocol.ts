@@ -2,6 +2,7 @@
 import crypto, { KeyObject } from "node:crypto";
 import { isIP } from "node:net";
 import { discoveryCategoryIds, discoveryKeywords } from "../DiscoverySearch";
+import { cleanRegistryMoves, isEnvelope, MAX_PREVIOUS_IDS, RegistryMove } from "./Moves";
 
 export const FEDERATION_PROTOCOL = 2;
 export const REGISTRY_KEY_ID = "registry-1";
@@ -51,7 +52,23 @@ export interface DiscoveryGuild {
     category_ids?: number[];
     presence_count?: number;
     active_at?: string | null;
+    splash_url?: string | null;
+    welcome?: DiscoveryWelcome | null;
 }
+
+export interface DiscoveryWelcomeChannel {
+    name: string;
+    description: string;
+    emoji_name: string | null;
+    emoji_url: string | null;
+}
+
+export interface DiscoveryWelcome {
+    description: string;
+    channels: DiscoveryWelcomeChannel[];
+}
+
+export const MAX_WELCOME_CHANNELS = 5;
 
 export interface RegistryDocument {
     version: number;
@@ -62,6 +79,7 @@ export interface RegistryDocument {
     instances: RegistryInstance[];
     blocked: { instances: RegistryBlock[]; guilds: RegistryBlock[]; users: RegistryBlock[] };
     discovery: DiscoveryGuild[];
+    moves: RegistryMove[];
 }
 
 export interface WellKnownDocument {
@@ -77,6 +95,7 @@ export interface WellKnownDocument {
     registration: RegistrationState;
     federation: { enabled: boolean; accepts_unlisted: boolean };
     discovery_url: string;
+    moved_from?: SignedEnvelope[];
 }
 
 export interface LocalBlockLists {
@@ -194,6 +213,22 @@ const text = (value: unknown, max: number) => (typeof value === "string" ? value
 const optionalUrl = (value: unknown) => (typeof value === "string" && /^https?:\/\//.test(value) && URL.canParse(value) ? value : null);
 const time = (value: unknown) => (typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null);
 
+export const cleanDiscoveryWelcome = (value: unknown): DiscoveryWelcome | null => {
+    if (!value || typeof value !== "object") return null;
+    const raw = value as Record<string, unknown>;
+    const channels = (Array.isArray(raw.channels) ? raw.channels : [])
+        .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && typeof entry.name === "string" && !!entry.name.trim())
+        .slice(0, MAX_WELCOME_CHANNELS)
+        .map((entry) => ({
+            name: text(entry.name, 100),
+            description: text(entry.description, 100),
+            emoji_name: text(entry.emoji_name, 32) || null,
+            emoji_url: optionalUrl(entry.emoji_url),
+        }));
+    const description = text(raw.description, 300);
+    return description || channels.length ? { description, channels } : null;
+};
+
 const cleanBlocks = (value: unknown, valid: (id: unknown) => boolean): RegistryBlock[] =>
     (Array.isArray(value) ? value : [])
         .filter((entry) => entry && typeof entry === "object" && valid(entry.id))
@@ -242,6 +277,8 @@ export const cleanDiscoveryGuild = (entry: unknown, instance?: string): Discover
         ...(Array.isArray(raw.category_ids) && { category_ids: discoveryCategoryIds(raw.category_ids) }),
         ...(raw.presence_count !== undefined && { presence_count: Number.isSafeInteger(online) && online > 0 ? Math.min(online, memberCount) : 0 }),
         ...(raw.active_at !== undefined && { active_at: time(raw.active_at) }),
+        ...(raw.splash_url !== undefined && { splash_url: optionalUrl(raw.splash_url) }),
+        ...(raw.welcome !== undefined && { welcome: cleanDiscoveryWelcome(raw.welcome) }),
     };
 };
 
@@ -270,6 +307,7 @@ export const acceptRegistryDocument = (envelope: unknown, options: { publicKey: 
             users: cleanBlocks(blocked.users, (id) => !!parseCanonicalId(id)),
         },
         discovery: (Array.isArray(payload.discovery) ? payload.discovery : []).flatMap((entry) => cleanDiscoveryGuild(entry) ?? []),
+        moves: cleanRegistryMoves(payload.moves),
     };
     return { document, payload: bytes.toString("utf8") };
 };
@@ -302,6 +340,10 @@ export const parseWellKnown = (value: unknown, expectedId: string) => {
         protocol: Number.isSafeInteger(raw.protocol) ? (raw.protocol as number) : 0,
         registration: REGISTRATION_STATES.includes(raw.registration as RegistrationState) ? (raw.registration as RegistrationState) : "closed",
         discovery_url: discovery && instanceIdFromUrl(discovery) === expectedId ? discovery : `${url.replace(/\/+$/, "")}/.well-known/meowcord/discovery`,
+        moved_from: (Array.isArray(raw.moved_from) ? raw.moved_from : [])
+            .filter(isEnvelope)
+            .slice(0, MAX_PREVIOUS_IDS)
+            .map((entry) => ({ payload: entry.payload, signature: entry.signature, key_id: entry.key_id })),
     };
 };
 
@@ -547,9 +589,11 @@ type TrustOptions = {
     allowUnlistedPeers: boolean;
     peers: string[];
     peerProtocol?: number | null;
+    movedTo?: string | null;
+    bridge?: { from: string; public_key: string } | null;
 };
 
-export type DistrustReason = "disabled" | "no_registry" | "invalid" | "own" | "blocked" | "inactive" | "no_key" | "old_protocol" | "unlisted" | "peer_unreadable";
+export type DistrustReason = "disabled" | "no_registry" | "invalid" | "own" | "blocked" | "inactive" | "no_key" | "old_protocol" | "unlisted" | "peer_unreadable" | "moved";
 
 export type TrustDecision =
     | { trust: { source: "registry"; public_key: string } | { source: "peer"; public_key: null }; reason: null; detail: null }
@@ -564,8 +608,19 @@ export const federationTrustDecision = (options: TrustOptions): TrustDecision =>
     if (!isInstanceId(id)) return refuse("invalid", `${id} isn't a valid instance id.`);
     if (id === ownId) return refuse("own", `${id} is this instance.`);
     if (blockSets(options.document, options.local).instance(id)) return refuse("blocked", `${id} is blocked on ${self}.`);
+    if (options.movedTo && options.movedTo !== id) return refuse("moved", `${id} moved to ${options.movedTo}, and requests now go to and come from ${options.movedTo}.`);
     const minimum = Math.max(2, options.document.min_protocol);
     const listed = options.document.instances.find((instance) => instance.id === id);
+    if (!listed && options.bridge) {
+        const source = options.document.instances.find((instance) => instance.id === options.bridge?.from);
+        if (
+            source?.state === "active" &&
+            source.public_key === options.bridge.public_key &&
+            source.protocol >= minimum &&
+            !blockSets(options.document, options.local).instance(source.id)
+        )
+            return { trust: { source: "registry", public_key: source.public_key }, reason: null, detail: null };
+    }
     if (listed) {
         if (listed.state !== "active") return refuse("inactive", `The registry lists ${id} as ${listed.state}, and only active instances federate.`);
         if (!listed.public_key) return refuse("no_key", `The registry has no federation key for ${id}.`);

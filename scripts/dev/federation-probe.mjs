@@ -614,6 +614,12 @@ async function discoveryCases({ alice, admin, bob, guildId, canonicalGuild }) {
     const adminB = await register(B, "discoveryadmin");
     psql(B.db, `UPDATE users SET rights = '1' WHERE id = '${adminB.id}'`);
     const metadata = await call(A, "PATCH", `/guilds/${guildId}/discovery-metadata`, alice.token, { primary_category_id: 2, keywords: ["Whiskers"] });
+    const textChannel = (await call(A, "GET", `/guilds/${guildId}/channels`, alice.token)).body?.find((channel) => channel.type === 0);
+    const welcomeScreen = await call(A, "PATCH", `/guilds/${guildId}/welcome-screen`, alice.token, {
+        enabled: true,
+        description: "Say hi to the cats",
+        welcome_channels: [{ channel_id: textChannel?.id, description: "Start here", emoji_name: "👋" }],
+    });
     check(
         "the owner saves discovery keywords and a category",
         metadata.status === 200 && metadata.body?.keywords?.[0] === "Whiskers",
@@ -635,6 +641,15 @@ async function discoveryCases({ alice, admin, bob, guildId, canonicalGuild }) {
         "the discovery list carries keywords, categories, the online count and activity",
         entry?.keywords?.includes("Whiskers") && entry?.category_ids?.[0] === 2 && typeof entry?.presence_count === "number" && "active_at" in entry,
         JSON.stringify(entry),
+    );
+    check(
+        "the discovery list carries the welcome screen with channel names",
+        welcomeScreen.status === 200 &&
+            entry?.welcome?.description === "Say hi to the cats" &&
+            entry?.welcome?.channels?.[0]?.name === textChannel?.name &&
+            entry?.welcome?.channels?.[0]?.emoji_name === "👋" &&
+            "splash_url" in entry,
+        `${welcomeScreen.status} ${JSON.stringify(entry?.welcome)}`,
     );
     registryDiscovery.push(...published.map((guild) => ({ ...guild, instance: A.id, verified_at: new Date().toISOString() })));
     registryBlockedGuilds.push({ id: spam.canonical, reason: "probe", at: null });
@@ -688,6 +703,41 @@ async function discoveryCases({ alice, admin, bob, guildId, canonicalGuild }) {
         "a search with no match answers an empty page",
         none.status === 200 && none.body?.total === 0 && Array.isArray(none.body?.instances),
         JSON.stringify(none.body).slice(0, 200),
+    );
+    const onA = await search({ instance: A.id.toUpperCase() });
+    const onNowhere = await search({ instance: "nowhere.example" });
+    const instanceRow = onA.body?.instances?.find((row) => row.id === A.id);
+    check(
+        "the list filters by instance and counts each instance's servers",
+        ids(onA).includes(canonicalGuild) && onA.body?.instance === A.id && onNowhere.body?.total === 0 && instanceRow?.guild_count >= 1,
+        `${JSON.stringify(ids(onA))} ${onNowhere.body?.total} ${JSON.stringify(instanceRow)}`,
+    );
+    const sorts = await Promise.all(["members", "newest", "active", "bogus"].map((sort) => search({ sort })));
+    check(
+        "the list sorts by members, newest and activity and falls back to relevance",
+        sorts.every((r) => r.status === 200 && ids(r).includes(canonicalGuild)) && sorts.map((r) => r.body?.sort).join() === "members,newest,active,relevance",
+        sorts.map((r) => `${r.status}:${r.body?.sort}`).join(" "),
+    );
+    check(
+        "list pages leave the welcome screen out and say whether there is one",
+        card?.has_welcome === true && !("welcome" in card) && typeof card?.created_at === "string",
+        JSON.stringify(card).slice(0, 400),
+    );
+    const preview = await call(B, "GET", `/federation/discovery/guilds/${encodeURIComponent(canonicalGuild)}`, bob.token);
+    check(
+        "the preview answers one server with its welcome screen and instance from the cached listing",
+        preview.status === 200 &&
+            preview.body?.id === canonicalGuild &&
+            preview.body?.welcome?.channels?.[0]?.name === textChannel?.name &&
+            preview.body?.instance_url === A.origin &&
+            preview.body?.joined_guild_id === null,
+        `${preview.status} ${JSON.stringify(preview.body).slice(0, 400)}`,
+    );
+    const missing = await Promise.all([spam.canonical, "not-an-id", `@1@${A.id}`].map((id) => call(B, "GET", `/federation/discovery/guilds/${encodeURIComponent(id)}`, bob.token)));
+    check(
+        "the preview refuses hidden, unknown and malformed ids",
+        missing.every((r) => r.status === 404),
+        missing.map((r) => r.status).join(","),
     );
 }
 
@@ -936,6 +986,140 @@ async function hostJoinCases({ alice, admin, bob, inviteCode, guildId, textId, m
     await call(A, "PATCH", "/admin/federation/settings", admin.token, { peers: [B.id] });
 }
 
+async function moveCases({ alice, admin, bob, carol, adminB, bobOnA, text, inviteCode }) {
+    const oldId = B.id;
+    const newId = `127.0.0.1:${B.port}`;
+    const blocks = await call(A, "GET", "/admin/federation/blocks", admin.token);
+    for (const block of blocks.body ?? []) if (block.kind === "instance" && block.target === oldId) await call(A, "DELETE", `/admin/federation/blocks/${block.id}`, admin.token);
+    const carolBlock = await call(A, "POST", "/admin/federation/blocks", admin.token, { kind: "user", target: `@${carol.id}@${oldId}`, reason: "probe" });
+    check("an admin blocks carol before her instance moves", carolBlock.status === 201, `${carolBlock.status} ${JSON.stringify(carolBlock.body)}`);
+    const oldKey = (await fetch(`${B.origin}/.well-known/meowcord`).then((response) => response.json()))?.public_key;
+
+    await stopInstance(B);
+    const configFile = path.join(B.dir, "config.json");
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    const origin = `http://${newId}`;
+    config.general = { ...config.general, serverName: origin };
+    config.api = { ...config.api, endpointPublic: `${origin}/api/v9` };
+    config.cdn = { ...config.cdn, endpointPublic: `${origin}/` };
+    config.gateway = { ...config.gateway, endpointPublic: `${origin.replace(/^http/, "ws")}/` };
+    config.federation = { ...config.federation, previousIds: [oldId] };
+    writeFileSync(configFile, JSON.stringify(config, null, 2));
+    B.id = newId;
+    B.origin = origin;
+    B.api = `${origin}/api/v9`;
+    await call(A, "PATCH", "/admin/federation/settings", admin.token, { peers: [oldId, newId] });
+    await spawnInstance(B);
+
+    const early = await call(A, "GET", `/federation/users/lookup?handle=${encodeURIComponent(`${bob.username}@${newId}`)}`, alice.token);
+    const duplicate = early.body?.id;
+    check(
+        "before the move reaches alice's instance, a lookup of bob under the new id makes a second copy of him",
+        early.status === 200 && !!duplicate && duplicate !== bobOnA,
+        `${early.status} ${JSON.stringify(early.body).slice(0, 200)}`,
+    );
+
+    const wellKnown = await fetch(`${origin}/.well-known/meowcord`).then((response) => response.json());
+    const statement = wellKnown?.moved_from?.[0];
+    const statementBody = statement && JSON.parse(Buffer.from(statement.payload, "base64url").toString("utf8"));
+    check(
+        "the moved instance serves a move statement signed with its key",
+        wellKnown?.id === newId &&
+            wellKnown?.public_key === oldKey &&
+            statement?.key_id === oldId &&
+            statementBody?.type === "instance_move" &&
+            statementBody.from === oldId &&
+            statementBody.to === newId &&
+            verify(
+                null,
+                Buffer.from(statement.payload, "base64url"),
+                createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: oldKey }, format: "jwk" }),
+                Buffer.from(statement.signature, "base64url"),
+            ),
+        JSON.stringify(wellKnown?.moved_from ?? null).slice(0, 300),
+    );
+
+    const applied = async () => (await call(A, "GET", "/admin/federation/moves", admin.token)).body?.moves?.find((move) => move.from === oldId && move.to === newId);
+    check("alice's instance applies the move the moved instance sent", await until(async () => (await applied())?.status === "applied", 45000), JSON.stringify(await applied()));
+    const move = await applied();
+    check(
+        "the admin page lists what the move rewrote",
+        move?.source === "direct" && move.proof_kind === "statement" && move.counts?.users >= 3 && move.counts?.objects >= 4 && move.counts?.merged_users === 1,
+        JSON.stringify(move).slice(0, 400),
+    );
+    check(
+        "the duplicate of bob is retired and the old copy keeps its id",
+        move?.counts?.retired?.some((entry) => entry.loser === duplicate && entry.winner === bobOnA && entry.kind === "user") &&
+            psql(A.db, `SELECT deleted FROM users WHERE id = '${duplicate}'`) === "t" &&
+            psql(A.db, `SELECT username || ' ' || federated_instance FROM users WHERE id = '${bobOnA}'`) === `${bob.username}@${newId} ${newId}`,
+        `${psql(A.db, `SELECT deleted FROM users WHERE id = '${duplicate}'`)} ${psql(A.db, `SELECT username || ' ' || federated_instance FROM users WHERE id = '${bobOnA}'`)}`,
+    );
+    const leftovers = [
+        `SELECT count(*) FROM federated_objects WHERE instance = '${oldId}'`,
+        `SELECT count(*) FROM users WHERE federated_instance = '${oldId}'`,
+        `SELECT count(*) FROM guilds WHERE federated_instance = '${oldId}'`,
+        `SELECT count(*) FROM channels WHERE federated_instance = '${oldId}'`,
+        `SELECT count(*) FROM federation_outbox WHERE instance = '${oldId}'`,
+    ].map((sql) => psql(A.db, sql));
+    check(
+        "no row on alice's instance names the old id any more",
+        leftovers.every((count) => count === "0"),
+        leftovers.join(","),
+    );
+    const blocksAfter = await call(A, "GET", "/admin/federation/blocks", admin.token);
+    check(
+        "the block on carol is carried over and the old block stays",
+        [`@${carol.id}@${newId}`, `@${carol.id}@${oldId}`].every((target) => blocksAfter.body?.some((block) => block.kind === "user" && block.target === target)),
+        JSON.stringify(blocksAfter.body?.map((block) => block.target)),
+    );
+    const settings = await call(A, "GET", "/admin/federation", admin.token);
+    check("the peer list now names the new id only", JSON.stringify(settings.body?.settings?.peers) === JSON.stringify([newId]), JSON.stringify(settings.body?.settings?.peers));
+
+    const oldHandle = await call(A, "GET", `/federation/users/lookup?handle=${encodeURIComponent(`${bob.username}@${oldId}`)}`, alice.token);
+    check("a lookup of bob's old handle finds the same user", oldHandle.body?.id === bobOnA, `${oldHandle.status} ${JSON.stringify(oldHandle.body).slice(0, 200)}`);
+    const oldCanonical = `@${bob.id}@${oldId}`;
+    const resolved = await call(A, "GET", `/federation/objects?canonical=${encodeURIComponent(oldCanonical)}`, alice.token);
+    check("bob's old canonical id still resolves to him", resolved.body?.[oldCanonical] === bobOnA, JSON.stringify(resolved.body));
+    const moves = await call(A, "GET", "/federation/moves", alice.token);
+    check("clients can read the move", moves.body?.moved?.[oldId] === newId, JSON.stringify(moves.body));
+    const own = await call(B, "GET", "/federation/moves", bob.token);
+    check("the moved instance lists its previous id", own.body?.instance === newId && own.body?.previous?.includes(oldId), JSON.stringify(own.body));
+
+    const gA = gateway(alice);
+    const gB = gateway(bob);
+    await Promise.all([gA.ready, gB.ready]);
+    const rejoin = await call(B, "POST", `/federation/invites/${A.id}/${inviteCode}`, bob.token);
+    const mirrorCreate = await gB.waitFor("GUILD_CREATE", (d) => d.id === rejoin.body?.guild_id);
+    const mirrorText = mirrorCreate?.channels?.find((channel) => channel.name === text.name);
+    const aliceSeesJoin = await gA.waitFor("GUILD_MEMBER_ADD", (d) => d.user?.id === bobOnA);
+    check(
+        "bob joins alice's server again from the new id as the same user",
+        rejoin.status === 200 && !!mirrorText && aliceSeesJoin?.user?.username === `${bob.username}@${B.id}`,
+        `${rejoin.status} ${JSON.stringify(rejoin.body).slice(0, 200)} ${JSON.stringify(aliceSeesJoin?.user ?? null)}`,
+    );
+    await call(A, "POST", `/channels/${text.id}/messages`, alice.token, { content: "after the move from a" });
+    const toB = await gB.waitFor("MESSAGE_CREATE", (d) => d.content === "after the move from a", 30000);
+    check(
+        "bob still gets alice's messages after his instance moved",
+        !!toB && toB.channel_id === mirrorText?.id,
+        `${JSON.stringify(toB ?? null).slice(0, 200)} outbox ${psql(A.db, "SELECT string_agg(instance || ':' || n, ',') FROM (SELECT instance, count(*) AS n FROM federation_outbox GROUP BY instance) t")} delivery ${JSON.stringify((await call(A, "GET", "/admin/federation/delivery", admin.token)).body).slice(0, 400)}`,
+    );
+    const sent = await call(B, "POST", `/channels/${mirrorText?.id}/messages`, bob.token, { content: "after the move from b" });
+    const toA = await gA.waitFor("MESSAGE_CREATE", (d) => d.content === "after the move from b", 30000);
+    check(
+        "alice gets bob's messages from the new id under the same user",
+        sent.status === 200 && toA?.author?.id === bobOnA && toA.author.username === `${bob.username}@${newId}`,
+        `${sent.status} ${JSON.stringify(sent.body).slice(0, 300)} ${JSON.stringify(toA?.author ?? null)}`,
+    );
+    const ownMoves = await call(B, "GET", "/admin/federation/moves", adminB.token);
+    check(
+        "the moved instance's admin page shows the statement it sent",
+        ownMoves.body?.own?.previous_ids?.includes(oldId) && ownMoves.body.own.statements.some((entry) => entry.from === oldId && entry.to === newId && entry.delivered),
+        JSON.stringify(ownMoves.body?.own).slice(0, 300),
+    );
+    for (const socket of [gA, gB]) socket.close();
+}
+
 async function cleanup() {
     for (const child of servers) child.kill("SIGTERM");
     await fakeClose().catch(() => undefined);
@@ -1066,6 +1250,13 @@ async function main() {
     const mirror = join.body?.guild_id;
     const created = await gB.waitFor("GUILD_CREATE", (d) => d.id === mirror);
     check("bob's gateway gets GUILD_CREATE for the mirror", !!created && created.properties?.name === "Federated cats");
+    const joinedCard = (await call(B, "GET", `/federation/discovery?${new URLSearchParams({ query: "federated cats" })}`, bob.token)).body?.guilds?.[0];
+    const joinedPreview = await call(B, "GET", `/federation/discovery/guilds/${encodeURIComponent(canonicalGuild)}`, bob.token);
+    check(
+        "the directory and the preview mark the server bob joined with his local mirror",
+        joinedCard?.joined_guild_id === mirror && joinedPreview.body?.joined_guild_id === mirror,
+        `${JSON.stringify(joinedCard).slice(0, 300)} ${joinedPreview.status}`,
+    );
     check("the mirror's GUILD_CREATE names its instance", created?.federated_instance === A.id, String(created?.federated_instance));
     const mirrorText = created?.channels?.find((channel) => channel.name === text.name);
     check("the mirror has the text channel", !!mirrorText);
@@ -1728,6 +1919,7 @@ async function main() {
     check("the admin page lists delivery state", delivery.status === 200 && Array.isArray(delivery.body?.instances), `${delivery.status}`);
 
     for (const socket of [gA, gB, gC, gD]) socket.close();
+    if (!publicMode) await moveCases({ alice, admin, bob, carol, adminB, bobOnA, text, inviteCode: invite.body.code });
 }
 
 try {

@@ -1,14 +1,26 @@
 import { blockFor, hitRateLimit, logEvent, nowIso, removeBlock, setBlock } from "../db.js";
 import { refreshInstance } from "../instances.js";
+import { approveMove } from "../moves.js";
 import { allowsPrivateHosts, parseInstanceId, rateLimitBucket } from "../net.js";
 import { currentPublication, instanceState, publish } from "../registry.js";
 import { announceHealth, currentSnapshot, instanceSeries, RANGES, rangeFrom, snapshotSeries } from "../stats.js";
-import { ADMIN_CHAT_NAME, adminChatConfig, chatContacts, chatState, closeAdminChat, openAdminChat } from "./chat.js";
+import {
+    ADMIN_CHAT_NAME,
+    adminChatConfig,
+    chatAccountOrigins,
+    chatContacts,
+    chatState,
+    closeAdminChat,
+    connectChatAccount,
+    disconnectChatAccount,
+    finishChatAccountMfa,
+    openAdminChat,
+} from "./chat.js";
 import { ago, chartScript, formatNumber, healthBar, lineChart, sparkline, statCard } from "./charts.js";
 import { html, page, time } from "./html.js";
 import { currentSession, endSession, finishLogin, oidcConfigured, startLogin } from "./oidc.js";
 
-const instanceFilters = ["pending", "approved", "suspended", "blocked", "all"];
+const instanceFilters = ["pending", "approved", "suspended", "blocked", "moved", "all"];
 const discoveryFilters = ["pending", "verified", "rejected", "blocked", "all"];
 
 function redirect(location, notice, isError = false) {
@@ -40,6 +52,11 @@ function stateBadge(state) {
             listed: "good",
             pending: "warn",
             suspended: "warn",
+            waiting: "warn",
+            moved: "",
+            applied: "good",
+            refused: "bad",
+            reversed: "",
             blocked: "bad",
             rejected: "bad",
             error: "bad",
@@ -78,7 +95,7 @@ function instanceItem(row, back, stats = undefined, days = 30) {
     const state = row.blocked ? "blocked" : instanceState(row);
     const actions = [];
     if (row.blocked) actions.push(["unblock", "Unblock", ""]);
-    else {
+    else if (row.status !== "moved") {
         if (row.status !== "approved") actions.push(["approve", "Approve", "primary"]);
         if (row.status !== "suspended") actions.push(["suspend", "Suspend", ""]);
         actions.push(["block", "Block", "danger"]);
@@ -87,7 +104,7 @@ function instanceItem(row, back, stats = undefined, days = 30) {
     if (row.pending_public_key) actions.push(["accept_key", "Accept the new key", ""]);
     actions.push(["refresh", "Check now", ""]);
     return html`<article class="card item" id="instance-${row.id}">
-<div class="item-head"><h3>${row.name || row.id}</h3>${stateBadge(state)}${row.in_github ? html`<span class="badge">instances.json</span>` : ""}${row.pending_public_key ? html`<span class="badge bad">new key waiting</span>` : ""}</div>
+<div class="item-head"><h3>${row.name || row.id}</h3>${stateBadge(state)}${row.moved_to ? html`<span class="badge">moved to ${row.moved_to}</span>` : ""}${row.in_github ? html`<span class="badge">instances.json</span>` : ""}${row.pending_public_key ? html`<span class="badge bad">new key waiting</span>` : ""}</div>
 ${row.description ? html`<p class="description">${row.description}</p>` : ""}
 ${stats === undefined ? "" : instanceStats(stats, days)}
 <div class="meta">
@@ -151,16 +168,31 @@ function filterLinks(base, filters, current, extra = "") {
     )}</div>`;
 }
 
-function adminChatCard(config, chat, contacts) {
+function chatAccountForm(origins) {
+    if (!origins.length) return html`<p class="muted">No approved instance has an address the registry can sign in to yet.</p>`;
+    return html`<form class="form-grid" method="post" action="/admin/chat">
+<input type="hidden" name="action" value="connect">
+<label>Instance<select name="instance" required>${origins.map((row) => html`<option value="${row.id}">${row.id}</option>`)}</select></label>
+<label>Email or username<input type="text" name="login" required autocomplete="username" spellcheck="false"></label>
+<label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+<button type="submit" class="primary">Connect account</button>
+</form>`;
+}
+
+function adminChatCard(config, chat, contacts, origins) {
     const disabled = config ? "" : html` disabled`;
+    const account =
+        config?.source === "account"
+            ? html`<div class="meta"><span>Signed in as ${config.username} on ${config.origin}</span></div>
+<form class="actions" method="post" action="/admin/chat"><button type="submit" name="action" value="disconnect" class="danger">Disconnect account</button></form>`
+            : config
+              ? html`<div class="meta"><span>Account on ${config.origin}, from the ADMIN_CHAT_ORIGIN and ADMIN_CHAT_TOKEN secrets</span></div>
+<p class="muted">Connecting an account below replaces the secrets.</p>${chatAccountForm(origins)}`
+              : html`<p class="muted">No account is connected. Sign in to the ${ADMIN_CHAT_NAME} account on its instance. The registry keeps only the session token, encrypted, and never the password. Disconnecting signs that token out.</p>${chatAccountForm(origins)}`;
     return html`<div class="card item">
 <div class="item-head"><h3>${ADMIN_CHAT_NAME}</h3>${stateBadge(chat ? "open" : "closed")}</div>
 <p class="description">A group DM between the ${ADMIN_CHAT_NAME} account and the admins every approved instance sends with its announce. ${contacts.length} ${contacts.length === 1 ? "admin is" : "admins are"} known right now. Opening it again adds admins who are missing.</p>
-${
-    config
-        ? html`<div class="meta"><span>Account on ${config.origin}</span></div>`
-        : html`<div class="error-text">Set the ADMIN_CHAT_ORIGIN and ADMIN_CHAT_TOKEN secrets with wrangler secret put to use this. ADMIN_CHAT_ORIGIN is the https address of the instance that holds the ${ADMIN_CHAT_NAME} account, ADMIN_CHAT_TOKEN is that account's token.</div>`
-}
+${account}
 ${
     chat
         ? html`<div class="meta"><span>Channel ${chat.channel_id}</span><span>${chat.member_count} members</span><span>Opened ${time(chat.opened_at)}${chat.opened_by ? ` by ${chat.opened_by}` : ""}</span><span>Updated ${time(chat.updated_at)}</span></div>`
@@ -176,6 +208,26 @@ ${
 <button type="submit" name="action" value="close" class="danger"${chat ? disabled : html` disabled`}>Close admin group chat</button>
 </form>
 </div>`;
+}
+
+function chatMfaPage(session, instance, mfa) {
+    const methods = [mfa.totp && ["totp", "Authenticator app code"], mfa.backup && ["backup", "Backup code"]].filter(Boolean);
+    return page({
+        title: "Two-factor code",
+        session,
+        body: html`<h1>Two-factor code</h1>
+<p class="muted">The ${ADMIN_CHAT_NAME} account on ${mfa.origin} has two-factor authentication on. Enter a code to finish connecting it. The code works once and expires with this sign-in after a few minutes.</p>
+<form class="card form-grid" method="post" action="/admin/chat">
+<input type="hidden" name="action" value="mfa">
+<input type="hidden" name="instance" value="${instance}">
+<input type="hidden" name="ticket" value="${mfa.ticket}">
+<label>Type<select name="method">${methods.map(([value, label]) => html`<option value="${value}">${label}</option>`)}</select></label>
+<label>Code<input type="text" name="code" required autocomplete="one-time-code" inputmode="numeric" spellcheck="false"></label>
+<span></span>
+<button type="submit" class="primary">Connect account</button>
+</form>
+<p><a href="/admin">Cancel and go to the overview</a></p>`,
+    });
 }
 
 function rangeLinks(base, days, extra = "") {
@@ -219,7 +271,7 @@ async function overview(env, session, url) {
         snapshotSeries(env, days, now),
         announceHealth(env, days, now),
     ]);
-    const chatConfig = adminChatConfig(env);
+    const [chatConfig, origins] = await Promise.all([adminChatConfig(env), chatAccountOrigins(env)]);
     const { times, values } = history;
     const withLive = (field) => [...values[field].slice(0, -1), live[field]];
     const empty = "No snapshots yet. The hourly cron job writes one at 17 minutes past each hour.";
@@ -268,7 +320,7 @@ ${
 <form class="actions" method="post" action="/admin/publish"><button type="submit" class="primary">Sign and publish now</button></form>
 </div>
 <h2>Admin group chat</h2>
-${adminChatCard(chatConfig, chat, contacts)}
+${adminChatCard(chatConfig, chat, contacts, origins)}
 <h2>Instances waiting for review</h2>
 ${pendingInstances.results.length ? html`<div class="list">${pendingInstances.results.map((row) => instanceItem(row, "/admin"))}</div>` : html`<div class="card empty">No instance is waiting. New ones show up here when they announce themselves.</div>`}
 <h2>Servers listed most recently</h2>
@@ -283,6 +335,7 @@ async function instancesPage(env, session, url) {
         approved: "i.status = 'approved' AND b.id IS NULL",
         suspended: "i.status = 'suspended' AND b.id IS NULL",
         blocked: "b.id IS NOT NULL",
+        moved: "i.status = 'moved'",
         all: "1 = 1",
     }[status];
     const days = rangeFrom(url.searchParams.get("range"));
@@ -337,6 +390,50 @@ ${
         : html`<div class="card empty">Nothing is blocked. Add an instance, server or user above to block it everywhere.</div>`
 }`;
     return page({ title: "Blocks", body, session, path: "/admin/blocks", ...noticeFrom(url) });
+}
+
+function moveItem(row) {
+    const proofText =
+        row.review === "admin"
+            ? `approved by ${row.reviewed_by ?? "an admin"}`
+            : row.proof_kind === "statement"
+              ? "move statement signed with the old key"
+              : row.proof_kind === "announce"
+                ? "announce signed with the old key"
+                : "no proof yet";
+    const keyChanged = row.public_key && row.new_public_key && row.public_key !== row.new_public_key;
+    return html`<article class="card item" id="move-${row.from_id}">
+<div class="item-head"><h3>${row.from_id} to ${row.to_id}</h3>${stateBadge(row.status)}${keyChanged ? html`<span class="badge bad">new key</span>` : ""}</div>
+${row.reason ? html`<p class="description">${row.reason}</p>` : ""}
+<div class="meta">
+<span>Proof: ${proofText}</span>
+<span>Old key ${shortKey(row.public_key)}</span>
+<span>New key ${shortKey(row.new_public_key)}</span>
+<span>Moved ${time(row.at)}</span>
+<span>Checked ${time(row.updated_at)}</span>
+</div>
+${
+    row.status === "waiting"
+        ? html`<form class="actions" method="post" action="/admin/moves">
+<input type="hidden" name="from" value="${row.from_id}">
+<button type="submit" name="action" value="approve" class="primary">Approve the move</button>
+</form>`
+        : ""
+}
+</article>`;
+}
+
+async function movesPage(env, session, url) {
+    const { results } = await env.DB.prepare("SELECT * FROM instance_moves ORDER BY status = 'waiting' DESC, updated_at DESC LIMIT 500").all();
+    const body = html`<h1>Moves</h1>
+<p class="muted">Instances that changed their id through previous_ids in instances.json. The cron job applies a move when the new host serves a move statement or an announce signed with the key the old id had and the key stays the same. A move that changes the key, or has no proof because the instance lost its old key, waits here. Approve it only after you confirmed with the instance's admins that they run both ids. Approving carries the status, servers, contacts, stats and blocks over to the new id and never clears a block or suspension.</p>
+${results.length ? html`<div class="list">${results.map((row) => moveItem(row))}</div>` : html`<div class="card empty">No instance has moved. Moves show up here after an entry in instances.json lists previous_ids.</div>`}`;
+    return page({ title: "Moves", body, session, path: "/admin/moves", ...noticeFrom(url) });
+}
+
+async function moveAction(env, form, actor) {
+    if (form.get("action") !== "approve") return { error: "unknown action" };
+    return approveMove(env, String(form.get("from") ?? ""), actor);
 }
 
 async function activityPage(env, session, url) {
@@ -497,6 +594,7 @@ export async function handleAdmin(request, env, ctx) {
         if (path === "/admin/discovery") return discoveryPage(env, session, url);
         if (path === "/admin/blocks") return blocksPage(env, session, url);
         if (path === "/admin/activity") return activityPage(env, session, url);
+        if (path === "/admin/moves") return movesPage(env, session, url);
         return page({ title: "Not found", body: html`<h1>Not found</h1><p><a href="/admin">Go to the overview</a></p>`, session, status: 404 });
     }
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -508,14 +606,27 @@ export async function handleAdmin(request, env, ctx) {
     }
     if (path === "/admin/chat") {
         const action = form.get("action");
-        if (action !== "open" && action !== "close") return redirect("/admin", "unknown action", true);
-        const result = action === "open" ? await openAdminChat(env, session.username) : await closeAdminChat(env, session.username);
+        const field = (name) => (typeof form.get(name) === "string" ? form.get(name).trim() : "");
+        if (action === "connect" || action === "mfa") {
+            const limit = await hitRateLimit(env, `admin-chat-login:${session.username}`, 10, 15 * 60 * 1000);
+            if (limit.limited) return redirect("/admin", `Too many sign-in attempts, try again in ${Math.ceil(limit.retryAfter / 60)} minutes`, true);
+            const result =
+                action === "connect"
+                    ? await connectChatAccount(env, session.username, { instance: field("instance"), login: field("login"), password: form.get("password") })
+                    : await finishChatAccountMfa(env, session.username, { instance: field("instance"), ticket: field("ticket"), method: field("method"), code: field("code") });
+            if (result.mfa) return chatMfaPage(session, field("instance"), result.mfa);
+            return redirect("/admin", result.error ?? result.notice, Boolean(result.error));
+        }
+        const actions = { open: openAdminChat, close: closeAdminChat, disconnect: disconnectChatAccount };
+        if (!actions[action]) return redirect("/admin", "unknown action", true);
+        const result = await actions[action](env, session.username);
         return redirect("/admin", result.error ?? result.notice, Boolean(result.error));
     }
     const handlers = {
         "/admin/instances": [instanceAction, "/admin/instances"],
         "/admin/discovery": [discoveryAction, "/admin/discovery"],
         "/admin/blocks": [blockAction, "/admin/blocks"],
+        "/admin/moves": [moveAction, "/admin/moves"],
     };
     const handler = handlers[path];
     if (!handler) return new Response("not found", { status: 404 });

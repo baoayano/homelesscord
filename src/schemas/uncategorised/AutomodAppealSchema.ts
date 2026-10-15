@@ -11,4 +11,8 @@ export interface AutomodAppealSchema {
      * @maxLength 1000
      */
     message?: string;
+    ticket?: string;
+    method?: "totp" | "backup" | "webauthn";
+    code?: string;
+    appeal_ticket?: string;
 }

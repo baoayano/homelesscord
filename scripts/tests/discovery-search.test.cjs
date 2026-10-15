@@ -4,8 +4,11 @@ const assert = require("node:assert/strict");
 
 const {
     RemoteDiscoveryIndex,
+    canonicalCreatedAt,
     compareDiscovery,
+    compareDiscoveryBy,
     discoveryCategoryIds,
+    discoverySort,
     discoveryKeywords,
     discoveryPrefixRange,
     discoveryQuery,
@@ -137,6 +140,53 @@ test("the remote index pages results and filters by primary or secondary categor
     );
 });
 
+test("sorts parse to a known value and fall back to relevance", () => {
+    assert.equal(discoverySort("members"), "members");
+    assert.equal(discoverySort("newest"), "newest");
+    assert.equal(discoverySort("active"), "active");
+    assert.equal(discoverySort("MEMBERS"), "relevance");
+    assert.equal(discoverySort(["members"]), "relevance");
+    assert.equal(discoverySort(undefined), "relevance");
+});
+
+test("a canonical id's creation time comes from its snowflake", () => {
+    const id = String(BigInt(Date.parse("2026-01-02T03:04:05.000Z") - 1420070400000) << 22n);
+    assert.equal(canonicalCreatedAt(`@${id}@meow.example`), Date.parse("2026-01-02T03:04:05.000Z"));
+    assert.equal(canonicalCreatedAt("@x@meow.example"), 0);
+    assert.equal(canonicalCreatedAt("nothing"), 0);
+});
+
+test("explicit sorts order by online and activity, members or creation and ignore the exact name", () => {
+    const rows = [
+        { id: "a", exact: true, member_count: 5, presence_count: 1, created_at: 3, active_at: now - day },
+        { id: "b", exact: false, member_count: 50, presence_count: 2, created_at: 1, active_at: now - 90 * day },
+        { id: "c", exact: false, member_count: 10, presence_count: 9, created_at: 2, active_at: now - 2 * day },
+        { id: "d", exact: false, member_count: 50, presence_count: 3, created_at: 4, active_at: null },
+    ];
+    const order = (sort) => [...rows].sort(compareDiscoveryBy(sort, now)).map((row) => row.id);
+    assert.deepEqual(order("active"), ["c", "a", "d", "b"]);
+    assert.deepEqual(order("members"), ["d", "b", "c", "a"]);
+    assert.deepEqual(order("newest"), ["d", "a", "c", "b"]);
+    assert.deepEqual(order("relevance"), ["a", "c", "b", "d"]);
+});
+
+test("the remote index filters by instance without case, sorts and counts servers per instance", () => {
+    const snowflake = (date) => String(BigInt(Date.parse(date) - 1420070400000) << 22n);
+    const index = new RemoteDiscoveryIndex([
+        { ...remote(1, { member_count: 30, presence_count: 1 }), id: `@${snowflake("2026-01-01T00:00:00Z")}@meow.example` },
+        { ...remote(2, { member_count: 10, presence_count: 8, active_at: new Date(now - day).toISOString() }), id: `@${snowflake("2026-03-01T00:00:00Z")}@meow.example` },
+        { ...remote(3, { member_count: 99, presence_count: 0 }), id: `@${snowflake("2026-02-01T00:00:00Z")}@purr.example`, instance: "purr.example" },
+    ]);
+    assert.deepEqual(Object.fromEntries(index.instanceCounts()), { "meow.example": 2, "purr.example": 1 });
+    const names = (options) => index.search({ now, ...options }).entries.map((entry) => entry.name);
+    assert.deepEqual(names({ instance: "MEOW.example" }), ["Server 2", "Server 1"]);
+    assert.deepEqual(names({ sort: "members" }), ["Server 3", "Server 1", "Server 2"]);
+    assert.deepEqual(names({ sort: "newest" }), ["Server 2", "Server 3", "Server 1"]);
+    assert.deepEqual(names({ sort: "active" }), ["Server 2", "Server 1", "Server 3"]);
+    assert.equal(index.search({ instance: "nowhere.example", now }).total, 0);
+    assert.deepEqual(names({ query: "server", instance: "purr.example" }), ["Server 3"]);
+});
+
 test("local discovery lists only published servers that admins didn't exclude and that live on this instance", () => {
     assert.ok(isLocallyDiscoverable({ features: ["DISCOVERABLE"] }, false));
     assert.ok(!isLocallyDiscoverable({ features: [] }, false));
@@ -193,6 +243,39 @@ test("signed discovery lists carry clean keywords, categories, online counts and
     assert.equal(guilds[1].presence_count, 0);
     assert.equal(guilds[1].active_at, null);
     assert.ok(!("keywords" in guilds[2]) && !("presence_count" in guilds[2]));
+});
+
+test("signed discovery lists carry a splash and a bounded welcome screen", () => {
+    const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+    const channel = (name) => ({ name, description: "d".repeat(150), emoji_name: "👋", emoji_url: "javascript:alert(1)" });
+    const envelope = signEnvelope(
+        {
+            instance: "meow.example",
+            issued_at: new Date(now).toISOString(),
+            guilds: [
+                remote(1, {
+                    splash_url: "https://meow.example/splashes/1/abc.png?size=640",
+                    welcome: { description: "Hi", channels: [channel("rules"), { name: "" }, 4, ...["a", "b", "c", "d", "e"].map(channel)] },
+                }),
+                remote(2, { splash_url: "ftp://meow.example/x.png", welcome: { description: "", channels: [] } }),
+                remote(3, {}),
+            ],
+        },
+        privateKey,
+        "meow.example",
+    );
+    const { guilds } = acceptDiscoveryList(envelope, "meow.example", rawPublicKey(publicKey));
+    assert.equal(guilds[0].splash_url, "https://meow.example/splashes/1/abc.png?size=640");
+    assert.equal(guilds[0].welcome.description, "Hi");
+    assert.deepEqual(
+        guilds[0].welcome.channels.map((entry) => entry.name),
+        ["rules", "a", "b", "c", "d"],
+    );
+    assert.equal(guilds[0].welcome.channels[0].description.length, 100);
+    assert.equal(guilds[0].welcome.channels[0].emoji_url, null);
+    assert.equal(guilds[1].splash_url, null);
+    assert.equal(guilds[1].welcome, null);
+    assert.ok(!("splash_url" in guilds[2]) && !("welcome" in guilds[2]));
 });
 
 test("cross-instance discovery never lists blocked, unlisted, own or unverified servers", () => {

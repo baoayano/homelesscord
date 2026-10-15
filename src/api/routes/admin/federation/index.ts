@@ -18,6 +18,7 @@ export const pickFederationSettings = () => {
         allowUnlistedPeers: federation.allowUnlistedPeers,
         peers: [...federation.peers],
         contacts: [...(federation.contacts ?? [])],
+        previousIds: [...(federation.previousIds ?? [])],
         verification: federation.discovery.verification,
     };
 };

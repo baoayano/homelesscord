@@ -22,6 +22,7 @@ The Worker builds the document from D1, signs it and stores the signed copy. It 
 - approved and suspended instances. An approved instance is `active` once it serves a key at `/.well-known/meowcord` with federation turned on, and `listed` until then.
 - blocked instances, servers and users, each with a reason and a date.
 - discovery servers that an approved instance lists, minus the ones we removed or blocked. The instance's own admins verify a server before the instance lists it, so we review instances, not servers.
+- instances that moved to a new id, with the proof the registry checked. See [Moves](#moves).
 
 ### Announcing
 
@@ -43,19 +44,21 @@ The registry only fetches public hosts over HTTPS. It refuses `localhost`, IP ad
 Every hour at minute 17 the Worker:
 
 - imports `instances.json` from the `main` branch on GitHub. Every instance in it counts as approved, unless we blocked or suspended it in the admin pages.
-- re-fetches the well-known document and discovery list of the 8 instances checked longest ago, so each instance is checked every few hours.
+- checks up to 5 moves from `previous_ids` in `instances.json`, see [Moves](#moves).
+- re-fetches the well-known document and discovery list of the 8 instances checked longest ago, so each instance is checked every few hours. Instances that moved are skipped.
 - deletes old nonces, rate limit counters and sign-in state, activity older than 30 days, and snapshots and instance counts older than 120 days.
 - writes one row to `registry_snapshots` for the current hour: approved, pending, suspended and blocked instances, listed discovery servers, blocks, and the network's users, servers and messages in the last day. The network totals add up the latest counts of each approved instance that isn't blocked and reported in the last 72 hours. A second run in the same hour overwrites the row, so the table grows by at most 24 rows a day.
 - signs a new document if anything changed or the current one is a day old.
 
 ## How we review
 
-The admin pages need an hrtID account in the `admins` group. They have five pages:
+The admin pages need an hrtID account in the `admins` group. They have six pages:
 
 - **Overview**: stat cards with sparklines, charts, announce health, what waits for review, errors in the last day, the published document and a button that signs and publishes a new one right away, and the admin group chat.
 - **Instances**: approve, suspend or block an instance with a reason, move it back to pending, check it now, or accept a new key. Each instance shows the admin contacts it announced, its latest users, servers and messages in the last day, and a sparkline of its users.
 - **Discovery**: remove a server from discovery, list it again, or block it.
 - **Blocks**: block or unblock an instance id, or a server or user by canonical id such as `@123@meow.example.com`.
+- **Moves**: every move from `previous_ids`, its state, proof and keys, and an Approve button for moves that wait for an admin. Instances that moved are under the Moved filter on the Instances page.
 - **Activity**: announces, checks, imports, errors and admin actions.
 
 ### Charts
@@ -74,7 +77,11 @@ When an approved instance starts serving a different key, the registry keeps pub
 
 ## Admin group chat
 
-The Admin group chat card on the Overview page opens a group DM named "Meowcord Admins" between a Meowcord Admins account and the announced admins of every approved instance that isn't blocked. The Worker acts as that account through the API of the instance in `ADMIN_CHAT_ORIGIN`, with the user token in `ADMIN_CHAT_TOKEN`. Without both secrets the card says what to set and its buttons are disabled.
+The Admin group chat card on the Overview page opens a group DM named "Meowcord Admins" between a Meowcord Admins account and the announced admins of every approved instance that isn't blocked. The Worker acts as that account through its instance's API with a user token.
+
+To connect the account, pick its instance on the card, which lists approved instances that aren't blocked, and enter its email or username and password. The Worker signs in with `POST /api/v9/auth/login`. When the account has two-factor authentication on, the next page asks for an authenticator or backup code and sends it to `/api/v9/auth/mfa/totp` or `/api/v9/auth/mfa/backup`. A security key can't finish this sign-in, so give the account a TOTP app or keep a backup code. When the instance answers with a captcha, the card says so, because the Worker can't solve one; `login.requireCaptcha` is off by default. The Worker checks the token with `GET /api/v9/users/@me` and stores only the token, encrypted with AES-GCM under a key derived from `REGISTRY_SIGNING_KEY`, in the `admin_chat_account` table. It never stores the password. Each admin gets 10 sign-in attempts per 15 minutes. Disconnect account signs the token out with `POST /api/v9/auth/logout` and deletes it. To replace a token that leaked, disconnect and connect again, or log the session out from the account's settings on its instance.
+
+The `ADMIN_CHAT_ORIGIN` and `ADMIN_CHAT_TOKEN` secrets still work when no account is connected, and a connected account takes their place. Without either, the open and close buttons are disabled.
 
 Open admin group chat does this:
 
@@ -88,6 +95,24 @@ Opening it again while it is open looks up only handles that aren't members yet 
 Each instance sends up to 10 contacts, so the group outgrows the default group DM size of 25 with three instances. A group DM is held to `limits.channel.maxGroupDmRecipients` people, owner included, unless the account that creates it or adds someone has the BYPASS_RATE_LIMITS right, which raises the limit to `limits.channel.maxStaffGroupDmRecipients`, 100 by default. That right also skips the contact spam checks that would stop one account from opening a group with dozens of strangers. Give it to the Meowcord Admins account in the admin dashboard, under Users, and not the OPERATOR right, because the Worker holds that account's token.
 
 Group DMs are end-to-end encrypted from the start. The instance refuses to add a federated user to an encrypted group DM after it was created when that user has no active encryption device, so such an admin shows under Not added until they sign in on a client with encryption set up and the chat is opened again.
+
+## Moves
+
+An instance that changes its address keeps its key and lists its old id in `previous_ids` of its `instances.json` entry. [change-url.md](change-url.md) is the guide for instance admins. On each hourly import the registry takes up to 5 moves that aren't applied yet, oldest checked first, and for each one:
+
+1. refuses it while the old id is still an entry of its own in `instances.json`, when the registry has no record of the old id, when the old id already moved to another id, and when the new id itself moved elsewhere,
+2. fetches the new id's well-known document and looks for a move statement in `moved_from` that verifies against the key the registry has for the old id, names both ids and names the key the new id serves. An announce from the new id that verifies against the old key counts too, when the key didn't change,
+3. applies the move when it found that proof and the key is the same. A move without proof, or with a new key, waits for an admin on the Moves page. Approve it only after the instance's admins confirmed they run both addresses.
+
+Applying a move runs in one D1 batch. It:
+
+- gives the new id the more restrictive status of the two, so a suspension stays, and the earlier `listed_at`,
+- copies an instance block of the old id, and every server and user block under the old id, to the new id. Blocks on the old id stay too,
+- moves the discovery servers to the new id and keeps every removal or block we made, then reads the new id's discovery list,
+- moves the admin contacts, with their handles renamed to the new id, and the hourly stats,
+- marks the old id as `moved`, takes it out of the published instances and records the move in the published `moves` list.
+
+A move back to an earlier id works the same way and retires the earlier move. Moves that drop out of `instances.json` before they are applied are forgotten. The registry never clears a block or a suspension during a move.
 
 ## Getting your instance listed
 

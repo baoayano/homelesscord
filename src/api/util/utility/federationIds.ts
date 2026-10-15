@@ -17,6 +17,7 @@ import {
     stripHandle,
 } from "@spacebar/util";
 import { rewriteRemoteMedia } from "./federationMedia";
+import { aliasCanonical, normalizeMoved } from "./federationMoves";
 import { ownInstance, trustFor } from "./federationNetwork";
 import { assertQuota, newObjectsPerRequest, quotaAdded } from "./federationQuota";
 
@@ -29,6 +30,11 @@ const remember = (canonical: string, local: string) => {
     if (toLocalCache.size > CACHE_LIMIT) toLocalCache.clear();
     toCanonicalCache.set(local, canonical);
     toLocalCache.set(canonical, local);
+};
+
+export const clearMappingCaches = () => {
+    toCanonicalCache.clear();
+    toLocalCache.clear();
 };
 
 export const forgetMappings = (localIds: string[]) => {
@@ -65,6 +71,18 @@ export async function canonicalIds(localIds: Iterable<string>) {
 export const canonicalOf = async (localId: string) => (await canonicalIds([localId])).get(localId) ?? `@${localId}@${ownInstance()}`;
 
 export async function localIds(canonicals: Iterable<string>, options: { create?: boolean; sender?: string } = {}) {
+    const originals = new Map<string, string[]>();
+    for (const canonical of new Set(canonicals)) {
+        const effective = aliasCanonical(canonical);
+        originals.set(effective, [...(originals.get(effective) ?? []), canonical]);
+    }
+    const resolved = await resolvedLocalIds(originals.keys(), options);
+    const result = new Map<string, string>();
+    for (const [effective, local] of resolved) for (const original of originals.get(effective) ?? [effective]) result.set(original, local);
+    return result;
+}
+
+async function resolvedLocalIds(canonicals: Iterable<string>, options: { create?: boolean; sender?: string }) {
     const own = ownInstance();
     const result = new Map<string, string>();
     const missing: string[] = [];
@@ -155,7 +173,7 @@ export interface WireUser {
 
 export async function fromWire<T>(value: T, sender: string, onUsers?: (users: WireUser[]) => Promise<void>): Promise<T> {
     const own = ownInstance();
-    const normalized = normalize(value);
+    const normalized = normalizeMoved(normalize(value));
     const map = await localIds(collectIncomingIds(normalized), { sender });
     const remote: WireUser[] = [];
     const local: Record<string, unknown>[] = [];

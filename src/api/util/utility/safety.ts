@@ -22,6 +22,19 @@ const HOUR = 60 * 60 * 1000;
 
 const joinLog = new Map<string, { at: number; user_id: string; created_at: number; invite: string | null }[]>();
 const activeJoinRaids = new Map<string, number>();
+const joinRates = new Map<string, { score: number; at: number }>();
+const JOIN_RATE_MEMORY = 6 * HOUR;
+const USUAL_JOIN_HEADROOM = 3;
+const MEMBER_SHARE_PER_WINDOW = 0.005;
+
+export function joinThresholdScale(guild_id: string, now: number, windowMs: number, memberCount: number, joinThreshold: number) {
+    const previous = joinRates.get(guild_id);
+    const decayed = previous ? previous.score * Math.exp(-(now - previous.at) / JOIN_RATE_MEMORY) : 0;
+    joinRates.set(guild_id, { score: decayed + 1, at: now });
+    if (joinThreshold <= 0) return 1;
+    const usualPerWindow = (decayed * windowMs) / JOIN_RATE_MEMORY;
+    return Math.max(1, (USUAL_JOIN_HEADROOM * usualPerWindow) / joinThreshold, (memberCount * MEMBER_SHARE_PER_WINDOW) / joinThreshold);
+}
 const dmLog = new Map<string, { at: number; sender: string; recipient: string }[]>();
 const mentionLog = new Map<string, { at: number; user_id: string }[]>();
 const mentionRaids = new Map<string, number>();
@@ -176,10 +189,13 @@ export async function recordGuildJoin(guild_id: string, user_id?: string, invite
     joinLog.set(guild_id, joins);
     const fresh = joins.filter((entry) => now - entry.created_at < safety.raidNewAccountHours * HOUR);
     const viaInvite = invite ? joins.filter((entry) => entry.invite === invite) : [];
+    const memberCount = (await Guild.findOne({ where: { id: guild_id }, select: { id: true, member_count: true } }).catch(() => null))?.member_count ?? 0;
+    const scale = joinThresholdScale(guild_id, now, safety.raidJoinWindowSeconds * 1000, memberCount, safety.raidJoinThreshold);
+    const reached = (count: number, threshold: number) => threshold > 0 && count >= Math.ceil(threshold * scale);
     const reasons = [
-        safety.raidJoinThreshold > 0 && joins.length >= safety.raidJoinThreshold ? "joins" : null,
-        safety.raidNewAccountJoinThreshold > 0 && fresh.length >= safety.raidNewAccountJoinThreshold ? "new_accounts" : null,
-        safety.raidInviteJoinThreshold > 0 && viaInvite.length >= safety.raidInviteJoinThreshold ? "invite" : null,
+        reached(joins.length, safety.raidJoinThreshold) ? "joins" : null,
+        reached(fresh.length, safety.raidNewAccountJoinThreshold) ? "new_accounts" : null,
+        reached(viaInvite.length, safety.raidInviteJoinThreshold) ? "invite" : null,
     ].filter((reason): reason is string => !!reason);
 
     const ongoing = activeJoinRaids.get(guild_id);

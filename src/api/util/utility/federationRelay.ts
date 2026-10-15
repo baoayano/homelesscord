@@ -11,6 +11,7 @@ import {
     Config,
     emitEvent,
     federationRelaySecret,
+    dropGuildTags,
     FederationRequestError,
     generateFederationToken,
     GuildDeleteEvent,
@@ -338,6 +339,7 @@ async function afterRelay(req: Request, plan: RelayPlan, status: number, body: u
     if (status >= 300) return;
     if (plan.kind === "leave") {
         await Member.delete({ id: req.user_id, guild_id: plan.id });
+        await dropGuildTags(plan.id, [req.user_id]);
         await emitEvent({ event: "GUILD_DELETE", data: { id: plan.id }, user_id: req.user_id, origin: "federation" } as GuildDeleteEvent);
         const remaining = await Member.createQueryBuilder("member")
             .innerJoin(User, "user", "user.id = member.id")

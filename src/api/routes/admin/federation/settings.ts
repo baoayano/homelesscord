@@ -3,10 +3,11 @@ import { Request, Response, Router } from "express";
 import { HTTPError } from "lambert-server/HTTPError";
 import { route } from "@spacebar/api/middlewares";
 import { User } from "@spacebar/database";
-import { Config, contactNames, isInstanceId, isPublicKey } from "@spacebar/util";
+import { cleanPreviousIds, Config, contactNames, isInstanceId, isPublicKey } from "@spacebar/util";
 import { AdminFederationSettingsSchema } from "@spacebar/schemas";
-import { announceSoon, invalidateDirectory, refreshRegistry, resetRegistryState } from "@spacebar/api/util/utility/federation";
+import { announceSoon, instanceId, invalidateDirectory, refreshRegistry, resetRegistryState } from "@spacebar/api/util/utility/federation";
 import { invalidateTrust } from "@spacebar/api/util/utility/federationNetwork";
+import { announceOwnMoves, prepareOwnMoves } from "@spacebar/api/util/utility/federationMoves";
 import { pickFederationSettings } from "./index";
 
 const router = Router({ mergeParams: true });
@@ -68,6 +69,24 @@ router.patch(
             if (unknown) throw new HTTPError(`There is no local account named "${unknown}".`, 400);
             federation.contacts = names;
         }
+        const previousChanged = body.previousIds !== undefined && body.previousIds.join("\n") !== (federation.previousIds ?? []).join("\n");
+        if (body.previousIds !== undefined) {
+            const own = instanceId();
+            const wanted = body.previousIds
+                .map((id) =>
+                    id
+                        .trim()
+                        .toLowerCase()
+                        .replace(/^https?:\/\//, "")
+                        .replace(/\/.*$/, ""),
+                )
+                .filter(Boolean);
+            const cleaned = cleanPreviousIds(wanted, own);
+            const invalid = wanted.find((id) => !cleaned.includes(id));
+            if (invalid)
+                throw new HTTPError(`"${invalid}" isn't a previous id of this instance. Use the old host name, with the port when it isn't 443, and not the current one.`, 400);
+            federation.previousIds = cleaned;
+        }
         if (body.enabled !== undefined) federation.enabled = body.enabled;
         if (body.announce !== undefined) federation.announce = body.announce;
         if (body.announceStats !== undefined) federation.announceStats = body.announceStats;
@@ -78,6 +97,10 @@ router.patch(
         if (contactsChanged && federation.enabled && federation.announce) announceSoon();
         invalidateDirectory();
         invalidateTrust();
+        if (previousChanged)
+            prepareOwnMoves()
+                .then(() => announceOwnMoves())
+                .catch((error) => console.warn("[Federation] Sending the move statements after a settings change failed:", error));
         if (registryChanged || body.enabled || body.peers !== undefined || body.allowUnlistedPeers !== undefined || body.verification !== undefined)
             refreshRegistry().catch((error) => console.warn("[Federation] Refresh after a settings change failed:", error));
         res.json(pickFederationSettings());

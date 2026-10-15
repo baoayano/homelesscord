@@ -5,6 +5,7 @@ import { blockSets, Config, FederationRequestError, isInstanceId, parseCanonical
 import { currentDocument, localBlocks } from "./federation";
 import { localIds, toWire, WireUser } from "./federationIds";
 import { rewriteRemoteMedia } from "./federationMedia";
+import { resolveInstanceId } from "./federationMoves";
 import { ownInstance, signedFetch } from "./federationNetwork";
 import { assertQuota, quotaAdded } from "./federationQuota";
 import { homeBadges, storeRemoteBadges } from "./remoteBadges";
@@ -195,11 +196,12 @@ export async function ensureShadow(canonical: string, profile?: unknown) {
 export async function lookupRemoteHandle(handle: string) {
     const at = handle.lastIndexOf("@");
     const name = handle.slice(0, at).trim().toLowerCase();
-    const instance = handle
+    const written = handle
         .slice(at + 1)
         .trim()
         .toLowerCase();
-    if (at <= 0 || !name || !isInstanceId(instance)) throw new FederationRequestError("bad_request", "A handle looks like name@instance", 400);
+    if (at <= 0 || !name || !isInstanceId(written)) throw new FederationRequestError("bad_request", "A handle looks like name@instance", 400);
+    const instance = resolveInstanceId(written);
     if (instance === ownInstance()) {
         const user = await User.findOne({ where: { username: name, discriminator: "0" }, select: { id: true } });
         return user?.id ?? null;

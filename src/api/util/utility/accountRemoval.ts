@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 import { In, Not } from "typeorm";
 import { Channel, Emoji, Guild, InstanceBan, Member, Message, Recipient, Session, Sticker, User, UserSettingsProtos } from "@spacebar/database";
-import { ChannelDeleteEvent, ChannelRecipientRemoveEvent, emitEvent, Event, MessageDeleteBulkEvent, Rights, UserDeleteEvent } from "@spacebar/util";
+import { ChannelDeleteEvent, ChannelRecipientRemoveEvent, dropGuildTags, emitEvent, Event, MessageDeleteBulkEvent, Rights, UserDeleteEvent } from "@spacebar/util";
 import { ChannelType, PrivateUserProjection } from "@spacebar/schemas";
 import { isProtectedStaffTarget } from "./adminTargets";
 import { staffDisableColumns } from "./staffDisable";
@@ -105,6 +105,7 @@ export async function removeAccount(user_id: string, opts: { actor_id: string; r
         const heir = members.sort((a, b) => highest(b) - highest(a))[0];
         if (!heir) {
             await guild.remove();
+            await dropGuildTags(guild.id);
             continue;
         }
         guild.owner_id = heir.id;

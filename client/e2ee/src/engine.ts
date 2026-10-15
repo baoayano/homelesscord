@@ -205,6 +205,10 @@ const canonicalInstance = (canonical: string) => canonical.slice(canonical.index
 
 const canonicalSnowflake = (canonical: string) => canonical.slice(1, canonical.indexOf("@", 1));
 
+const MAX_BINDING_VARIANTS = 8;
+
+const MOVES_TTL = 10 * 60 * 1000;
+
 const isCanonical = (value: unknown): value is string => typeof value === "string" && /^@\d{1,20}@[a-z0-9.:-]+$/.test(value);
 
 const LOCAL_REFERENCE = /<(@!?|@&|#)(\d{15,20})>|<(a?):(\w{1,32}):(\d{15,20})>/g;
@@ -346,6 +350,7 @@ export class Engine {
     private resolvedCanonical = new Map<string, string>();
     private localOf = new Map<string, Promise<string | null>>();
     private federation = true;
+    private moves: { at: number; aliases: Promise<Map<string, string[]>> } | null = null;
     private plaintext = new Map<string, Payload>();
     private contentKeys = new Map<string, string>();
     private listeners = new Set<() => void>();
@@ -1340,6 +1345,41 @@ export class Engine {
         };
     }
 
+    private previousInstances() {
+        if (this.moves && Date.now() - this.moves.at < MOVES_TTL) return this.moves.aliases;
+        const aliases = this.api
+            .request<{ instance?: string | null; previous?: string[]; moved?: Record<string, string> }>("get", "/federation/moves")
+            .then((body) => {
+                const map = new Map<string, string[]>();
+                const add = (to: string, from: string) => map.set(to, [...(map.get(to) ?? []), from]);
+                if (body?.instance) for (const from of body.previous ?? []) add(body.instance, from);
+                for (const [from, to] of Object.entries(body?.moved ?? {})) add(to, from);
+                return map;
+            })
+            .catch(() => new Map<string, string[]>());
+        this.moves = { at: Date.now(), aliases };
+        return aliases;
+    }
+
+    private async bindingVariants(ids: Binding): Promise<Binding[]> {
+        if (ids.v !== 2) return [ids];
+        const aliases = await this.previousInstances();
+        const instances = [...new Set([ids.channel, ids.sender, ids.user(this.userId!), ...(ids.mid ? [ids.mid] : [])].filter(isCanonical).map(canonicalInstance))].filter(
+            (instance) => aliases.has(instance),
+        );
+        if (!instances.length) return [ids];
+        let swaps: Map<string, string>[] = [new Map()];
+        for (const instance of instances)
+            swaps = swaps.flatMap((swap) => [swap, ...aliases.get(instance)!.map((from) => new Map([...swap, [instance, from]]))]).slice(0, MAX_BINDING_VARIANTS);
+        return swaps.map((swap) => {
+            const rename = (canonical: string) => {
+                const from = isCanonical(canonical) && swap.get(canonicalInstance(canonical));
+                return from ? `@${canonicalSnowflake(canonical)}@${from}` : canonical;
+            };
+            return { v: 2, channel: rename(ids.channel), sender: rename(ids.sender), mid: ids.mid && rename(ids.mid), user: (id) => rename(ids.user(id)) };
+        });
+    }
+
     async encrypt(channelId: string, payload: Payload, opts: { nonce?: string; mid?: string }): Promise<Envelope> {
         if (!this.device || !this.userId) throw new E2eeError("NOT_READY", t("Encryption is still starting up"));
         if (!this.linked) throw new E2eeError("NOT_LINKED", t("This browser isn't unlocked for encrypted messages yet"));
@@ -1453,11 +1493,18 @@ export class Engine {
             throw new E2eeError("BAD_SIGNATURE", t("The sender's device couldn't be verified"));
         }
         if (sender.status === "revoked" && (!sender.revokedAt || sentAt >= sender.revokedAt)) throw new E2eeError("BAD_SIGNATURE", t("Sent from a device that was removed"));
-        const ids = await this.bindingFor(message.channel_id, senderId, [this.userId!], env.mid ? message.id : undefined, env.v);
-        if (env.v === 2 && env.mid && env.mid !== ids.mid) throw new E2eeError("BAD_ENVELOPE", "Envelope belongs to another message");
-        const bind = binding(ids.mid, nonce);
+        const variants = await this.bindingVariants(await this.bindingFor(message.channel_id, senderId, [this.userId!], env.mid ? message.id : undefined, env.v));
+        const matching = env.v === 2 && env.mid ? variants.filter((variant) => variant.mid === env.mid) : variants;
+        if (!matching.length) throw new E2eeError("BAD_ENVELOPE", "Envelope belongs to another message");
         const { sig, ...unsigned } = env;
-        if (!(await verify(sender.signingKey, signedPayload(ids.channel, ids.sender, bind, unsigned), sig))) throw new E2eeError("BAD_SIGNATURE", t("Signature check failed"));
+        let ids: Binding | null = null;
+        for (const variant of matching) {
+            if (!(await verify(sender.signingKey, signedPayload(variant.channel, variant.sender, binding(variant.mid, nonce), unsigned), sig))) continue;
+            ids = variant;
+            break;
+        }
+        if (!ids) throw new E2eeError("BAD_SIGNATURE", t("Signature check failed"));
+        const bind = binding(ids.mid, nonce);
 
         const aad = messageAad(ids.channel, ids.sender, env.sender_device, bind);
         const mine = env.keys.find((k) => k.device_id === this.device!.deviceId);

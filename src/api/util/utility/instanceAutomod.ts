@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
+import { In } from "typeorm";
 import { AutomodAction, AutomodActionRule, AutomodActionSource, AutomodActionTaken, Member, Message, RateLimit, Session, User, UserViolation } from "@spacebar/database";
 import { ApiError, Config, emitEvent, Event, FieldErrors, MessageDeleteBulkEvent } from "@spacebar/util";
 import { AppealStatusValue, ClassificationActionType, ClassificationType, UserFlags } from "@spacebar/schemas";
@@ -8,6 +9,8 @@ import { issueViolation } from "./safetyNotices";
 import { exemptionFrom, rulePolicy } from "./automodPolicy";
 import type { AutomodSpamAction } from "@spacebar/util/config/types/AutomodConfiguration";
 import { getSystemAccount } from "./systemAccounts";
+import { addressBucket } from "../../middlewares/RateLimit";
+import { ipVariants, normalizeIp } from "./accountIps";
 
 const DAY = 24 * 60 * 60 * 1000;
 const WIPE_BATCH = 500;
@@ -300,13 +303,29 @@ export async function reverseAutomodAction(entry: AutomodAction, staff_id: strin
     await AutomodAction.update({ id: entry.id }, { reversed: true, reversed_at: new Date(), reversed_by: staff_id, reversal });
 }
 
-const loginKey = (user_id: string) => `automod-login:${user_id}`;
+const loginKey = (user_id: string, ip?: string | null) => (ip ? `automod-login:${user_id}:${addressBucket(normalizeIp(ip) ?? undefined)}` : `automod-login:${user_id}`);
+const ACCOUNT_WIDE_FACTOR = 10;
 
-export async function assertLoginNotLocked(user_id: string) {
+const lockedRow = async (key: string, max: number) => {
+    const row = await RateLimit.findOne({ where: { id: key } });
+    return row && row.expires_at.getTime() > Date.now() && row.hits >= max ? row : null;
+};
+
+async function knownAddress(user_id: string, ip: string | null | undefined) {
+    const variants = ip ? ipVariants(ip) : [];
+    if (!variants.length) return false;
+    return (await Session.exists({ where: { user_id, last_seen_ip: In(variants) } })) || (await User.exists({ where: { id: user_id, registration_ip: In(variants) } }));
+}
+
+export async function assertLoginNotLocked(user_id: string, ip?: string | null) {
     const { maxFailedAttemptsPerAccount } = Config.get().automod.login;
     if (!maxFailedAttemptsPerAccount) return;
-    const row = await RateLimit.findOne({ where: { id: loginKey(user_id) } });
-    if (!row || row.expires_at.getTime() <= Date.now() || row.hits < maxFailedAttemptsPerAccount) return;
+    const row =
+        (await lockedRow(loginKey(user_id, ip), maxFailedAttemptsPerAccount)) ??
+        ((await lockedRow(loginKey(user_id), maxFailedAttemptsPerAccount * ACCOUNT_WIDE_FACTOR)) && !(await knownAddress(user_id, ip))
+            ? await RateLimit.findOne({ where: { id: loginKey(user_id) } })
+            : null);
+    if (!row) return;
     const minutes = Math.max(1, Math.ceil((row.expires_at.getTime() - Date.now()) / 60000));
     throw FieldErrors({
         login: { code: "ACCOUNT_LOGIN_LOCKED", message: `Too many failed sign-ins for this account. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.` },
@@ -314,13 +333,17 @@ export async function assertLoginNotLocked(user_id: string) {
     });
 }
 
-export async function recordFailedLogin(user_id: string) {
+export async function recordFailedLogin(user_id: string, ip?: string | null) {
     const { maxFailedAttemptsPerAccount, lockoutMinutes } = Config.get().automod.login;
     if (!maxFailedAttemptsPerAccount) return;
-    await RateLimit.hit(loginKey(user_id), user_id, maxFailedAttemptsPerAccount, Math.max(1, lockoutMinutes) * 60).catch(() => undefined);
+    const window = Math.max(1, lockoutMinutes) * 60;
+    await Promise.all([
+        RateLimit.hit(loginKey(user_id, ip), user_id, maxFailedAttemptsPerAccount, window),
+        RateLimit.hit(loginKey(user_id), user_id, maxFailedAttemptsPerAccount * ACCOUNT_WIDE_FACTOR, window),
+    ]).catch(() => undefined);
 }
 
-export const clearFailedLogins = (user_id: string) => RateLimit.delete({ id: loginKey(user_id) }).catch(() => undefined);
+export const clearFailedLogins = (user_id: string, ip?: string | null) => RateLimit.delete({ id: loginKey(user_id, ip) }).catch(() => undefined);
 
 const registerKey = (ip: string) => `automod-register:${ip}`;
 

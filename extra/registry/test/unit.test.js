@@ -158,8 +158,8 @@ describe("instances.json", () => {
             { name: "Bad", url: "http://insecure.com" },
         ]);
         expect(entries).toEqual([
-            { id: "tabaque.lol", url: "https://tabaque.lol", name: "Tabaque", source_url: "https://github.com/PoZorKino/tabaque" },
-            { id: "orcbin.com", url: "https://orcbin.com", name: "No source", source_url: null },
+            { id: "tabaque.lol", url: "https://tabaque.lol", name: "Tabaque", source_url: "https://github.com/PoZorKino/tabaque", previous_ids: [] },
+            { id: "orcbin.com", url: "https://orcbin.com", name: "No source", source_url: null, previous_ids: [] },
         ]);
     });
 

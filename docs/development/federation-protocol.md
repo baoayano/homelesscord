@@ -104,6 +104,8 @@ An instance accepts a document only when the signature verifies against its conf
 
 Each guild can also carry `keywords`, up to 10 strings of up to 30 characters, `category_ids`, up to 5 discovery category ids with the primary one first, `presence_count`, the members online, and `active_at`, the hour of the server's last message as an ISO timestamp. All four are optional. A receiver cuts each keyword to 30 characters and keeps the first 10 distinct ones, keeps the first 5 distinct category ids, caps `presence_count` at `member_count`, and uses them to search, filter and order its Other instances list. Older instances send none of them and their servers sort by member count alone.
 
+A guild can also carry `splash_url`, an absolute `http` or `https` URL of its discovery splash, splash or banner in that order, and `welcome`, its welcome screen when the owner turned it on: `{ "description": "", "channels": [{ "name": "", "description": "", "emoji_name": "", "emoji_url": "" }] }`. A receiver keeps 300 characters of the description, the first 5 channels that have a name, 100 characters of each name and description, 32 of `emoji_name`, and `emoji_url` only when it is an `http` or `https` URL, and drops `welcome` when it ends up with neither a description nor a channel. It shows both in the Other instances preview and loads the images through `/federation-media`. Older instances ignore both fields.
+
 A receiver treats a server missing from an instance's freshly fetched list as withdrawn by its owner and stops showing it, even while the registry document still lists it.
 
 It lists only servers whose owner turned on "Show on other instances", which the instance's admins haven't hidden, and which have a permanent invite. A server owner turning the switch on makes the instance create a permanent invite for it if none exists.
@@ -133,6 +135,54 @@ Instances announce on start, once a day and when an admin presses "Send to regis
 
 The registry rate limits announces to 10 per instance id and 30 per IP address or IPv6 /64 per hour, and to 60 per hour across all instance ids it has never seen.
 
+## Instance moves
+
+An instance changes its id by keeping its key and listing the old id in `federation.previousIds`. [change-url.md](../self-hosting/change-url.md) is the operator guide.
+
+### Move statement
+
+The instance signs one statement per previous id with its key, as a signed envelope whose `key_id` is the old id:
+
+```json
+{ "type": "instance_move", "v": 1, "from": "old.example", "to": "new.example", "at": "2026-10-14T12:00:00.000Z", "public_key": "<base64url key of new.example>" }
+```
+
+It serves the envelopes in its well-known document:
+
+```json
+{ "id": "new.example", "public_key": "<base64url>", "moved_from": [{ "payload": "...", "signature": "...", "key_id": "old.example" }] }
+```
+
+A receiver accepts a statement only when it verifies against the key it has on record for `from`, `key_id` equals `from`, `from` and `to` are the ids it expects, and `at` is no more than 5 minutes in the future. When `public_key` differs from the key on record the move is a key change. A signed announce envelope from the new id, `{ "type": "announce", "id": "new.example", ... }` with `key_id` set to the new id, also proves a move when it verifies against the old key, since only the holder of that key can sign it.
+
+### In the registry document
+
+The registry document has a `moves` list. Older instances ignore it.
+
+```json
+"moves": [{ "from": "old.example", "to": "new.example", "at": "...", "public_key": "<key the old id had>", "proof": { "payload": "...", "signature": "...", "key_id": "old.example" }, "review": "proof" }]
+```
+
+- `public_key` is the key the registry had for `from`.
+- `proof` is the move statement or the announce the registry checked, or null when a registry admin approved a move without one.
+- `review` is `proof` when the registry applied the move because the proof verified with an unchanged key, and `admin` when a registry admin approved it, which the registry requires for every key change.
+
+The old id leaves `instances` and the new id carries its state. The registry imports moves from `previous_ids` in `instances.json`, see [registry.md](../self-hosting/registry.md#moves).
+
+### What an instance checks
+
+An instance records the key of every instance it learns of in `federation_instance_keys`, from the registry document, from peers' well-known documents and from applied moves. For each move, from the registry or sent directly, it:
+
+1. Refuses the move when the registry names another key for `from` than the one on record.
+2. Verifies the proof against the key on record, or against the registry's `public_key` when it has no record.
+3. Refuses a move of its own id, a move onto its own id unless `from` is one of its previous ids, a move whose `from` the registry still lists as active, and a move to an id whose recorded key differs from the statement's key.
+4. Marks a key change as `unverified` unless it comes from the registry with `review` set to `admin`. An admin of the instance can still apply it.
+5. Rewrites the rows that name `from`, see [change-url.md](../self-hosting/change-url.md#what-other-instances-rewrite), and keeps the move as an alias from `from` to `to`.
+
+Aliases are folded in the order of `at`, and a later move back removes the earlier alias. Lookups follow at most 8 hops and stop on a cycle. Incoming bodies have canonical ids of an old id rewritten to the new id before they are translated, except inside `encrypted`, `meowcord_authorship`, `e2ee` and `fingerprint`, and message authorship statements verify against both the current and the old canonical ids.
+
+A request signed by an old id is refused with `403` and a message that names the new id. A request signed for one of the receiver's previous ids, from an instance that hasn't applied its move yet, is accepted.
+
 ## Instance config
 
 ```
@@ -144,8 +194,11 @@ federation.announceStats             true
 federation.allowUnlistedPeers        false
 federation.peers                     []
 federation.contacts                  []
+federation.previousIds               []
 federation.discovery.verification    "registry" | "instance"
 ```
+
+- `previousIds` are ids this instance had before, at most 10. The instance signs a move statement for each one, see [Instance moves](#instance-moves).
 
 - `contacts` are local usernames sent with each announce, at most 10. Empty means every account with the OPERATOR right.
 - `announceStats` sends the user, server and message counts with each announce.
@@ -210,6 +263,7 @@ All are under `https://<instance>/federation/v2` and need a signed request.
 | `POST /voice/stream` | Body `{ "actor", "operation", "session", "stream", "paused", "profile" }`. The host runs gateway op 18, 19, 20 or 22 for the actor's shadow. See [Go Live](#go-live). |
 | `GET /voice?v=<version>` | Websocket upgrade, signed like any request with an empty body. The host's voice gateway for the sender's shadows. |
 | `GET /users/<canonical>/e2ee?channel=<canonical>` | The user's encryption keys in the shape of `POST /api/v9/e2ee/keys/query`: identity key, backup key and devices with their signed prekeys. Answered only when the user shares a private channel or a non-blocked relationship with a user of the sender, or when the user's request to `GET /channels/<id>` for the hinted `channel` succeeds on the sender as the host. Otherwise `403` with `not_shared`. Device ids are never translated. |
+| `POST /move` | Body `{ "statement": <move statement envelope> }`, signed with the key in the statement by the instance it moves to. The sender's trust isn't checked, because the receiver doesn't know the new id yet. The receiver checks that `statement.to` is the sender, that the request verifies against `statement.public_key` and that the sender's well-known document serves that key, then checks the move as in [Instance moves](#instance-moves). It answers `{ "status": "applied" | "unverified" | "refused" | "pending" | "unknown", "detail" }`, `400` for a malformed statement or one sent by another id, and `422` when the sender's well-known document can't be read or serves another key. |
 | `GET /media/<path>` | Never used. Media goes through the public CDN paths of the host, fetched by the home instance. |
 
 The `profile` sent with a join or a relay is the actor's `username`, `global_name`, `avatar`, `avatar_decoration_data`, `banner`, `accent_color`, `pronouns`, `bio` and `public_flags`. The receiver updates the shadow from it.

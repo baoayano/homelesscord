@@ -2493,3 +2493,8 @@ a.stat:focus-visible,
     flex: 1 1 100%;
   }
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, currentColor 32%, transparent) transparent;
+}

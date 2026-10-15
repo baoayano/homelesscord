@@ -1,6 +1,6 @@
 # Server discovery
 
-Discover lists the servers on this instance that are public, and the Other instances tab lists servers on other approved instances. [federation.md](federation.md) covers Other instances. This page covers how local discovery decides what to list, how search works and what a server owner can set.
+Discover lists the servers on this instance that are public, and the Other instances tab lists servers on other approved instances. [federation.md](federation.md) covers Other instances, where a listed server also shows its splash and its welcome screen in a preview before people join. This page covers how local discovery decides what to list, how search works and what a server owner can set.
 
 ## What gets listed
 

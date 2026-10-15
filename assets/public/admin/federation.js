@@ -29,10 +29,37 @@ const FEDERATION_ANNOUNCE_STATUS = {
   sent: ["ok", "Sent"],
   skipped: ["", "Not sent"],
   failed: ["danger", "Failed"],
+  moved: ["warn", "Moved to another id"],
 };
+const FEDERATION_MOVE_STATUS = {
+  pending: ["warn", "Waiting"],
+  running: ["info", "Rewriting"],
+  applied: ["ok", "Applied"],
+  unverified: ["warn", "Needs an admin"],
+  refused: ["danger", "Refused"],
+};
+const FEDERATION_MOVE_SOURCE = { registry: "Registry", direct: "The instance itself", admin: "An admin here" };
+const FEDERATION_MOVE_COUNTS = [
+  ["objects", "id mappings"],
+  ["users", "shadow users"],
+  ["guilds", "mirror servers"],
+  ["channels", "mirror channels"],
+  ["former_recipients", "former DM recipients"],
+  ["merged_users", "duplicate users merged"],
+  ["merged_guilds", "duplicate servers merged"],
+  ["merged_channels", "duplicate DMs merged"],
+  ["blocks", "blocks copied"],
+  ["verified_guilds", "verified servers"],
+  ["inbox_events", "remembered events"],
+  ["outbox", "queued events"],
+  ["deliveries", "delivery queues"],
+  ["peers", "peer rows"],
+  ["config_peers", "configured peers"],
+  ["e2ee_keys", "cached encryption keys dropped"],
+];
 
 async function renderFederation(view) {
-  const [overview, document, guilds, blocks, candidates, delivery, remote, usage] = await Promise.all([
+  const [overview, document, guilds, blocks, candidates, delivery, remote, usage, moves] = await Promise.all([
     api("/admin/federation"),
     api("/admin/federation/registry").then((body) => body?.document ?? null),
     api("/admin/federation/guilds"),
@@ -41,7 +68,12 @@ async function renderFederation(view) {
     api("/admin/federation/delivery"),
     api("/admin/federation/shadows"),
     api("/admin/federation/usage"),
+    api("/admin/federation/moves"),
   ]);
+  const moveCounts = (counts) => {
+    const parts = FEDERATION_MOVE_COUNTS.filter(([key]) => counts?.[key]).map(([key, label]) => `${fmtNumber(counts[key])} ${label}`);
+    return parts.length ? parts.join(", ") : "Nothing needed rewriting";
+  };
   const usageCell = (count, limit) => {
     const full = limit && count >= limit;
     const near = limit && count >= limit * 0.9;
@@ -176,6 +208,10 @@ async function renderFederation(view) {
               >Registry contacts<span class="hint">Local usernames, one per line, at most 10. The registry admins see them privately and can add them to a group DM with the admins of every instance. Leave it empty to send every account with the operator right.</span
               ><textarea name="contacts" rows="3" spellcheck="false" autocomplete="off">${(s.contacts ?? []).join("\n")}</textarea>
             </label>
+            <label class="span"
+              >Previous ids<span class="hint">Ids this instance had before its address changed, one per line, at most 10. This instance signs a move statement for each one with its key, serves it in its well-known document and sends it to every instance it talks to. Read Change your instance's URL in the self-hosting docs first.</span
+              ><textarea name="previousIds" rows="2" spellcheck="false" autocomplete="off">${(s.previousIds ?? []).join("\n")}</textarea>
+            </label>
           </div>
           ${overview.peers.length
             ? html`<div class="table-wrap" style="margin-top:12px">
@@ -302,6 +338,63 @@ async function renderFederation(view) {
                 : html`<p class="empty">No other instance lists any servers yet. Check the registry again later.</p>`}
             </section>`
           : ""}
+
+        <section class="card" aria-labelledby="federation-moves-title">
+          <h2 id="federation-moves-title">Instance moves</h2>
+          <p class="muted">
+            Instances that changed their id. This instance applies a move after it checks that the new id holds the key the
+            old id had, then rewrites the users, servers and queued events it keeps for the old id. A move where the key
+            changed waits for an admin here unless the registry admins approved it.
+          </p>
+          ${moves.own.previous_ids.length
+            ? html`<dl class="federation-facts">
+                ${moves.own.statements.map(
+                  (statement) => html`<div>
+                    <dt class="federation-id">${statement.from}</dt>
+                    <dd>Moved to <span class="federation-id">${statement.to ?? "unknown"}</span>. ${statement.delivered ? html`Last sent ${fmtDate(statement.delivered.at)}. <span class="muted">${statement.delivered.status}</span>` : html`<span class="muted">Not sent to other instances yet.</span>`}</dd>
+                  </div>`,
+                )}
+              </dl>`
+            : ""}
+          ${moves.moves.length
+            ? html`<div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Move</th><th>State</th><th class="hide-sm">Learned from</th><th>What changed</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    ${moves.moves.map(
+                      (move) => html`<tr>
+                        <td>
+                          <div class="federation-id">${move.from}</div>
+                          <div class="muted federation-id">to ${move.to}</div>
+                        </td>
+                        <td>${badge(FEDERATION_MOVE_STATUS, move.status)}${move.key_changed ? html` <span class="badge warn">New key</span>` : ""}</td>
+                        <td class="hide-sm">${FEDERATION_MOVE_SOURCE[move.source] ?? move.source}<div class="muted">${fmtDate(move.created_at)}</div></td>
+                        <td>
+                          ${move.status === "applied" ? html`<div>${moveCounts(move.counts)}</div><div class="muted">Applied ${fmtDate(move.applied_at)}</div>` : ""}
+                          ${move.detail ? html`<div class="muted">${move.detail}</div>` : ""}
+                          ${move.counts?.retired?.length
+                            ? html`<details>
+                                <summary>Duplicates retired</summary>
+                                <ul class="federation-id">
+                                  ${move.counts.retired.map((entry) => html`<li>${entry.kind} ${entry.loser}, kept ${entry.winner}</li>`)}
+                                </ul>
+                              </details>`
+                            : ""}
+                        </td>
+                        <td class="num">
+                          ${move.status === "unverified" || move.status === "pending"
+                            ? html`<button class="btn small primary" type="button" data-apply-move="${move.id}">Apply</button>`
+                            : ""}
+                        </td>
+                      </tr>`,
+                    )}
+                  </tbody>
+                </table>
+              </div>`
+            : html`<p class="empty">No instance this one knows has changed its id.</p>`}
+        </section>
 
         <section class="card" aria-labelledby="federation-delivery-title">
           <h2 id="federation-delivery-title">Event delivery</h2>
@@ -524,6 +617,10 @@ async function renderFederation(view) {
         .split("\n")
         .map((line) => line.trim().toLowerCase().replace(/^@/, ""))
         .filter(Boolean),
+      previousIds: elements.previousIds.value
+        .split("\n")
+        .map((line) => line.trim().toLowerCase())
+        .filter(Boolean),
     };
     const saved = await act($("button[type=submit]", form), () => api("/admin/federation/settings", { method: "PATCH", body }), "Federation settings saved");
     if (saved) rerender();
@@ -546,6 +643,11 @@ async function renderFederation(view) {
         () => api("/admin/federation/verified", { method: "POST", body: { id: button.dataset.verify, verified } }),
         verified ? "Server verified" : "Verification removed",
       );
+      if (done) rerender();
+    });
+  for (const button of $$("[data-apply-move]", view))
+    button.addEventListener("click", async () => {
+      const done = await act(button, () => api(`/admin/federation/moves/${button.dataset.applyMove}`, { method: "POST" }), "Move applied");
       if (done) rerender();
     });
   $("#federation-block-form", view).addEventListener("submit", async (event) => {

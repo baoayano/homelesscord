@@ -35,6 +35,7 @@ export * from "./Application";
 export * from "./NameValidation";
 export * from "./Version";
 export * from "./Presence";
+export * from "./GuildTags";
 export * from "./MediaProxy";
 export * from "./federation";
 export * from "./DiscoverySearch";

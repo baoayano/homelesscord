@@ -32,6 +32,7 @@ export class FederationConfiguration {
     allowUnlistedPeers: boolean = false;
     peers: string[] = [];
     contacts: string[] = [];
+    previousIds: string[] = [];
     discovery: FederationDiscoveryConfiguration = new FederationDiscoveryConfiguration();
     media: FederationMediaConfiguration = new FederationMediaConfiguration();
     limits: FederationLimitsConfiguration = new FederationLimitsConfiguration();

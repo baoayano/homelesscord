@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { AUTHORSHIP_FIELD, AUTHORSHIP_STATE_FIELD, contentDigest, openAuthorship, signAuthorship } from "../../src/util/util/federation/Authorship.ts";
+import { signMoveStatement } from "../../src/util/util/federation/Moves.ts";
 import { signRequest } from "../../src/util/util/federation/Protocol.ts";
 
 const require = createRequire(import.meta.url);
@@ -24,6 +25,7 @@ const ROGUE = { port: base + 3 };
 ROGUE.id = `localhost:${ROGUE.port}`;
 ROGUE.origin = `http://localhost:${ROGUE.port}`;
 const UNLISTED = `localhost:${base + 4}`;
+const ALT = `127.0.0.1:${base + 3}`;
 const THIRD = "third.example";
 const PEER = { port: base + 5 };
 PEER.id = `localhost:${PEER.port}`;
@@ -149,14 +151,15 @@ const rogue = createServer(async (req, res) => {
         return res.end(PNG);
     }
     if (url.pathname === "/.well-known/meowcord") {
+        const id = req.headers.host === ALT ? ALT : ROGUE.id;
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(
             JSON.stringify({
                 protocol: 2,
                 software: "meowcord",
                 version: "rogue",
-                id: ROGUE.id,
-                url: ROGUE.origin,
+                id,
+                url: `http://${id}`,
                 name: "Rogue",
                 description: "",
                 icon_url: null,
@@ -1046,6 +1049,123 @@ async function main() {
         check("admins see what each instance stores", usage.status === 200 && row?.guilds === guilds && usage.body.limits.guilds === LIMITS.guildsPerInstance, `${usage.status}`);
         const denied = await call("GET", "/admin/federation/usage", bob.token);
         check("the usage page needs the operator right", denied.status === 403, String(denied.status));
+    }
+
+    console.log("\ninstance moves");
+    {
+        const operator = await register("mover");
+        psql(`UPDATE users SET rights = '1' WHERE id = ${quote(operator.id)}`);
+        const moveStatement = (from, to, key = rogueKey, publicKey = rawKey(rogueKey), at = new Date()) =>
+            signMoveStatement({ from, to, at, publicKey, privateKey: key.privateKey });
+        const sendMove = (statement, sender, key = rogueKey) => federated("POST", "/federation/v2/move", { statement }, { key: key.privateKey, sender });
+        const applied = (from) => count(`SELECT count(*) FROM federation_moves WHERE from_id = ${quote(from)} AND status = 'applied'`);
+        const peerObjects = count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(PEER.id)}`);
+        const peerKnown = psql(`SELECT public_key FROM federation_instance_keys WHERE instance = ${quote(PEER.id)}`);
+        check("the target remembers the peer's key", peerKnown === rawKey(peerKey), peerKnown || "no key");
+
+        const forged = await sendMove(moveStatement(PEER.id, ROGUE.id), ROGUE.id);
+        check(
+            "a move of another instance signed without its key is not applied",
+            forged.status === 200 && forged.body?.status === "unverified" && applied(PEER.id) === 0,
+            `${forged.status} ${JSON.stringify(forged.body).slice(0, 200)}`,
+        );
+        const aliases = await call("GET", "/federation/moves", bob.token);
+        check("the forged move creates no alias", !aliases.body?.moved?.[PEER.id], JSON.stringify(aliases.body));
+        check("the peer's ids are untouched", count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(PEER.id)}`) === peerObjects);
+
+        const wrongSender = await sendMove(moveStatement(ROGUE.id, PEER.id), ROGUE.id);
+        check(
+            "a move statement delivered by anyone but the new id is refused",
+            wrongSender.status === 400,
+            `${wrongSender.status} ${JSON.stringify(wrongSender.body).slice(0, 200)}`,
+        );
+        const takeover = await sendMove(moveStatement(ROGUE.id, PEER.id), PEER.id);
+        check(
+            "a move to an id another instance owns is refused because that id serves another key",
+            takeover.status === 422 && applied(ROGUE.id) === 0,
+            `${takeover.status} ${JSON.stringify(takeover.body).slice(0, 200)}`,
+        );
+        const intoTarget = await sendMove(moveStatement(ROGUE.id, T.id), T.id);
+        check(
+            "a move onto the target's own id is refused",
+            intoTarget.status >= 400 && applied(ROGUE.id) === 0,
+            `${intoTarget.status} ${JSON.stringify(intoTarget.body).slice(0, 200)}`,
+        );
+        const loneKey = generateKeyPairSync("ed25519");
+        const selfSigned = await sendMove(moveStatement(ROGUE.id, ALT, loneKey, rawKey(loneKey)), ALT, loneKey);
+        check(
+            "a move to a host that serves another key is refused",
+            selfSigned.status === 422 && applied(ROGUE.id) === 0,
+            `${selfSigned.status} ${JSON.stringify(selfSigned.body).slice(0, 200)}`,
+        );
+
+        const formerId = `localhost:${base + 9}`;
+        const former = await call("PATCH", "/admin/federation/settings", operator.token, { previousIds: [formerId] });
+        const addressedTo = (target) => {
+            const body = Buffer.from(JSON.stringify({ events: [] }));
+            return federated(
+                "POST",
+                "/federation/v2/inbox",
+                { events: [] },
+                { headers: signRequest({ method: "POST", path: "/federation/v2/inbox", target, sender: ROGUE.id, body, privateKey: rogueKey.privateKey }) },
+            );
+        };
+        const toFormer = await addressedTo(formerId);
+        const toStranger = await addressedTo("stranger.example");
+        check(
+            "a request signed for the target's previous id is accepted and one for another id is not",
+            former.status === 200 && toFormer.status === 200 && toStranger.status === 401,
+            `${former.status} ${toFormer.status} ${toStranger.status}`,
+        );
+        await call("PATCH", "/admin/federation/settings", operator.token, { previousIds: [] });
+
+        const rogueObjects = count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(ROGUE.id)}`);
+        const there = await sendMove(moveStatement(ROGUE.id, ALT, rogueKey, rawKey(rogueKey), new Date(Date.now() - 3000)), ALT);
+        check(
+            "a real move signed with the old key is applied",
+            there.status === 200 && there.body?.status === "applied" && count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(ALT)}`) === rogueObjects,
+            `${there.status} ${JSON.stringify(there.body).slice(0, 200)}`,
+        );
+        const fromOld = await federated("POST", "/federation/v2/inbox", { events: [] });
+        check(
+            "a request from the old id fails and says where the instance moved",
+            fromOld.status === 403 && /moved/.test(JSON.stringify(fromOld.body)),
+            `${fromOld.status} ${JSON.stringify(fromOld.body).slice(0, 200)}`,
+        );
+        const fromNew = await federated("POST", "/federation/v2/inbox", { events: [] }, { sender: ALT });
+        check("a request from the new id goes through", fromNew.status === 200, `${fromNew.status} ${JSON.stringify(fromNew.body).slice(0, 200)}`);
+
+        const back = await sendMove(moveStatement(ALT, ROGUE.id, rogueKey, rawKey(rogueKey), new Date(Date.now() - 2000)), ROGUE.id);
+        const again = await sendMove(moveStatement(ROGUE.id, ALT, rogueKey, rawKey(rogueKey), new Date(Date.now() - 1000)), ALT);
+        const loop = await call("GET", "/federation/moves", bob.token);
+        check(
+            "a move back and forth ends at the last id with no alias loop",
+            back.body?.status === "applied" &&
+                again.body?.status === "applied" &&
+                loop.body?.moved?.[ROGUE.id] === ALT &&
+                !loop.body?.moved?.[ALT] &&
+                count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(ROGUE.id)}`) === 0 &&
+                count(`SELECT count(*) FROM federated_objects WHERE instance = ${quote(ALT)}`) === rogueObjects,
+            `${back.status} ${again.status} ${JSON.stringify(loop.body)}`,
+        );
+        const replay = await sendMove(moveStatement(ALT, ROGUE.id, rogueKey, rawKey(rogueKey), new Date(Date.now() + 3_600_000)), ROGUE.id);
+        check(
+            "a move statement dated in the future is not applied",
+            replay.body?.status !== "applied" && applied(ALT) === 1,
+            `${replay.status} ${JSON.stringify(replay.body).slice(0, 200)}`,
+        );
+        const ping = await fetch(`${T.origin}/api/ping`).then((response) => response.status);
+        check("the target still answers after the moves", ping === 200, String(ping));
+        const page = await call("GET", "/admin/federation/moves", operator.token);
+        check(
+            "the admin page lists every move with its state",
+            page.status === 200 &&
+                page.body?.moves?.filter((move) => move.status === "applied").length === 3 &&
+                page.body.moves.some((move) => move.from === PEER.id && move.status === "unverified"),
+            `${page.status} ${JSON.stringify(page.body?.moves?.map((move) => [move.from, move.to, move.status]))}`,
+        );
+        const denied = await call("GET", "/admin/federation/moves", bob.token);
+        check("the moves page needs the operator right", denied.status === 403, String(denied.status));
     }
 }
 

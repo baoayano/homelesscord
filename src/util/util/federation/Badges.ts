@@ -50,7 +50,7 @@ const RESERVED_BADGE_PREFIXES = ["staff-role-", "premium_", "guild_booster_", "a
 const PRIDE_BADGE_ID = /^80{12,}\d{1,6}$/;
 const BADGE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const ICON_PATH = /^\/badge-icons\/([A-Za-z0-9_-]{1,64})\.png$/;
-const STAFF_WORDS = /staff|official|admin|moderat|\bmods?\b|team|employee|system|operator|owner|support|trust\s*(?:and|&)\s*safety/i;
+const STAFF_WORDS = /\b(?:staff\w*|official\w*|admin\w*|moderat\w*|mods?|team|employees?|system|operators?|owners?|support|trust\s*(?:and|&)\s*safety)\b/i;
 const HIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]|\u115F|\u1160|\u3164|\uFFA0|\u2800|\u034F/gu;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -70,7 +70,13 @@ export const cleanBadgeText = (value: unknown, max = MAX_REMOTE_BADGE_DESCRIPTIO
     return [...cleaned].slice(0, max).join("").trim();
 };
 
-export const looksLikeStaffBadge = (id: string, description: string) => STAFF_WORDS.test(id.replace(/[_.:-]+/g, " ")) || STAFF_WORDS.test(description);
+const words = (text: string) =>
+    text
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/([A-Za-z])(\d)|(\d)([A-Za-z])/g, "$1$3 $2$4")
+        .replace(/[_.:-]+/g, " ");
+
+export const looksLikeStaffBadge = (id: string, description: string) => STAFF_WORDS.test(words(id)) || STAFF_WORDS.test(words(description));
 
 export const badgeIconOrigin = (origin: string) => {
     if (!URL.canParse(origin)) return null;

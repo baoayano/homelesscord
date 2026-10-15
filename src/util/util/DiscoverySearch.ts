@@ -135,13 +135,50 @@ export const compareDiscovery =
         (b.active_at ?? 0) - (a.active_at ?? 0) ||
         (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+export const DISCOVERY_SORTS = ["relevance", "active", "members", "newest"] as const;
+export type DiscoverySort = (typeof DISCOVERY_SORTS)[number];
+
+export const discoverySort = (raw: unknown): DiscoverySort => (DISCOVERY_SORTS.includes(raw as DiscoverySort) ? (raw as DiscoverySort) : "relevance");
+
+const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+export interface SortableDiscoveryEntry extends RankedDiscoveryEntry {
+    presence_count: number;
+    created_at: number;
+}
+
+export const compareDiscoveryBy = (sort: DiscoverySort, now = Date.now()) => {
+    if (sort === "active")
+        return (a: SortableDiscoveryEntry, b: SortableDiscoveryEntry) =>
+            Number(isRecentlyActive(b.active_at, now)) - Number(isRecentlyActive(a.active_at, now)) ||
+            b.presence_count - a.presence_count ||
+            (b.active_at ?? 0) - (a.active_at ?? 0) ||
+            b.member_count - a.member_count ||
+            byId(a, b);
+    if (sort === "members") return (a: SortableDiscoveryEntry, b: SortableDiscoveryEntry) => b.member_count - a.member_count || b.presence_count - a.presence_count || byId(a, b);
+    if (sort === "newest") return (a: SortableDiscoveryEntry, b: SortableDiscoveryEntry) => b.created_at - a.created_at || byId(a, b);
+    return compareDiscovery(now);
+};
+
+export const canonicalCreatedAt = (canonical: string) => {
+    const id = /^@(\d{1,20})@/.exec(canonical)?.[1];
+    if (!id) return 0;
+    try {
+        return Number(BigInt(id) >> 22n) + 1420070400000;
+    } catch {
+        return 0;
+    }
+};
+
 export interface RemoteDiscoveryEntry {
     id: string;
     name: string;
     description: string;
+    instance?: string;
     keywords?: string[];
     category_ids?: number[];
     member_count: number;
+    presence_count?: number | null;
     active_at?: string | null;
 }
 
@@ -180,7 +217,13 @@ export class RemoteDiscoveryIndex<T extends RemoteDiscoveryEntry> {
         return found;
     }
 
-    search(options: { query?: unknown; categoryIds?: number[]; offset?: number; limit?: number; now?: number }) {
+    instanceCounts() {
+        const counts = new Map<string, number>();
+        for (const entry of this.entries) if (entry.instance) counts.set(entry.instance, (counts.get(entry.instance) ?? 0) + 1);
+        return counts;
+    }
+
+    search(options: { query?: unknown; categoryIds?: number[]; instance?: string | null; sort?: DiscoverySort; offset?: number; limit?: number; now?: number }) {
         const query = discoveryQuery(options.query);
         let matches = null as Set<number> | null;
         for (const word of query.words) {
@@ -193,14 +236,24 @@ export class RemoteDiscoveryIndex<T extends RemoteDiscoveryEntry> {
             const inCategory = new Set(categories.flatMap((id) => this.postings.get(discoveryCategoryTerm(id)) ?? []));
             matches = new Set([...(matches ?? this.entries.keys())].filter((index) => inCategory.has(index)));
         }
+        const instance = options.instance?.toLowerCase();
+        if (instance) matches = new Set([...(matches ?? this.entries.keys())].filter((index) => this.entries[index].instance?.toLowerCase() === instance));
         const exact = new Set(query.exact ? (this.postings.get(query.exact) ?? []) : []);
         const ranked = [...(matches ?? this.entries.keys())]
             .map((index) => {
                 const entry = this.entries[index];
                 const active = entry.active_at ? Date.parse(entry.active_at) : Number.NaN;
-                return { index, id: entry.id, exact: exact.has(index), member_count: entry.member_count, active_at: Number.isNaN(active) ? null : active };
+                return {
+                    index,
+                    id: entry.id,
+                    exact: exact.has(index),
+                    member_count: entry.member_count,
+                    presence_count: entry.presence_count ?? 0,
+                    created_at: canonicalCreatedAt(entry.id),
+                    active_at: Number.isNaN(active) ? null : active,
+                };
             })
-            .sort(compareDiscovery(options.now));
+            .sort(compareDiscoveryBy(options.sort ?? "relevance", options.now));
         const offset = Math.max(0, options.offset ?? 0);
         const limit = Math.max(0, options.limit ?? ranked.length);
         return { total: ranked.length, entries: ranked.slice(offset, offset + limit).map((row) => this.entries[row.index]) };

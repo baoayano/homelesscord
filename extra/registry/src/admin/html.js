@@ -33,6 +33,10 @@ export function time(iso) {
 }
 
 const styles = `
+* {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, currentColor 32%, transparent) transparent;
+}
 :root {
     color-scheme: light;
     --color-page: #f7f7f8;
@@ -256,6 +260,7 @@ const navItems = [
     ["/admin/instances", "Instances"],
     ["/admin/discovery", "Discovery"],
     ["/admin/blocks", "Blocks"],
+    ["/admin/moves", "Moves"],
     ["/admin/activity", "Activity"],
 ];
 

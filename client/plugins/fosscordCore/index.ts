@@ -1,12 +1,14 @@
 import definePlugin from "@utils/types";
 
 import { FosscordAuthor } from "./shared";
+import managedStyle from "./style.css?managed";
 
 export default definePlugin({
     name: "Fosscord",
     description: "Points the client at this instance instead of Discord's CDN, status page and GIF placeholders.",
     authors: [FosscordAuthor],
     required: true,
+    managedStyle,
 
     gateway: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`,
     patches: [

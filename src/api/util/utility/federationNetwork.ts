@@ -24,8 +24,10 @@ import {
 } from "@spacebar/util";
 import { instanceId, liveDocument, localBlocks, refreshRegistry } from "./federation";
 import { invalidateFederatedInstances } from "./federationMedia";
+import { aliasCanonical, bridgeFor, movedTo, normalizeMoved, ownPreviousIds, rememberKeys } from "./federationMoves";
 
 export const MAX_FEDERATION_BODY = RELAY_BODY_LIMIT;
+export const MOVE_PATH = "/move";
 const TRUST_TTL = 30_000;
 const nonces = new NonceCache();
 const TRUST_CACHE_LIMIT = 5_000;
@@ -68,6 +70,7 @@ const peerRecord = async (id: string) => {
     row.well_known = JSON.stringify(wellKnown);
     row.fetched_at = new Date();
     await row.save();
+    await rememberKeys([{ instance: id, public_key: wellKnown.public_key }], "peer");
     return { public_key: wellKnown.public_key, protocol: wellKnown.protocol };
 };
 
@@ -101,6 +104,8 @@ export const trustDecision = (id: string): Promise<Decision> => {
             allowUnlistedPeers: federation.allowUnlistedPeers,
             peers: federation.peers,
             peerProtocol: peer?.protocol ?? null,
+            movedTo: movedTo(id),
+            bridge: document && !listed ? await bridgeFor(id) : null,
         });
         if (!decision.trust) return decision;
         if (decision.trust.source === "peer")
@@ -187,23 +192,46 @@ export async function signedFetch<T = unknown>(instance: string, method: string,
     return { status: response.status, body: (await readJson(response)) as T };
 }
 
+export const takeInbound = (sender: string) => inbound.take(sender);
+
+const verifyAddressed = (options: Omit<Parameters<typeof verifyRequest>[0], "target" | "nonces">) => {
+    const [own, ...previous] = [ownInstance(), ...ownPreviousIds()];
+    try {
+        return verifyRequest({ ...options, target: own, nonces });
+    } catch (error) {
+        if (!(error instanceof FederationRequestError) || error.code !== "bad_signature" || !previous.length) throw error;
+        for (const target of previous) {
+            try {
+                return verifyRequest({ ...options, target, nonces });
+            } catch (retry) {
+                if (!(retry instanceof FederationRequestError) || retry.code !== "bad_signature") throw retry;
+            }
+        }
+        throw error;
+    }
+};
+
+export function verifySignedWith(req: Request, body: Buffer, publicKey: string) {
+    return verifyAddressed({ method: req.method, path: req.originalUrl, headers: req.headers, body, publicKey });
+}
+
 export async function verifyInbound(req: Request) {
     const own = ownInstance();
     const sender = signedRequestSender(req.headers);
     const trust = await trustedSender(sender);
     if (!inbound.take(sender)) throw new FederationRequestError("rate_limited", "Too many requests from this instance", 429);
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    verifyRequest({ method: req.method, path: req.originalUrl, target: own, headers: req.headers, body, publicKey: trust.public_key, nonces });
+    verifyAddressed({ method: req.method, path: req.originalUrl, headers: req.headers, body, publicKey: trust.public_key });
     return { sender, own, body };
 }
 
 export async function verifyUpgrade(req: IncomingMessage) {
     if (!Config.get().federation.enabled) throw new FederationRequestError("not_federated", "Federation is turned off on this instance", 403);
-    const own = ownInstance();
+    ownInstance();
     const sender = signedRequestSender(req.headers);
     const trust = await trustedSender(sender);
     if (!inbound.take(sender)) throw new FederationRequestError("rate_limited", "Too many requests from this instance", 429);
-    verifyRequest({ method: req.method ?? "GET", path: req.url ?? "/", target: own, headers: req.headers, body: Buffer.alloc(0), publicKey: trust.public_key, nonces });
+    verifyAddressed({ method: req.method ?? "GET", path: req.url ?? "/", headers: req.headers, body: Buffer.alloc(0), publicKey: trust.public_key });
     return sender;
 }
 
@@ -234,7 +262,7 @@ export async function federationGate(req: Request, res: import("express").Respon
     try {
         if (!Config.get().federation.enabled) throw new FederationRequestError("not_federated", "Federation is turned off on this instance", 403);
         const { sender, limit, reserve } = precheckSignedRequest(req.headers, req.path);
-        await trustedSender(sender);
+        if (req.path !== MOVE_PATH) await trustedSender(sender);
         const release = unverifiedBodies.reserve(reserve);
         if (!release) throw new FederationRequestError("busy", "Too many requests are being read, try again", 503);
         res.once("finish", release);
@@ -259,7 +287,8 @@ export const federationHandler =
         try {
             if (!Config.get().federation.enabled) throw new FederationRequestError("not_federated", "Federation is turned off on this instance", 403);
             const { sender, body } = await verifyInbound(req);
-            const result = await handler(req, sender, req.method === "GET" ? {} : inboundJson(body));
+            for (const [key, value] of Object.entries(req.params ?? {})) if (typeof value === "string") req.params[key] = aliasCanonical(value);
+            const result = await handler(req, sender, req.method === "GET" ? {} : normalizeMoved(inboundJson(body)));
             res.status(result.status ?? 200).json(result.body);
         } catch (error) {
             const { status, body } = federationError(error);

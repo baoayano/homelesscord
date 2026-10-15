@@ -146,11 +146,14 @@ export async function handleAnnounce(request, env, ctx) {
     if (!claimed.meta.changes) return json({ error: "nonce was already used" }, 409);
 
     const { keyChangePending } = await storeWellKnown(env, instance, wellKnown);
-    await env.DB.prepare("UPDATE instances SET last_announce_at = ? WHERE id = ?").bind(nowIso(now), instance.id).run();
+    await env.DB.prepare("UPDATE instances SET last_announce_at = ?, announce_envelope = ? WHERE id = ?")
+        .bind(nowIso(now), JSON.stringify({ payload: envelope.payload, signature: envelope.signature, key_id: envelope.key_id }), instance.id)
+        .run();
     await storeContacts(env, instance.id, contacts);
     await storeInstanceStats(env, instance.id, stats, now);
     let guildCount = null;
-    if (!keyChangePending) {
+    const moved = await env.DB.prepare("SELECT moved_to FROM instances WHERE id = ? AND status = 'moved'").bind(instance.id).first();
+    if (!keyChangePending && !moved) {
         try {
             guildCount = await refreshDiscovery(env, instance, wellKnown.discovery_url, wellKnown.public_key);
         } catch (error) {

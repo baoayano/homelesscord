@@ -9,3 +9,4 @@ export * from "./Limits";
 export * from "./HostErrors";
 export * from "./Authorship";
 export * from "./Badges";
+export * from "./Moves";
