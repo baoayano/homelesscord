@@ -2136,6 +2136,12 @@
                     "activities": {
                         "type": "boolean"
                     },
+                    "members": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
                     "channels": {
                         "type": "object",
                         "additionalProperties": {
@@ -2154,12 +2160,6 @@
                     "typing": {
                         "const": true,
                         "type": "boolean"
-                    },
-                    "members": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
                     },
                     "member_updates": {
                         "type": "boolean"
@@ -3821,16 +3821,16 @@
                     "icon": {
                         "type": "string"
                     },
-                    "channels": {
-                        "type": "array",
-                        "items": {
-                            "$ref": "#/components/schemas/Channel"
-                        }
-                    },
                     "members": {
                         "type": "array",
                         "items": {
                             "$ref": "#/components/schemas/Member"
+                        }
+                    },
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Channel"
                         }
                     },
                     "system_channel_id": {
@@ -5018,6 +5018,23 @@
                     },
                     "message": {
                         "maxLength": 1000,
+                        "type": "string"
+                    },
+                    "ticket": {
+                        "type": "string"
+                    },
+                    "method": {
+                        "enum": [
+                            "backup",
+                            "totp",
+                            "webauthn"
+                        ],
+                        "type": "string"
+                    },
+                    "code": {
+                        "type": "string"
+                    },
+                    "appeal_ticket": {
                         "type": "string"
                     }
                 },
@@ -12947,6 +12964,13 @@
                         }
                     },
                     "contacts": {
+                        "maxItems": 10,
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "previousIds": {
                         "maxItems": 10,
                         "type": "array",
                         "items": {
@@ -27169,6 +27193,67 @@
                 ]
             }
         },
+        "/api/admin/federation/moves/": {
+            "get": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Instance moves this instance learned of, from the registry or from the moved instance, with their state and what each one rewrote, and this instance's own previous ids and move statements.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/admin/federation/moves/{move_id}/": {
+            "post": {
+                "x-right-required": "OPERATOR",
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Apply a move this instance couldn't confirm by itself, such as one where the instance changed its key, or run a move that stopped again. A move refused because the new id belongs to this instance or the registry still lists the old id stays refused.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "move_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "move_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
         "/api/admin/federation/refresh/": {
             "post": {
                 "x-right-required": "OPERATOR",
@@ -38938,6 +39023,35 @@
                 ]
             }
         },
+        "/api/federation/discovery/guilds/{guild_id}/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "One server from the Other instances directory with its welcome screen, read from this instance's cached listings so the browser never contacts the other instance",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "guild_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "guild_id"
+                    }
+                ],
+                "tags": [
+                    "api"
+                ]
+            }
+        },
         "/api/federation/discovery/": {
             "get": {
                 "security": [
@@ -38951,6 +39065,55 @@
                         "description": "No description available"
                     }
                 },
+                "parameters": [
+                    {
+                        "name": "query",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Words that must each start a word in the name, description or keywords"
+                    },
+                    {
+                        "name": "category_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "number"
+                        },
+                        "description": "Only servers in this primary or secondary category"
+                    },
+                    {
+                        "name": "instance",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Only servers on this instance id"
+                    },
+                    {
+                        "name": "sort",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "relevance (default), active, members or newest"
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "schema": {
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "number"
+                        },
+                        "description": "24 by default, 48 at most"
+                    }
+                ],
                 "tags": [
                     "api"
                 ]
@@ -39031,6 +39194,30 @@
                         "description": "code"
                     }
                 ],
+                "tags": [
+                    "api"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/api/federation/moves/": {
+            "get": {
+                "security": [
+                    {
+                        "bearer": []
+                    }
+                ],
+                "description": "Instance ids that changed. previous lists the ids this instance had before, and moved maps each old id of another instance to its current id. Clients use it to check end-to-end encrypted messages sent before a move.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
                 "tags": [
                     "api"
                 ],
@@ -56428,6 +56615,28 @@
                     {}
                 ],
                 "description": "Join a remote user to a server through an invite and answer the server snapshot. Needs a signed request.",
+                "responses": {
+                    "default": {
+                        "description": "No description available"
+                    }
+                },
+                "tags": [
+                    "federation"
+                ],
+                "x-badges": [
+                    {
+                        "label": "Spacebar-only",
+                        "color": "red"
+                    }
+                ]
+            }
+        },
+        "/federation/v2/move/": {
+            "post": {
+                "security": [
+                    {}
+                ],
+                "description": "An instance that changed its id tells this instance about it. The body carries a move statement signed with the key the old id had, and the request is signed with the key the new id serves.",
                 "responses": {
                     "default": {
                         "description": "No description available"
